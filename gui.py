@@ -183,7 +183,8 @@ class App(tk.Tk):
         self.next_worker_id=1
         self.format_events=Queue()
         self.download_events=Queue()
-        self.format_map={}
+        self.audio_format_map={}
+        self.video_format_map={}
         self.current_video_title=""
         self.format_lookup_after=None
 
@@ -417,7 +418,7 @@ class App(tk.Tk):
     def tabs(self):
         self.nb=ttk.Notebook(self);self.nb.pack(fill="both",expand=True)
         self.t1=ttk.Frame(self.nb);self.t2=ttk.Frame(self.nb);self.t3=ttk.Frame(self.nb)
-        self.nb.add(self.t1,text="Transcribe");self.nb.add(self.t2,text="Queue");self.nb.add(self.t3,text="Download Videos")
+        self.nb.add(self.t1,text="Transcribe");self.nb.add(self.t2,text="Transcription Queue");self.nb.add(self.t3,text="Download Videos")
 
         tk.Label(self.t1,text="File").grid(row=0,column=0)
         self.fv=tk.StringVar()
@@ -456,14 +457,30 @@ class App(tk.Tk):
         ttk.Entry(top,textvariable=self.download_folder_var,width=70).grid(row=1,column=1,sticky="ew",padx=(6,0),pady=(8,0))
         ttk.Button(top,text="Browse",command=self.browse_download_folder).grid(row=1,column=2,sticky="ew",padx=(6,0),pady=(8,0))
 
-        ttk.Label(top,text="Format").grid(row=2,column=0,sticky="w",pady=(8,0))
-        self.format_var=tk.StringVar()
-        self.format_combo=ttk.Combobox(top,textvariable=self.format_var,state="readonly",width=76)
-        self.format_combo.grid(row=2,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
+        ttk.Label(top,text="Mode").grid(row=2,column=0,sticky="w",pady=(8,0))
+        self.download_mode_var=tk.StringVar(value="Audio and video")
+        self.download_mode_combo=ttk.Combobox(top,textvariable=self.download_mode_var,state="readonly",values=("Audio and video","Audio"),width=24)
+        self.download_mode_combo.grid(row=2,column=1,sticky="w",padx=(6,0),pady=(8,0))
+        self.download_mode_combo.bind("<<ComboboxSelected>>",lambda _e:self.update_download_mode())
+
+        ttk.Label(top,text="Audio").grid(row=3,column=0,sticky="w",pady=(8,0))
+        self.audio_format_var=tk.StringVar()
+        self.audio_format_combo=ttk.Combobox(top,textvariable=self.audio_format_var,state="readonly",width=76)
+        self.audio_format_combo.grid(row=3,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
+
+        ttk.Label(top,text="Video").grid(row=4,column=0,sticky="w",pady=(8,0))
+        self.video_format_var=tk.StringVar()
+        self.video_format_combo=ttk.Combobox(top,textvariable=self.video_format_var,state="readonly",width=76)
+        self.video_format_combo.grid(row=4,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
+
+        ttk.Label(top,text="Output").grid(row=5,column=0,sticky="w",pady=(8,0))
+        self.output_format_var=tk.StringVar(value="mp4")
+        self.output_format_combo=ttk.Combobox(top,textvariable=self.output_format_var,state="readonly",width=20)
+        self.output_format_combo.grid(row=5,column=1,sticky="w",padx=(6,0),pady=(8,0))
 
         self.format_status_var=tk.StringVar(value="Enter a URL to load available formats")
-        ttk.Label(top,textvariable=self.format_status_var).grid(row=3,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
-        ttk.Button(top,text="Download",command=self.add_download).grid(row=4,column=2,sticky="e",pady=(10,0))
+        ttk.Label(top,textvariable=self.format_status_var).grid(row=6,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
+        ttk.Button(top,text="Download",command=self.add_download).grid(row=7,column=2,sticky="e",pady=(10,0))
 
         top.columnconfigure(1,weight=1)
 
@@ -484,6 +501,7 @@ class App(tk.Tk):
         self.download_tree.bind("<Button-3>",self.download_menu_row)
         self.download_row_map={}
 
+        self.update_download_mode()
         self.after(200,self.poll_format_events)
         self.after(300,self.poll_download_events)
 
@@ -511,13 +529,30 @@ class App(tk.Tk):
             self.after_cancel(self.format_lookup_after)
         self.format_lookup_after=self.after(800,self.lookup_formats)
 
+    def update_download_mode(self):
+        audio_only=self.download_mode_var.get()=="Audio"
+        if audio_only:
+            self.video_format_combo.configure(state="disabled")
+            outputs=("mp3","m4a","aac","opus","flac","wav")
+            if self.output_format_var.get() not in outputs:
+                self.output_format_var.set("mp3")
+        else:
+            self.video_format_combo.configure(state="readonly")
+            outputs=("mp4","mkv","webm")
+            if self.output_format_var.get() not in outputs:
+                self.output_format_var.set("mp4")
+        self.output_format_combo["values"]=outputs
+
     def lookup_formats(self):
         url=self.download_url_var.get().strip()
         self.format_lookup_after=None
-        self.format_map={}
+        self.audio_format_map={}
+        self.video_format_map={}
         self.current_video_title=""
-        self.format_combo["values"]=[]
-        self.format_var.set("")
+        self.audio_format_combo["values"]=[]
+        self.video_format_combo["values"]=[]
+        self.audio_format_var.set("")
+        self.video_format_var.set("")
         if not url:
             self.format_status_var.set("Enter a URL to load available formats")
             return
@@ -551,17 +586,11 @@ class App(tk.Tk):
                 self.format_status_var.set(payload)
                 continue
 
-            values=[]
-            self.format_map={}
+            audio_values=["Best audio"]
+            video_values=["Best video"]
+            self.audio_format_map={"Best audio":{"kind":"best_audio"}}
+            self.video_format_map={"Best video":{"kind":"best_video"}}
             self.current_video_title=payload.get("title","")
-            presets=[
-                ("Best MP4 video","best_mp4"),
-                ("MP3 audio","mp3_audio"),
-                ("Best available","best"),
-            ]
-            for label,kind_value in presets:
-                values.append(label)
-                self.format_map[label]={"kind":kind_value}
 
             for fmt in payload.get("formats",[]):
                 format_id=str(fmt.get("format_id",""))
@@ -570,16 +599,32 @@ class App(tk.Tk):
                 note=fmt.get("format_note") or ""
                 acodec=fmt.get("acodec") or ""
                 vcodec=fmt.get("vcodec") or ""
-                label=" | ".join(part for part in (format_id,ext,resolution,note,f"v:{vcodec}",f"a:{acodec}") if part)
-                if not format_id or label in self.format_map:
+                if not format_id:
                     continue
-                values.append(label)
-                self.format_map[label]={"kind":"format_id","format_id":format_id}
 
-            self.format_combo["values"]=values
-            if values:
-                self.format_var.set(values[0])
-                self.format_status_var.set(f"{len(values)} formats loaded")
+                if acodec and acodec != "none" and (not vcodec or vcodec == "none"):
+                    abr=f"{fmt.get('abr')}k" if fmt.get("abr") else ""
+                    label=" | ".join(part for part in (format_id,ext,note,abr,f"a:{acodec}") if part)
+                    if label not in self.audio_format_map:
+                        audio_values.append(label)
+                        self.audio_format_map[label]={"kind":"format_id","format_id":format_id}
+
+                if vcodec and vcodec != "none":
+                    fps=f"{fmt.get('fps')}fps" if fmt.get("fps") else ""
+                    label=" | ".join(part for part in (format_id,ext,resolution,note,fps,f"v:{vcodec}") if part)
+                    if label not in self.video_format_map:
+                        video_values.append(label)
+                        self.video_format_map[label]={"kind":"format_id","format_id":format_id}
+
+            self.audio_format_combo["values"]=audio_values
+            self.video_format_combo["values"]=video_values
+            if audio_values:
+                self.audio_format_var.set(audio_values[0])
+            if video_values:
+                self.video_format_var.set(video_values[0])
+            self.update_download_mode()
+            if audio_values or video_values:
+                self.format_status_var.set(f"{len(audio_values)} audio and {len(video_values)} video formats loaded")
             else:
                 self.format_status_var.set("No formats found")
 
@@ -588,22 +633,38 @@ class App(tk.Tk):
     def add_download(self):
         url=self.download_url_var.get().strip()
         folder=self.download_folder_var.get().strip()
-        label=self.format_var.get()
+        mode=self.download_mode_var.get()
+        audio_label=self.audio_format_var.get()
+        video_label=self.video_format_var.get()
+        output=self.output_format_var.get()
         if not url:
             messagebox.showwarning("Missing URL","Enter a URL first.",parent=self)
             return
         if not folder:
             messagebox.showwarning("Missing folder","Select a download folder first.",parent=self)
             return
-        if not label or label not in self.format_map:
-            messagebox.showwarning("Missing format","Wait for formats to load, then select one.",parent=self)
+        if not audio_label or audio_label not in self.audio_format_map:
+            messagebox.showwarning("Missing audio format","Wait for formats to load, then select an audio format.",parent=self)
+            return
+        if mode=="Audio and video" and (not video_label or video_label not in self.video_format_map):
+            messagebox.showwarning("Missing video format","Wait for formats to load, then select a video format.",parent=self)
+            return
+        if not output:
+            messagebox.showwarning("Missing output","Select an output format.",parent=self)
             return
 
         os.makedirs(folder,exist_ok=True)
         self.app_config["download_folder"]=folder
         save_config(self.app_config)
         title=self.current_video_title or url
-        download_queue.append(VideoDownloadTask(url,folder,label,self.format_map[label],title))
+        format_label=f"{mode} -> {output}"
+        format_info={
+            "mode":mode,
+            "audio":self.audio_format_map[audio_label],
+            "video":self.video_format_map.get(video_label),
+            "output":output,
+        }
+        download_queue.append(VideoDownloadTask(url,folder,format_label,format_info,title))
         self.refresh_download_queue()
         self.process_download_queue()
 
@@ -758,12 +819,23 @@ class App(tk.Tk):
         output=os.path.join(task.folder,"%(title)s.%(ext)s")
         command=[self.yt_dlp_path(),"--ffmpeg-location",self.bin_path(),"--newline","-o",output]
         fmt=task.format_info
-        if fmt["kind"]=="best_mp4":
-            command.extend(["-f","bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best","--merge-output-format","mp4"])
-        elif fmt["kind"]=="mp3_audio":
-            command.extend(["-x","--audio-format","mp3"])
-        elif fmt["kind"]=="format_id":
-            command.extend(["-f",fmt["format_id"]])
+        output_format=fmt.get("output","mp4")
+        audio=fmt.get("audio") or {"kind":"best_audio"}
+        video=fmt.get("video") or {"kind":"best_video"}
+
+        if fmt.get("mode")=="Audio":
+            audio_selector="ba/bestaudio" if audio["kind"]=="best_audio" else audio["format_id"]
+            command.extend(["-f",audio_selector,"-x","--audio-format",output_format])
+        else:
+            if video["kind"]=="best_video":
+                video_selector="bv*[ext=mp4]/bestvideo[ext=mp4]/bv*/bestvideo" if output_format=="mp4" else "bv*/bestvideo"
+            else:
+                video_selector=video["format_id"]
+            if audio["kind"]=="best_audio":
+                audio_selector="ba[ext=m4a]/bestaudio[ext=m4a]/ba/bestaudio" if output_format=="mp4" else "ba/bestaudio"
+            else:
+                audio_selector=audio["format_id"]
+            command.extend(["-f",f"{video_selector}+{audio_selector}/best","--merge-output-format",output_format])
         command.append(task.url)
         return command
 
