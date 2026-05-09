@@ -1,0 +1,10 @@
+{
+  "model": {
+    "name": "faster-whisper-large-v3",
+    "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
+    "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5"
+  },
+  "model_path": "X:\\whisper_cache2\\hub\\models--Systran--faster-whisper-large-v3",
+  "device": "auto",
+  "compute_type": "int8"
+}
