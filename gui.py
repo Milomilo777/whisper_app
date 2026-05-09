@@ -1,14 +1,15 @@
 
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
-import threading,time,os
+import json,re,subprocess,sys,threading,time,os
 from queue import Empty, Queue
 from core.task import TranscriptionTask
-from core.model_manager import DownloadCancelled
-from core.transcriber import transcribe,load_model,load_existing_model,is_model_ready
+from core.config import load_config, save_config
+from core.model_manager import DownloadCancelled, ensure_model
 
 queue=[]
-current=None
+download_queue=[]
+download_current=None
 
 def fmt_bytes(value):
     value=float(value or 0)
@@ -86,7 +87,8 @@ class ModelDownloadDialog(tk.Toplevel):
             self.events.put(("progress",payload))
 
         try:
-            self.success=load_model(status,progress,self.cancel_event)
+            ensure_model(load_config(),status,progress,self.cancel_event)
+            self.success=True
         except DownloadCancelled:
             self.success=False
         except Exception as e:
@@ -149,10 +151,23 @@ class ModelDownloadDialog(tk.Toplevel):
         if "remaining" in payload:
             self.remaining_var.set(f"Remaining: {fmt_duration(remaining)}")
 
+class VideoDownloadTask:
+    def __init__(self, url, folder, format_label, format_info, title=""):
+        self.url=url
+        self.folder=folder
+        self.format_label=format_label
+        self.format_info=format_info
+        self.title=title
+        self.status="waiting"
+        self.progress=0
+        self.start_time=None
+        self.process=None
+        self.cancelled=False
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Whisper GUI")
+        self.title("Transcription helper")
         self.geometry("900x600")
         self.protocol("WM_DELETE_WINDOW",self.on_exit)
 
@@ -160,13 +175,23 @@ class App(tk.Tk):
         self.model_ready=False
         self.model_loading=False
         self.model_setup_running=False
-        self.startup_events=Queue()
+        self.workers=[]
+        self.worker_events=Queue()
+        self.worker_ready=False
+        self.app_config=load_config()
+        self.parallel_workers=max(1,int(self.app_config.get("parallel_workers",2)))
+        self.next_worker_id=1
+        self.format_events=Queue()
+        self.download_events=Queue()
+        self.format_map={}
+        self.current_video_title=""
+        self.format_lookup_after=None
 
         self.menu()
         self.tabs()
         self.console()
 
-        self.after(100,self.start_background_existing_model_load)
+        self.after(100,self.start_standby_worker)
         self.after(300,self.loop)
 
     def model_status(self,msg):
@@ -175,46 +200,175 @@ class App(tk.Tk):
         if "Model loaded" in msg:
             self.model_ready=True
 
-    def start_background_existing_model_load(self):
+    def active_workers(self):
+        return [w for w in self.workers if w["process"] and w["process"].poll() is None]
+
+    def ready_workers(self):
+        return [w for w in self.active_workers() if w["ready"]]
+
+    def idle_workers(self):
+        return [w for w in self.ready_workers() if w["task"] is None]
+
+    def update_model_state(self):
+        ready_count=len(self.ready_workers())
+        self.worker_ready=ready_count > 0
+        self.model_ready=self.worker_ready
+        self.model_loading=not self.worker_ready
+        if ready_count:
+            self.status_var.set(f"Model ready ({ready_count} worker{'s' if ready_count != 1 else ''})")
+
+    def start_standby_worker(self):
+        if not self.active_workers():
+            self.start_worker(temporary=False)
+        self.update_model_state()
+
+    def start_worker(self, worker=None, temporary=False):
+        if worker and worker["process"] and worker["process"].poll() is None:
+            return
+
+        if worker is None:
+            worker={"id":self.next_worker_id,"process":None,"ready":False,"task":None,"temporary":temporary}
+            self.next_worker_id+=1
+            self.workers.append(worker)
+        else:
+            worker["temporary"]=temporary
+
         self.model_loading=True
-        self.status_var.set("Loading existing model...")
+        worker["ready"]=False
+        worker["task"]=None
+        self.status_var.set(f"Loading model worker {worker['id']}...")
+
+        cmd=[sys.executable,"-u","-m","core.worker"]
+        kwargs={
+            "cwd":os.path.dirname(os.path.abspath(__file__)),
+            "stdin":subprocess.PIPE,
+            "stdout":subprocess.PIPE,
+            "stderr":subprocess.STDOUT,
+            "text":True,
+            "encoding":"utf-8",
+            "errors":"replace",
+        }
+        if os.name=="nt":
+            kwargs["creationflags"]=subprocess.CREATE_NO_WINDOW
+
+        process=subprocess.Popen(cmd,**kwargs)
+        worker["process"]=process
 
         def run():
-            def status(msg):
-                self.startup_events.put(("status",msg))
+            for line in process.stdout:
+                line=line.strip()
+                if not line:
+                    continue
 
-            success=load_existing_model(status)
-            self.startup_events.put(("done",success))
+                try:
+                    event=json.loads(line)
+                except json.JSONDecodeError:
+                    event={"event":"log","message":line}
+
+                event["_pid"]=process.pid
+                event["_worker_id"]=worker["id"]
+                self.worker_events.put(event)
+
+            return_code=process.wait()
+            self.worker_events.put({"event":"worker_exit","return_code":return_code,"_pid":process.pid,"_worker_id":worker["id"]})
 
         threading.Thread(target=run,daemon=True).start()
-        self.after(100,self.poll_startup_model_load)
+        self.after(100,self.poll_worker_events)
 
-    def poll_startup_model_load(self):
+    def worker_for_event(self,event):
+        for worker in self.workers:
+            process=worker.get("process")
+            if worker["id"] == event.get("_worker_id") and process and process.pid == event.get("_pid"):
+                return worker
+        return None
+
+    def stop_worker(self, worker):
+        process=worker.get("process")
+        if process and process.poll() is None:
+            try:
+                if process.stdin:
+                    process.stdin.write(json.dumps({"action":"shutdown"})+"\n")
+                    process.stdin.flush()
+            except Exception:
+                pass
+            process.terminate()
+
+    def stop_workers(self):
+        for worker in self.active_workers():
+            self.stop_worker(worker)
+
+    def restart_worker(self, worker):
+        self.stop_worker(worker)
+        worker["process"]=None
+        worker["ready"]=False
+        worker["task"]=None
+        self.model_loading=True
+        self.after(300,lambda:self.start_worker(worker,temporary=worker.get("temporary",False)))
+
+    def retire_worker(self, worker):
+        self.stop_worker(worker)
+        worker["process"]=None
+        worker["ready"]=False
+        worker["task"]=None
+        if worker in self.workers:
+            self.workers.remove(worker)
+        self.update_model_state()
+
+    def poll_worker_events(self):
         while True:
             try:
-                kind,payload=self.startup_events.get_nowait()
+                event=self.worker_events.get_nowait()
             except Empty:
                 break
 
-            if kind=="status":
-                self.model_status(payload)
-            elif kind=="done":
-                self.model_loading=False
-                if payload or is_model_ready():
-                    self.model_ready=True
-                    self.status_var.set("Model loaded")
-                    return
+            event_type=event.get("event")
+            worker=self.worker_for_event(event)
+            if not worker:
+                continue
 
-                self.model_ready=False
-                self.log("Existing model failed to load. Starting required download.")
-                self.ensure_model_with_modal(mandatory=True)
-                return
+            if event_type=="log":
+                self.model_status(event.get("message",""))
+            elif event_type=="ready":
+                worker["ready"]=True
+                self.update_model_state()
+            elif event_type=="startup_error":
+                worker["ready"]=False
+                self.log(event.get("message","Existing model failed to load."))
+                if not self.model_setup_running:
+                    self.log("Existing model failed to load. Starting required download.")
+                    self.stop_workers()
+                    self.workers=[]
+                    self.ensure_model_with_modal(mandatory=True)
+            elif event_type=="started":
+                pass
+            elif event_type=="progress":
+                if worker["task"]:
+                    p=event.get("percent",0)
+                    worker["task"].progress=p
+                    self.update_overall_progress()
+            elif event_type=="done":
+                self.finish_worker_task(worker)
+            elif event_type=="error":
+                if worker["task"]:
+                    worker["task"].status="error"
+                    self.log(event.get("message","Worker error"))
+                    self.finish_worker_task(worker,keep_status=True)
+                else:
+                    self.log(event.get("message","Worker error"))
+            elif event_type=="worker_exit":
+                worker["ready"]=False
+                worker["process"]=None
+                if worker["task"] and worker["task"].status=="running":
+                    worker["task"].status="error"
+                    self.log(f"Transcription worker exited with code {event.get('return_code')}")
+                    self.finish_worker_task(worker,keep_status=True)
+                self.update_model_state()
 
-        if self.model_loading:
-            self.after(100,self.poll_startup_model_load)
+        if self.active_workers():
+            self.after(100,self.poll_worker_events)
 
     def ensure_model_with_modal(self, mandatory=False):
-        if self.model_ready or is_model_ready():
+        if self.model_ready:
             self.model_ready=True
             self.status_var.set("Model loaded")
             return True
@@ -227,10 +381,9 @@ class App(tk.Tk):
         self.wait_window(dialog)
         self.model_setup_running=False
 
-        if dialog.success or is_model_ready():
-            self.model_ready=True
-            self.status_var.set("Model loaded")
-            self.log("Model loaded")
+        if dialog.success:
+            self.log("Model downloaded. Starting standby worker.")
+            self.start_standby_worker()
             return True
 
         self.model_ready=False
@@ -251,21 +404,27 @@ class App(tk.Tk):
 
     def on_exit(self):
         active=[t for t in queue if t.status not in ("finished","cancelled","error")]
-        if current or active:
-            if not messagebox.askyesno("Exit with queued tasks","There are queued or running transcription tasks. Exit anyway?",parent=self):
+        active_downloads=[t for t in download_queue if t.status not in ("finished","cancelled","error")]
+        if active or active_downloads:
+            if not messagebox.askyesno("Exit with queued tasks","There are queued or running tasks. Exit anyway?",parent=self):
                 return
+        for task in download_queue:
+            if task.process and task.process.poll() is None:
+                task.process.terminate()
+        self.stop_workers()
         self.destroy()
 
     def tabs(self):
-        nb=ttk.Notebook(self);nb.pack(fill="both",expand=True)
-        self.t1=ttk.Frame(nb);self.t2=ttk.Frame(nb)
-        nb.add(self.t1,text="New");nb.add(self.t2,text="Queue")
+        self.nb=ttk.Notebook(self);self.nb.pack(fill="both",expand=True)
+        self.t1=ttk.Frame(self.nb);self.t2=ttk.Frame(self.nb);self.t3=ttk.Frame(self.nb)
+        self.nb.add(self.t1,text="Transcribe");self.nb.add(self.t2,text="Queue");self.nb.add(self.t3,text="Download Videos")
 
         tk.Label(self.t1,text="File").grid(row=0,column=0)
         self.fv=tk.StringVar()
         tk.Entry(self.t1,textvariable=self.fv,width=60).grid(row=0,column=1)
         tk.Button(self.t1,text="Browse",command=self.browse).grid(row=0,column=2)
         tk.Button(self.t1,text="Transcribe",command=self.add).grid(row=1,column=1)
+        tk.Button(self.t2,text="Clear completed",command=self.clear_completed).pack(anchor="e",padx=10,pady=6)
 
         cols=("file","status","progress","time")
         self.tree=ttk.Treeview(self.t2,columns=cols,show="headings")
@@ -281,10 +440,198 @@ class App(tk.Tk):
         self.tree.bind("<Button-3>",self.menu_row)
         self.row_map={}
 
+        self.download_tab()
+
+    def download_tab(self):
+        top=ttk.Frame(self.t3,padding=10)
+        top.pack(fill="x")
+
+        ttk.Label(top,text="URL").grid(row=0,column=0,sticky="w")
+        self.download_url_var=tk.StringVar()
+        self.download_url_var.trace_add("write",lambda *_:self.schedule_format_lookup())
+        ttk.Entry(top,textvariable=self.download_url_var,width=80).grid(row=0,column=1,columnspan=2,sticky="ew",padx=(6,0))
+
+        ttk.Label(top,text="Folder").grid(row=1,column=0,sticky="w",pady=(8,0))
+        self.download_folder_var=tk.StringVar(value=self.app_config.get("download_folder",""))
+        ttk.Entry(top,textvariable=self.download_folder_var,width=70).grid(row=1,column=1,sticky="ew",padx=(6,0),pady=(8,0))
+        ttk.Button(top,text="Browse",command=self.browse_download_folder).grid(row=1,column=2,sticky="ew",padx=(6,0),pady=(8,0))
+
+        ttk.Label(top,text="Format").grid(row=2,column=0,sticky="w",pady=(8,0))
+        self.format_var=tk.StringVar()
+        self.format_combo=ttk.Combobox(top,textvariable=self.format_var,state="readonly",width=76)
+        self.format_combo.grid(row=2,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
+
+        self.format_status_var=tk.StringVar(value="Enter a URL to load available formats")
+        ttk.Label(top,textvariable=self.format_status_var).grid(row=3,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
+        ttk.Button(top,text="Download",command=self.add_download).grid(row=4,column=2,sticky="e",pady=(10,0))
+
+        top.columnconfigure(1,weight=1)
+
+        bottom=ttk.Frame(self.t3,padding=(10,0,10,10))
+        bottom.pack(fill="both",expand=True)
+
+        cols=("name","url","format","status","progress","time")
+        self.download_tree=ttk.Treeview(bottom,columns=cols,show="headings",height=8)
+        for c in cols:
+            self.download_tree.heading(c,text=c)
+        self.download_tree.column("name",width=220)
+        self.download_tree.column("url",width=420)
+        self.download_tree.column("format",width=180)
+        self.download_tree.column("status",width=100)
+        self.download_tree.column("progress",width=80)
+        self.download_tree.column("time",width=80)
+        self.download_tree.pack(fill="both",expand=True)
+        self.download_tree.bind("<Button-3>",self.download_menu_row)
+        self.download_row_map={}
+
+        self.after(200,self.poll_format_events)
+        self.after(300,self.poll_download_events)
+
     def browse(self):
         f=filedialog.askopenfilename()
         if f:
             self.fv.set(f)
+
+    def yt_dlp_path(self):
+        exe="yt-dlp.exe" if os.name=="nt" else "yt-dlp"
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),"bin",exe)
+
+    def bin_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),"bin")
+
+    def browse_download_folder(self):
+        folder=filedialog.askdirectory()
+        if folder:
+            self.download_folder_var.set(folder)
+            self.app_config["download_folder"]=folder
+            save_config(self.app_config)
+
+    def schedule_format_lookup(self):
+        if self.format_lookup_after:
+            self.after_cancel(self.format_lookup_after)
+        self.format_lookup_after=self.after(800,self.lookup_formats)
+
+    def lookup_formats(self):
+        url=self.download_url_var.get().strip()
+        self.format_lookup_after=None
+        self.format_map={}
+        self.current_video_title=""
+        self.format_combo["values"]=[]
+        self.format_var.set("")
+        if not url:
+            self.format_status_var.set("Enter a URL to load available formats")
+            return
+
+        self.format_status_var.set("Loading formats...")
+
+        def run():
+            try:
+                cmd=[self.yt_dlp_path(),"--ffmpeg-location",self.bin_path(),"--dump-single-json","--no-playlist","--no-warnings",url]
+                r=subprocess.run(cmd,cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=60)
+                if r.returncode:
+                    raise RuntimeError((r.stderr or r.stdout or "yt-dlp could not read this URL").strip())
+                info=json.loads(r.stdout)
+                self.format_events.put(("formats",url,info))
+            except Exception as e:
+                self.format_events.put(("error",url,str(e)))
+
+        threading.Thread(target=run,daemon=True).start()
+
+    def poll_format_events(self):
+        while True:
+            try:
+                kind,url,payload=self.format_events.get_nowait()
+            except Empty:
+                break
+
+            if url != self.download_url_var.get().strip():
+                continue
+
+            if kind=="error":
+                self.format_status_var.set(payload)
+                continue
+
+            values=[]
+            self.format_map={}
+            self.current_video_title=payload.get("title","")
+            presets=[
+                ("Best MP4 video","best_mp4"),
+                ("MP3 audio","mp3_audio"),
+                ("Best available","best"),
+            ]
+            for label,kind_value in presets:
+                values.append(label)
+                self.format_map[label]={"kind":kind_value}
+
+            for fmt in payload.get("formats",[]):
+                format_id=str(fmt.get("format_id",""))
+                ext=fmt.get("ext") or "unknown"
+                resolution=fmt.get("resolution") or (f"{fmt.get('width')}x{fmt.get('height')}" if fmt.get("width") and fmt.get("height") else "")
+                note=fmt.get("format_note") or ""
+                acodec=fmt.get("acodec") or ""
+                vcodec=fmt.get("vcodec") or ""
+                label=" | ".join(part for part in (format_id,ext,resolution,note,f"v:{vcodec}",f"a:{acodec}") if part)
+                if not format_id or label in self.format_map:
+                    continue
+                values.append(label)
+                self.format_map[label]={"kind":"format_id","format_id":format_id}
+
+            self.format_combo["values"]=values
+            if values:
+                self.format_var.set(values[0])
+                self.format_status_var.set(f"{len(values)} formats loaded")
+            else:
+                self.format_status_var.set("No formats found")
+
+        self.after(200,self.poll_format_events)
+
+    def add_download(self):
+        url=self.download_url_var.get().strip()
+        folder=self.download_folder_var.get().strip()
+        label=self.format_var.get()
+        if not url:
+            messagebox.showwarning("Missing URL","Enter a URL first.",parent=self)
+            return
+        if not folder:
+            messagebox.showwarning("Missing folder","Select a download folder first.",parent=self)
+            return
+        if not label or label not in self.format_map:
+            messagebox.showwarning("Missing format","Wait for formats to load, then select one.",parent=self)
+            return
+
+        os.makedirs(folder,exist_ok=True)
+        self.app_config["download_folder"]=folder
+        save_config(self.app_config)
+        title=self.current_video_title or url
+        download_queue.append(VideoDownloadTask(url,folder,label,self.format_map[label],title))
+        self.refresh_download_queue()
+        self.process_download_queue()
+
+    def download_menu_row(self,e):
+        item=self.download_tree.identify_row(e.y)
+        if not item:
+            return
+        task=self.download_row_map.get(item)
+        if not task:
+            return
+        m=tk.Menu(self,tearoff=0)
+        if task.status in ("waiting","running"):
+            m.add_command(label="Cancel",command=lambda:self.cancel_download(task))
+        elif task.status in ("finished","cancelled","error"):
+            m.add_command(label="Remove",command=lambda:self.remove_download(task))
+        m.tk_popup(e.x_root,e.y_root)
+
+    def cancel_download(self,task):
+        task.cancelled=True
+        task.status="cancelled"
+        if task.process and task.process.poll() is None:
+            task.process.terminate()
+        self.refresh_download_queue()
+
+    def remove_download(self,task):
+        if task in download_queue:
+            download_queue.remove(task)
+        self.refresh_download_queue()
 
     def add(self):
         if not self.fv.get():
@@ -300,6 +647,8 @@ class App(tk.Tk):
                 self.log("Request was not queued because the required model is not ready.")
                 return
         queue.append(TranscriptionTask(self.fv.get()))
+        self.pb["value"]=0
+        self.nb.select(self.t2)
         self.refresh()
 
     def menu_row(self,e):
@@ -320,12 +669,14 @@ class App(tk.Tk):
             m.add_command(label="Cancel",command=lambda:self.cancel(task))
 
         elif task.status=="running":
-            m.add_command(label="Pause",command=lambda:self.pause(task))
             m.add_command(label="Cancel",command=lambda:self.cancel(task))
 
         elif task.status=="paused":
             m.add_command(label="Resume",command=lambda:self.resume(task))
             m.add_command(label="Cancel",command=lambda:self.cancel(task))
+
+        elif task.status in ("finished","cancelled","error"):
+            m.add_command(label="Remove",command=lambda:self.remove_task(task))
 
         m.tk_popup(e.x_root,e.y_root)
 
@@ -342,6 +693,24 @@ class App(tk.Tk):
     def cancel(self,t):
         t.cancelled=True
         t.status="cancelled"
+        for worker in self.workers:
+            if worker["task"] == t:
+                self.log("Cancelling running task and restarting its worker...")
+                worker["task"]=None
+                if worker.get("temporary") and not any(task.status=="waiting" for task in queue):
+                    self.retire_worker(worker)
+                else:
+                    self.restart_worker(worker)
+                break
+        self.refresh()
+
+    def remove_task(self,t):
+        if t in queue:
+            queue.remove(t)
+        self.refresh()
+
+    def clear_completed(self):
+        queue[:]=[t for t in queue if t.status not in ("finished","cancelled","error")]
         self.refresh()
 
     def fmt_time(self,t):
@@ -365,51 +734,185 @@ class App(tk.Tk):
 
             self.row_map[item_id]=t
 
+    def refresh_download_queue(self):
+        self.download_tree.delete(*self.download_tree.get_children())
+        self.download_row_map={}
+
+        for task in download_queue:
+            item_id=self.download_tree.insert("", "end", values=(
+                task.title,
+                task.url,
+                task.format_label,
+                task.status,
+                f"{task.progress}%",
+                self.fmt_time(task)
+            ))
+            self.download_row_map[item_id]=task
+
     def log(self,msg):
         print(msg)
         self.txt.insert("end",msg+"\n")
         self.txt.see("end")
 
-    def process(self):
-        global current
+    def build_download_command(self,task):
+        output=os.path.join(task.folder,"%(title)s.%(ext)s")
+        command=[self.yt_dlp_path(),"--ffmpeg-location",self.bin_path(),"--newline","-o",output]
+        fmt=task.format_info
+        if fmt["kind"]=="best_mp4":
+            command.extend(["-f","bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best","--merge-output-format","mp4"])
+        elif fmt["kind"]=="mp3_audio":
+            command.extend(["-x","--audio-format","mp3"])
+        elif fmt["kind"]=="format_id":
+            command.extend(["-f",fmt["format_id"]])
+        command.append(task.url)
+        return command
 
-        if current or not queue:
+    def process_download_queue(self):
+        global download_current
+        if download_current:
+            return
+        task=next((t for t in download_queue if t.status=="waiting"),None)
+        if not task:
             return
 
-        t=queue[0]
-
-        if t.status=="cancelled":
-            queue.pop(0)
-            return
-
-        current=t
+        download_current=task
+        task.status="running"
+        task.progress=0
+        task.start_time=time.time()
+        self.refresh_download_queue()
 
         def run():
+            global download_current
             try:
-                t.status="running"
-                t.start_time=time.time()
+                update_cmd=[self.yt_dlp_path(),"--update"]
+                update=subprocess.run(update_cmd,cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding="utf-8",errors="replace")
+                if update.stdout.strip():
+                    self.download_events.put(("log",task,update.stdout.strip()))
+                if update.stderr.strip():
+                    self.download_events.put(("log",task,update.stderr.strip()))
+                if update.returncode:
+                    raise RuntimeError("yt-dlp update failed")
 
-                def prog(p):
-                    t.progress=p
-                    self.pb["value"]=p
+                task.process=subprocess.Popen(
+                    self.build_download_command(task),
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0,
+                )
 
-                transcribe(t,prog,self.log)
+                percent_re=re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
+                for line in task.process.stdout:
+                    line=line.rstrip()
+                    match=percent_re.search(line)
+                    if match:
+                        self.download_events.put(("progress",task,float(match.group(1))))
+                    elif line:
+                        self.download_events.put(("log",task,line))
 
-                if not t.cancelled:
-                    t.status="finished"
-                    t.progress=100
-
+                return_code=task.process.wait()
+                if task.cancelled:
+                    self.download_events.put(("done",task,"cancelled"))
+                elif return_code:
+                    self.download_events.put(("error",task,f"yt-dlp exited with code {return_code}"))
+                else:
+                    self.download_events.put(("done",task,"finished"))
             except Exception as e:
-                t.status="error"
-                self.log(str(e))
-
+                self.download_events.put(("error",task,str(e)))
             finally:
-                if queue and queue[0]==t:
-                    queue.pop(0)
-
-                globals()["current"]=None
+                task.process=None
 
         threading.Thread(target=run,daemon=True).start()
+
+    def poll_download_events(self):
+        global download_current
+        while True:
+            try:
+                kind,task,payload=self.download_events.get_nowait()
+            except Empty:
+                break
+
+            if kind=="progress":
+                task.progress=min(100,int(payload))
+            elif kind=="log":
+                self.log(payload)
+            elif kind=="done":
+                task.status=payload
+                if payload=="finished":
+                    task.progress=100
+                if download_current == task:
+                    download_current=None
+                self.process_download_queue()
+            elif kind=="error":
+                task.status="error"
+                self.log(payload)
+                if download_current == task:
+                    download_current=None
+                self.process_download_queue()
+
+            self.refresh_download_queue()
+
+        self.after(300,self.poll_download_events)
+
+    def process(self):
+        if not queue:
+            return
+
+        waiting=[task for task in queue if task.status=="waiting"]
+        if not waiting:
+            return
+
+        active_count=len(self.active_workers())
+        idle_count=len(self.idle_workers())
+        needed=min(len(waiting),self.parallel_workers)-idle_count
+        for _ in range(max(0,needed)):
+            if active_count >= self.parallel_workers:
+                break
+            self.start_worker(temporary=True)
+            active_count+=1
+
+        idle=self.idle_workers()
+        if not idle:
+            return
+
+        for worker,t in zip(idle,waiting):
+            worker["task"]=t
+            t.status="running"
+            t.progress=0
+            t.start_time=time.time()
+            self.update_overall_progress()
+
+            try:
+                command={"action":"transcribe","file_path":t.file_path}
+                worker["process"].stdin.write(json.dumps(command)+"\n")
+                worker["process"].stdin.flush()
+            except Exception as e:
+                t.status="error"
+                worker["task"]=None
+                self.log(f"Failed to start transcription: {e}")
+                self.restart_worker(worker)
+
+    def finish_worker_task(self, worker, keep_status=False):
+        task=worker["task"]
+        if not task:
+            return
+        if not keep_status and not task.cancelled:
+            task.status="finished"
+            task.progress=100
+        worker["task"]=None
+        self.update_overall_progress()
+        if worker.get("temporary") and not any(t.status=="waiting" for t in queue):
+            self.retire_worker(worker)
+
+    def update_overall_progress(self):
+        running=[t for t in queue if t.status=="running"]
+        if not running:
+            self.pb["value"]=0
+            return
+        self.pb["value"]=sum(t.progress for t in running)/len(running)
 
     def console(self):
         self.txt=tk.Text(self,height=8,bg="black",fg="lime")
@@ -418,6 +921,7 @@ class App(tk.Tk):
     def loop(self):
         self.refresh()
         self.process()
+        self.process_download_queue()
         self.after(500,self.loop)
 
 if __name__=="__main__":

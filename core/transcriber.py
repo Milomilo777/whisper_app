@@ -1,8 +1,9 @@
 
 import os,time,json,subprocess,threading
+from pathlib import Path
 from faster_whisper import WhisperModel
 from .config import load_config
-from .model_manager import ensure_model
+from .model_manager import DownloadCancelled, ensure_model
 
 config = load_config()
 
@@ -11,8 +12,10 @@ MODEL_READY=False
 MODEL_ERROR=None
 
 def log(msg, cb=None):
-    print(msg)
-    if cb: cb(msg)
+    if cb:
+        cb(msg)
+    else:
+        print(msg)
 
 def detect_device():
     try:
@@ -25,17 +28,65 @@ def detect_device():
 
 device,compute_type=detect_device()
 
-def load_model_async(status_cb=None):
+def is_model_ready():
+    return MODEL_READY
+
+def get_model_error():
+    return MODEL_ERROR
+
+def load_existing_model(status_cb=None):
     global MODEL, MODEL_READY, MODEL_ERROR
+    MODEL_READY=False
+    MODEL_ERROR=None
+    model_path=Path(config["model_path"])
+
+    if not model_path.exists():
+        MODEL_ERROR=f"Model folder missing: {model_path}"
+        if status_cb: status_cb(MODEL_ERROR)
+        return False
+
     try:
-        model_path=ensure_model(config, status_cb)
+        if status_cb: status_cb("Loading existing Whisper model...")
+        MODEL=WhisperModel(str(model_path),device=device,compute_type=compute_type)
+        MODEL_READY=True
+        if status_cb: status_cb("Model loaded")
+        return True
+    except Exception as e:
+        MODEL_ERROR=str(e)
+        if status_cb: status_cb(f"Existing model failed to load: {e}")
+        return False
+
+def load_model(status_cb=None, progress_cb=None, cancel_event=None):
+    global MODEL, MODEL_READY, MODEL_ERROR
+    MODEL_READY=False
+    MODEL_ERROR=None
+    try:
+        model_path=ensure_model(config, status_cb, progress_cb, cancel_event)
+        if cancel_event and cancel_event.is_set():
+            raise DownloadCancelled("Model download cancelled")
         if status_cb: status_cb("Loading Whisper model...")
+        if progress_cb:
+            progress_cb({"phase":"load","status":"Loading Whisper model...","percent":100,"detail":"Preparing model for transcription"})
         MODEL=WhisperModel(model_path,device=device,compute_type=compute_type)
         MODEL_READY=True
         if status_cb: status_cb("Model loaded")
+        if progress_cb:
+            progress_cb({"phase":"loaded","status":"Model loaded","percent":100,"detail":"Ready"})
+        return True
+    except DownloadCancelled as e:
+        MODEL_ERROR=None
+        if status_cb: status_cb(str(e))
+        return False
     except Exception as e:
         MODEL_ERROR=str(e)
         if status_cb: status_cb(f"ERROR: {e}")
+        raise
+
+def load_model_async(status_cb=None, progress_cb=None, cancel_event=None):
+    try:
+        load_model(status_cb, progress_cb, cancel_event)
+    except Exception:
+        pass
 
 def start_background_model_load(status_cb=None):
     threading.Thread(target=load_model_async,args=(status_cb,),daemon=True).start()
