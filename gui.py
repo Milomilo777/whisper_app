@@ -14,35 +14,35 @@ download_current=None
 SUBTITLE_LANGUAGES=[
     ("Automatic",""),
     ("English","en"),
-    ("Spanish","es"),
+    ("Arabic","ar"),
+    ("Chinese (Simplified)","zh-Hans,zh-CN"),
+    ("Chinese (Traditional)","zh-Hant,zh-TW"),
+    ("Czech","cs"),
+    ("Danish","da"),
+    ("Dutch","nl"),
+    ("Finnish","fi"),
     ("French","fr"),
     ("German","de"),
+    ("Greek","el"),
+    ("Hebrew","he,iw"),
+    ("Hindi","hi"),
+    ("Hungarian","hu"),
+    ("Indonesian","id,in"),
     ("Italian","it"),
-    ("Portuguese","pt"),
-    ("Russian","ru"),
     ("Japanese","ja"),
     ("Korean","ko"),
-    ("Chinese (Simplified)","zh-Hans"),
-    ("Chinese (Traditional)","zh-Hant"),
-    ("Arabic","ar"),
-    ("Hindi","hi"),
-    ("Dutch","nl"),
-    ("Polish","pl"),
-    ("Turkish","tr"),
-    ("Vietnamese","vi"),
-    ("Thai","th"),
-    ("Indonesian","id"),
-    ("Swedish","sv"),
-    ("Norwegian","no"),
-    ("Danish","da"),
-    ("Finnish","fi"),
-    ("Greek","el"),
-    ("Hebrew","he"),
-    ("Czech","cs"),
-    ("Hungarian","hu"),
-    ("Romanian","ro"),
-    ("Ukrainian","uk"),
+    ("Norwegian","no,nb"),
     ("Persian","fa"),
+    ("Polish","pl"),
+    ("Portuguese","pt,pt-BR,pt-PT"),
+    ("Romanian","ro"),
+    ("Russian","ru"),
+    ("Spanish","es,es-419"),
+    ("Swedish","sv"),
+    ("Thai","th"),
+    ("Turkish","tr"),
+    ("Ukrainian","uk"),
+    ("Vietnamese","vi"),
 ]
 
 def fmt_bytes(value):
@@ -519,11 +519,17 @@ class App(tk.Tk):
         ttk.Label(top,text="Subtitles").grid(row=6,column=0,sticky="w",pady=(8,0))
         sub_frame=ttk.Frame(top)
         sub_frame.grid(row=6,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
-        self.download_subtitles_var=tk.BooleanVar(value=False)
-        ttk.Checkbutton(sub_frame,text="Download automatic subtitles",variable=self.download_subtitles_var,command=self.update_subtitle_state).pack(side="left")
-        self.subtitle_lang_var=tk.StringVar(value=SUBTITLE_LANGUAGES[0][0])
-        self.subtitle_lang_combo=ttk.Combobox(sub_frame,textvariable=self.subtitle_lang_var,state="readonly",values=[name for name,_ in SUBTITLE_LANGUAGES],width=24)
+        saved_sub_enabled=bool(self.app_config.get("download_subtitles_enabled",False))
+        self.download_subtitles_var=tk.BooleanVar(value=saved_sub_enabled)
+        ttk.Checkbutton(sub_frame,text="Download subtitles (auto + manual when present)",variable=self.download_subtitles_var,command=self.update_subtitle_state).pack(side="left")
+        saved_sub_lang=self.app_config.get("download_subtitle_lang") or SUBTITLE_LANGUAGES[0][0]
+        if saved_sub_lang not in [name for name,_ in SUBTITLE_LANGUAGES]:
+            saved_sub_lang=SUBTITLE_LANGUAGES[0][0]
+        self.subtitle_lang_var=tk.StringVar(value=saved_sub_lang)
+        self.subtitle_lang_combo=ttk.Combobox(sub_frame,textvariable=self.subtitle_lang_var,state="disabled",values=[name for name,_ in SUBTITLE_LANGUAGES],width=24)
         self.subtitle_lang_combo.pack(side="left",padx=(10,0))
+        self.subtitle_status_var=tk.StringVar(value="")
+        ttk.Label(sub_frame,textvariable=self.subtitle_status_var,foreground="#666").pack(side="left",padx=(10,0))
 
         self.format_status_var=tk.StringVar(value="Enter a URL to load available formats")
         ttk.Label(top,textvariable=self.format_status_var).grid(row=7,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
@@ -596,6 +602,7 @@ class App(tk.Tk):
             self.subtitle_lang_combo.configure(state="readonly")
         else:
             self.subtitle_lang_combo.configure(state="disabled")
+            self.subtitle_status_var.set("")
 
     def lookup_formats(self):
         url=self.download_url_var.get().strip()
@@ -646,7 +653,11 @@ class App(tk.Tk):
             self.audio_format_map={"Best audio":{"kind":"best_audio"}}
             self.video_format_map={"Best video":{"kind":"best_video"}}
             self.current_video_title=payload.get("title","")
-            self.current_video_language=payload.get("language") or ""
+            lang=payload.get("language") or ""
+            if not lang:
+                auto_caps=payload.get("automatic_captions") or {}
+                lang=next(iter(auto_caps.keys()),"") if auto_caps else ""
+            self.current_video_language=lang
 
             for fmt in payload.get("formats",[]):
                 format_id=str(fmt.get("format_id",""))
@@ -711,11 +722,13 @@ class App(tk.Tk):
 
         os.makedirs(folder,exist_ok=True)
         self.app_config["download_folder"]=folder
-        save_config(self.app_config)
         title=self.current_video_title or url
         subtitles_enabled=self.download_subtitles_var.get()
         sub_lang_name=self.subtitle_lang_var.get()
         sub_lang_code=next((code for name,code in SUBTITLE_LANGUAGES if name==sub_lang_name),"")
+        self.app_config["download_subtitles_enabled"]=subtitles_enabled
+        self.app_config["download_subtitle_lang"]=sub_lang_name
+        save_config(self.app_config)
         label_extra=""
         if subtitles_enabled:
             label_extra=f" + subs ({sub_lang_name})"
@@ -886,15 +899,21 @@ class App(tk.Tk):
         lang=task.subtitle_lang or task.detected_language or ""
         return lang.strip()
 
+    def subtitle_lang_args(self,lang):
+        codes=[c.strip() for c in lang.split(",") if c.strip()]
+        return ",".join(codes) if codes else ""
+
     def build_subtitle_command(self,task,lang):
         output=os.path.join(task.folder,"%(title)s.%(ext)s")
+        sub_langs=self.subtitle_lang_args(lang)
         return [
             self.yt_dlp_path(),
             "--ffmpeg-location",self.bin_path(),
             "--newline",
             "--skip-download",
             "--write-auto-subs",
-            "--sub-langs",f"{lang}.*",
+            "--write-subs",
+            "--sub-langs",sub_langs,
             "--no-playlist",
             "-o",output,
             task.url,
@@ -940,6 +959,7 @@ class App(tk.Tk):
 
         def run():
             global download_current
+            self.download_events.put(("subtitle_status",task,""))
             try:
                 update_cmd=[self.yt_dlp_path(),"--update"]
                 update=subprocess.run(update_cmd,cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding="utf-8",errors="replace")
@@ -953,9 +973,11 @@ class App(tk.Tk):
                 if task.subtitles_enabled and not task.cancelled:
                     sub_lang=self.resolve_subtitle_lang(task)
                     if not sub_lang:
-                        self.download_events.put(("log",task,"Skipping auto subtitles: original language could not be detected."))
+                        self.download_events.put(("subtitle_status",task,"no language detected"))
+                        self.download_events.put(("log",task,"Skipping subtitles: original language could not be detected."))
                     else:
-                        self.download_events.put(("log",task,f"Downloading auto subtitles (lang: {sub_lang})..."))
+                        self.download_events.put(("subtitle_status",task,f"fetching subtitles ({sub_lang})..."))
+                        self.download_events.put(("log",task,f"--- Subtitle phase: requesting {sub_lang} ---"))
                         task.process=subprocess.Popen(
                             self.build_subtitle_command(task,sub_lang),
                             cwd=os.path.dirname(os.path.abspath(__file__)),
@@ -966,17 +988,35 @@ class App(tk.Tk):
                             errors="replace",
                             creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0,
                         )
+                        wrote_files=[]
+                        no_subs_warning=False
                         for line in task.process.stdout:
                             line=line.rstrip()
-                            if line:
-                                self.download_events.put(("log",task,line))
+                            if not line:
+                                continue
+                            self.download_events.put(("log",task,line))
+                            if "Writing video subtitles to:" in line:
+                                wrote_files.append(line.split("Writing video subtitles to:",1)[1].strip())
+                            elif "no subtitles for the requested languages" in line.lower() or "no automatic captions for the requested languages" in line.lower():
+                                no_subs_warning=True
                         sub_rc=task.process.wait()
                         task.process=None
                         if task.cancelled:
+                            self.download_events.put(("subtitle_status",task,"cancelled"))
                             self.download_events.put(("done",task,"cancelled"))
                             return
-                        if sub_rc:
-                            self.download_events.put(("log",task,f"Auto subtitle download exited with code {sub_rc} (continuing with media)"))
+                        if wrote_files:
+                            self.download_events.put(("subtitle_status",task,f"✓ saved {len(wrote_files)} subtitle file{'s' if len(wrote_files)!=1 else ''}"))
+                            self.download_events.put(("log",task,f"--- Subtitle phase: wrote {len(wrote_files)} file(s) ---"))
+                        elif no_subs_warning:
+                            self.download_events.put(("subtitle_status",task,"no captions available"))
+                            self.download_events.put(("log",task,"--- Subtitle phase: no captions available for the requested language ---"))
+                        elif sub_rc:
+                            self.download_events.put(("subtitle_status",task,f"failed (rc={sub_rc})"))
+                            self.download_events.put(("log",task,f"--- Subtitle phase: yt-dlp exit code {sub_rc} (continuing with media) ---"))
+                        else:
+                            self.download_events.put(("subtitle_status",task,"completed (no files written)"))
+                            self.download_events.put(("log",task,"--- Subtitle phase: completed without writing files ---"))
 
                 task.process=subprocess.Popen(
                     self.build_download_command(task),
@@ -1024,6 +1064,8 @@ class App(tk.Tk):
                 task.progress=min(100,int(payload))
             elif kind=="log":
                 self.log(payload)
+            elif kind=="subtitle_status":
+                self.subtitle_status_var.set(payload)
             elif kind=="done":
                 task.status=payload
                 if payload=="finished":
