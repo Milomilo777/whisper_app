@@ -11,6 +11,40 @@ queue=[]
 download_queue=[]
 download_current=None
 
+SUBTITLE_LANGUAGES=[
+    ("Automatic",""),
+    ("English","en"),
+    ("Spanish","es"),
+    ("French","fr"),
+    ("German","de"),
+    ("Italian","it"),
+    ("Portuguese","pt"),
+    ("Russian","ru"),
+    ("Japanese","ja"),
+    ("Korean","ko"),
+    ("Chinese (Simplified)","zh-Hans"),
+    ("Chinese (Traditional)","zh-Hant"),
+    ("Arabic","ar"),
+    ("Hindi","hi"),
+    ("Dutch","nl"),
+    ("Polish","pl"),
+    ("Turkish","tr"),
+    ("Vietnamese","vi"),
+    ("Thai","th"),
+    ("Indonesian","id"),
+    ("Swedish","sv"),
+    ("Norwegian","no"),
+    ("Danish","da"),
+    ("Finnish","fi"),
+    ("Greek","el"),
+    ("Hebrew","he"),
+    ("Czech","cs"),
+    ("Hungarian","hu"),
+    ("Romanian","ro"),
+    ("Ukrainian","uk"),
+    ("Persian","fa"),
+]
+
 def fmt_bytes(value):
     value=float(value or 0)
     for unit in ("B","KB","MB","GB","TB"):
@@ -152,7 +186,7 @@ class ModelDownloadDialog(tk.Toplevel):
             self.remaining_var.set(f"Remaining: {fmt_duration(remaining)}")
 
 class VideoDownloadTask:
-    def __init__(self, url, folder, format_label, format_info, title=""):
+    def __init__(self, url, folder, format_label, format_info, title="", subtitles_enabled=False, subtitle_lang="", detected_language=""):
         self.url=url
         self.folder=folder
         self.format_label=format_label
@@ -163,6 +197,9 @@ class VideoDownloadTask:
         self.start_time=None
         self.process=None
         self.cancelled=False
+        self.subtitles_enabled=subtitles_enabled
+        self.subtitle_lang=subtitle_lang
+        self.detected_language=detected_language
 
 class App(tk.Tk):
     def __init__(self):
@@ -186,6 +223,7 @@ class App(tk.Tk):
         self.audio_format_map={}
         self.video_format_map={}
         self.current_video_title=""
+        self.current_video_language=""
         self.format_lookup_after=None
 
         self.menu()
@@ -478,9 +516,18 @@ class App(tk.Tk):
         self.output_format_combo=ttk.Combobox(top,textvariable=self.output_format_var,state="readonly",width=20)
         self.output_format_combo.grid(row=5,column=1,sticky="w",padx=(6,0),pady=(8,0))
 
+        ttk.Label(top,text="Subtitles").grid(row=6,column=0,sticky="w",pady=(8,0))
+        sub_frame=ttk.Frame(top)
+        sub_frame.grid(row=6,column=1,columnspan=2,sticky="ew",padx=(6,0),pady=(8,0))
+        self.download_subtitles_var=tk.BooleanVar(value=False)
+        ttk.Checkbutton(sub_frame,text="Download automatic subtitles",variable=self.download_subtitles_var,command=self.update_subtitle_state).pack(side="left")
+        self.subtitle_lang_var=tk.StringVar(value=SUBTITLE_LANGUAGES[0][0])
+        self.subtitle_lang_combo=ttk.Combobox(sub_frame,textvariable=self.subtitle_lang_var,state="readonly",values=[name for name,_ in SUBTITLE_LANGUAGES],width=24)
+        self.subtitle_lang_combo.pack(side="left",padx=(10,0))
+
         self.format_status_var=tk.StringVar(value="Enter a URL to load available formats")
-        ttk.Label(top,textvariable=self.format_status_var).grid(row=6,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
-        ttk.Button(top,text="Download",command=self.add_download).grid(row=7,column=2,sticky="e",pady=(10,0))
+        ttk.Label(top,textvariable=self.format_status_var).grid(row=7,column=1,columnspan=2,sticky="w",padx=(6,0),pady=(4,0))
+        ttk.Button(top,text="Download",command=self.add_download).grid(row=8,column=2,sticky="e",pady=(10,0))
 
         top.columnconfigure(1,weight=1)
 
@@ -502,6 +549,7 @@ class App(tk.Tk):
         self.download_row_map={}
 
         self.update_download_mode()
+        self.update_subtitle_state()
         self.after(200,self.poll_format_events)
         self.after(300,self.poll_download_events)
 
@@ -543,12 +591,19 @@ class App(tk.Tk):
                 self.output_format_var.set("mp4")
         self.output_format_combo["values"]=outputs
 
+    def update_subtitle_state(self):
+        if self.download_subtitles_var.get():
+            self.subtitle_lang_combo.configure(state="readonly")
+        else:
+            self.subtitle_lang_combo.configure(state="disabled")
+
     def lookup_formats(self):
         url=self.download_url_var.get().strip()
         self.format_lookup_after=None
         self.audio_format_map={}
         self.video_format_map={}
         self.current_video_title=""
+        self.current_video_language=""
         self.audio_format_combo["values"]=[]
         self.video_format_combo["values"]=[]
         self.audio_format_var.set("")
@@ -591,6 +646,7 @@ class App(tk.Tk):
             self.audio_format_map={"Best audio":{"kind":"best_audio"}}
             self.video_format_map={"Best video":{"kind":"best_video"}}
             self.current_video_title=payload.get("title","")
+            self.current_video_language=payload.get("language") or ""
 
             for fmt in payload.get("formats",[]):
                 format_id=str(fmt.get("format_id",""))
@@ -657,14 +713,25 @@ class App(tk.Tk):
         self.app_config["download_folder"]=folder
         save_config(self.app_config)
         title=self.current_video_title or url
-        format_label=f"{mode} -> {output}"
+        subtitles_enabled=self.download_subtitles_var.get()
+        sub_lang_name=self.subtitle_lang_var.get()
+        sub_lang_code=next((code for name,code in SUBTITLE_LANGUAGES if name==sub_lang_name),"")
+        label_extra=""
+        if subtitles_enabled:
+            label_extra=f" + subs ({sub_lang_name})"
+        format_label=f"{mode} -> {output}{label_extra}"
         format_info={
             "mode":mode,
             "audio":self.audio_format_map[audio_label],
             "video":self.video_format_map.get(video_label),
             "output":output,
         }
-        download_queue.append(VideoDownloadTask(url,folder,format_label,format_info,title))
+        download_queue.append(VideoDownloadTask(
+            url,folder,format_label,format_info,title,
+            subtitles_enabled=subtitles_enabled,
+            subtitle_lang=sub_lang_code,
+            detected_language=self.current_video_language,
+        ))
         self.refresh_download_queue()
         self.process_download_queue()
 
@@ -815,6 +882,24 @@ class App(tk.Tk):
         self.txt.insert("end",msg+"\n")
         self.txt.see("end")
 
+    def resolve_subtitle_lang(self,task):
+        lang=task.subtitle_lang or task.detected_language or ""
+        return lang.strip()
+
+    def build_subtitle_command(self,task,lang):
+        output=os.path.join(task.folder,"%(title)s.%(ext)s")
+        return [
+            self.yt_dlp_path(),
+            "--ffmpeg-location",self.bin_path(),
+            "--newline",
+            "--skip-download",
+            "--write-auto-subs",
+            "--sub-langs",f"{lang}.*",
+            "--no-playlist",
+            "-o",output,
+            task.url,
+        ]
+
     def build_download_command(self,task):
         output=os.path.join(task.folder,"%(title)s.%(ext)s")
         command=[self.yt_dlp_path(),"--ffmpeg-location",self.bin_path(),"--newline","-o",output]
@@ -864,6 +949,34 @@ class App(tk.Tk):
                     self.download_events.put(("log",task,update.stderr.strip()))
                 if update.returncode:
                     raise RuntimeError("yt-dlp update failed")
+
+                if task.subtitles_enabled and not task.cancelled:
+                    sub_lang=self.resolve_subtitle_lang(task)
+                    if not sub_lang:
+                        self.download_events.put(("log",task,"Skipping auto subtitles: original language could not be detected."))
+                    else:
+                        self.download_events.put(("log",task,f"Downloading auto subtitles (lang: {sub_lang})..."))
+                        task.process=subprocess.Popen(
+                            self.build_subtitle_command(task,sub_lang),
+                            cwd=os.path.dirname(os.path.abspath(__file__)),
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0,
+                        )
+                        for line in task.process.stdout:
+                            line=line.rstrip()
+                            if line:
+                                self.download_events.put(("log",task,line))
+                        sub_rc=task.process.wait()
+                        task.process=None
+                        if task.cancelled:
+                            self.download_events.put(("done",task,"cancelled"))
+                            return
+                        if sub_rc:
+                            self.download_events.put(("log",task,f"Auto subtitle download exited with code {sub_rc} (continuing with media)"))
 
                 task.process=subprocess.Popen(
                     self.build_download_command(task),
