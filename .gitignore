@@ -26,6 +26,9 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
+# ...but keep the committed production spec file.
+!whisper_project.spec
+*.spec.bak
 
 # Virtual environments
 .venv/

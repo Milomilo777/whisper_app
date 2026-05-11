@@ -292,6 +292,41 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 5 — 2026-05-11 — Fifth architect, Final compile + smoke
+
+**Coordinator:** same as the Phase 1b + 2a + 3a sessions above; this is one continuous run.
+
+**What got done:**
+
+1. **`whisper_project.spec`** at the repo root. `--onedir`, console=False, name `WhisperProject`. `datas=[('bin', 'bin')]` (which silently dropped on the first build — see below). `hiddenimports` covers every `app.*` and `core.*` module + the writers and integrations. `.gitignore` updated with `!whisper_project.spec` so the production spec is committed while local `.spec` artifacts stay ignored.
+2. **`build.bat`** at the repo root with the four documented exit codes (0/1/2/3) + four modes (`(none)` / `clean` / `verify` / `smoke`). The verification step is explicit per file with `OK`/`MISSING` lines so a future spec regression fails the build loudly. The belt-and-suspenders `xcopy /E /I /Q "%REPO%bin" "%DIST%\bin"` fires when `dist\bin` is missing — which it was on the first build, since PyInstaller silently dropped the `datas` directive. Without that fallback, the exe would launch and crash the moment the user opened the Download Videos tab.
+3. **`docs/BUILD.md`** — modes table, exit codes table, what `dist\` looks like after a successful build, why `config.json` is intentionally not in `dist\` (Phase 1.2 migration), known PyInstaller hook quirks for `sv-ttk` / `faster-whisper` / `huggingface_hub` / antivirus.
+4. **First build** completed: `pyinstaller --noconfirm whisper_project.spec` produced `dist\WhisperProject\WhisperProject.exe` (14.7 MB) plus `_internal\` (250-500 MB depending on wheels). Verification log:
+   ```
+   [build] dist\bin missing - copying from repo root as a fallback.
+   [build]   OK     : ...\WhisperProject.exe
+   [build]   OK     : ...\bin\ffmpeg.exe
+   [build]   OK     : ...\bin\ffprobe.exe
+   [build]   OK     : ...\bin\yt-dlp.exe
+   ```
+5. **Smoke**: the inline Python smoke from the brief launched `WhisperProject.exe`, slept 5 s, asserted the process was alive, killed it. Output: `BUILD_SMOKE_PASS`.
+6. All 129 fast tests still pass (+ 7 real-audio ones that auto-skip when offline).
+
+**Decisions worth remembering:**
+
+- **The `bin/` fallback is not theoretical.** On this very first build, PyInstaller's `datas=[('bin', 'bin')]` silently dropped — the `dist\WhisperProject\bin\` folder never appeared. The `xcopy` in `build.bat` caught it. Anyone who deletes the fallback will produce a silently-broken exe. The teammate's field note in the brief was accurate; keep this defense.
+- **`build.bat smoke` via Bash is unreliable.** When the tool harness runs `./build.bat smoke 2>&1`, the `start ""` line spawns the GUI but the subsequent `tasklist` / `find` pipeline doesn't terminate cleanly under MSYS Bash. The Python smoke (the brief's canonical one) ran cleanly. Both verify the same thing; the Python one is what we trust.
+- **`!whisper_project.spec` in `.gitignore`.** Without this exception, `git add` of the spec is rejected because `*.spec` would catch it. The committed spec is treated as code; user's local PyInstaller experiments aren't.
+
+**Things explored and explicitly rejected:**
+
+- **Adding `sv_ttk` theme files explicitly to `datas`** — the built-in PyInstaller hook for `sv_ttk` picked them up; the smoke launch didn't fall back to default Tk. If a future spec change breaks this, follow the recipe in `docs/BUILD.md`.
+- **`--onefile`** — false-positive antivirus hits are dramatically higher. Stay one-dir.
+
+**Pending after final compile:** none. JSON report below; push the spec + build.bat + BUILD.md commit; exit.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
