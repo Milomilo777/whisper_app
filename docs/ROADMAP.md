@@ -12,6 +12,23 @@ Effort labels:
 
 ---
 
+## Progress snapshot
+
+| Phase | Status | Notes |
+|---|---|---|
+| Phase 0 — correctness baseline + docs | **DONE** (`50a4fea`) | All CRITICAL and HIGH AUDIT items fixed; full docs suite published |
+| Phase 1a — theme + platformdirs + logging | **DONE** (`376141a` + 3 prior) | `sv-ttk`, `%LOCALAPPDATA%` paths, RotatingFileHandler |
+| Phase 1b — split gui.py + tests + type hints + Sentry | TODO | Separate session |
+| Phase 2 — Whisper as serious transcription tool | TODO | VAD, word timestamps, batched inference, model picker, presets |
+| Phase 2-oTranscribe — file-format compatibility | **BRIEF READY** | See [docs/integrations/otranscribe-brief.md](integrations/otranscribe-brief.md) |
+| Phase 3 — yt-dlp as serious downloader | TODO | progress JSON, history DB, SponsorBlock, auto-transcribe-after-download |
+| Phase 4 — editor and viewer | TODO | RTL Persian editor, bilingual side-by-side, subtitle linter |
+| Phase 5 — power features | TODO | Diarization, vocal separation, live mic, REST, CLI, packaging |
+
+Integration briefs live under `docs/integrations/` and follow a separate cadence from the numbered phases — each is a single hands-off session.
+
+---
+
 ## Phase 0 — Critical fixes (do this week)
 
 These are correctness or trust-breaking issues. The user gets a better product the moment they merge.
