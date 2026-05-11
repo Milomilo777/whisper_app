@@ -1,8 +1,18 @@
 # Configuration Reference
 
-`config.json` lives next to `gui.py` (and will move to `%LOCALAPPDATA%\WhisperProject\config.json` in Phase 1.2 of `ROADMAP.md`).
+`config.json` lives at `%LOCALAPPDATA%\WhisperProject\config.json` on Windows (`platformdirs.user_config_dir("WhisperProject")` on every platform). On first launch, a legacy `config.json` next to `gui.py` is copied to the new location and the original renamed to `.migrated.bak`. Subsequent launches read only from the platformdirs path.
 
-The file is read once at startup and written when the user changes a persisted setting (download folder, subtitle preferences, etc.). Manual edits take effect on next launch.
+The file is read once at startup and written when the user changes a persisted setting (download folder, subtitle preferences, theme, etc.). Manual edits take effect on next launch.
+
+## Where things live (Phase 1.2)
+
+| Purpose | Path (Windows) | Helper |
+|---|---|---|
+| `config.json` | `%LOCALAPPDATA%\WhisperProject\config.json` | `core.config.config_path()` |
+| Cached models (default `model_path`) | `%LOCALAPPDATA%\WhisperProject\Cache\models\<model-folder>\` | `core.config.user_cache_dir()` |
+| Rotating logs | `%LOCALAPPDATA%\WhisperProject\Logs\app.log` (5 MB × 3) | `core.config.user_log_dir()` |
+
+`platformdirs` chooses the equivalent paths on macOS and Linux. The "Help → Open log folder" menu item opens the log directory.
 
 ## Field reference
 
@@ -19,16 +29,16 @@ The file is read once at startup and written when the user changes a persisted s
 | `download_folder` | string | `""` | Default destination for video downloads. Updated by the Folder Browse button. |
 | `download_subtitles_enabled` | bool | `false` | Last state of the subtitle checkbox on the Download Videos tab |
 | `download_subtitle_lang` | string | `"Automatic"` | Last-selected subtitle language (display name from `SUBTITLE_LANGUAGES`, not the code). |
+| `theme` | string | `"dark"` | `"light"` / `"dark"` / `"system"` — applied via `sv_ttk` (Phase 1.1). `"system"` falls back to `"dark"` if the optional `darkdetect` package is not installed. |
+| `log_level` | string | `"INFO"` | Python logging level for the file handler (Phase 1.3) |
+| `auto_update_yt_dlp` | bool | `false` | Phase 0 fix to AUDIT A1: yt-dlp's `--update` is now opt-in and gated to once per launch (with `last_yt_dlp_update_check`). When this is `false`, downloads never wait on `--update`. |
+| `last_yt_dlp_update_check` | string (ISO date) | `""` | Timestamp of the last update attempt (used by the once-per-day guard inside `maybe_update_yt_dlp`) |
 
-## Coming in Phase 1.2
+## Coming in later phases
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `theme` | string | `"dark"` | `"light"` / `"dark"` / `"system"` — for `sv_ttk` |
-| `log_level` | string | `"INFO"` | Python logging level for the file handler |
-| `auto_update_yt_dlp` | bool | `false` | If true, check GitHub releases at most once per day on launch (no longer runs before each download — see AUDIT A1) |
-| `last_yt_dlp_update_check` | string (ISO date) | `null` | Timestamp of the last successful update check |
-| `crash_reporting` | bool | `false` | Opt-in to Sentry crash reports |
+| `crash_reporting` | bool | `false` | Opt-in to Sentry crash reports (ROADMAP 1.8) |
 
 ## Coming in Phase 2
 

@@ -1,12 +1,27 @@
 
+import logging
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 import json,re,subprocess,sys,threading,time,os
 from datetime import datetime, timedelta, timezone
 from queue import Empty, Queue
+import sv_ttk
 from core.task import TranscriptionTask
-from core.config import load_config, save_config
+from core.config import load_config, save_config, user_log_dir
+from core.logging_setup import setup_logging, get_ui_logger, open_log_folder
 from core.model_manager import DownloadCancelled, ensure_model
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_theme(name):
+    if name == "system":
+        try:
+            import darkdetect
+            return "dark" if (darkdetect.theme() or "").lower() == "dark" else "light"
+        except Exception:
+            return "dark"
+    return name if name in ("light", "dark") else "dark"
 
 queue=[]
 download_queue=[]
@@ -217,6 +232,11 @@ class App(tk.Tk):
         self.worker_events=Queue()
         self.worker_ready=False
         self.app_config=load_config()
+        setup_logging(self.app_config.get("log_level","INFO"))
+        self._ui_logger=get_ui_logger()
+        logger.info("App startup; theme=%s", self.app_config.get("theme","dark"))
+        self.theme_var=tk.StringVar(value=self.app_config.get("theme","dark"))
+        sv_ttk.set_theme(_resolve_theme(self.theme_var.get()))
         self.parallel_workers=max(1,int(self.app_config.get("parallel_workers",2)))
         self.next_worker_id=1
         self.format_events=Queue()
@@ -436,11 +456,28 @@ class App(tk.Tk):
         m=tk.Menu(self)
         f=tk.Menu(m,tearoff=0)
         f.add_command(label="Exit",command=self.on_exit)
+        v=tk.Menu(m,tearoff=0)
+        for label,value in (("Light","light"),("Dark","dark"),("System","system")):
+            v.add_radiobutton(label=label,value=value,variable=self.theme_var,command=self.apply_theme)
+        h=tk.Menu(m,tearoff=0)
+        h.add_command(label="Open log folder",command=self.open_log_folder)
         a=tk.Menu(m,tearoff=0)
         a.add_command(label="About",command=lambda:messagebox.showinfo("About","Whisper"))
         m.add_cascade(label="File",menu=f)
+        m.add_cascade(label="View",menu=v)
+        m.add_cascade(label="Help",menu=h)
         m.add_cascade(label="About",menu=a)
         self.config(menu=m)
+
+    def open_log_folder(self):
+        path=open_log_folder()
+        logger.info("Opened log folder: %s", path)
+
+    def apply_theme(self):
+        name=self.theme_var.get()
+        sv_ttk.set_theme(_resolve_theme(name))
+        self.app_config["theme"]=name
+        save_config(self.app_config)
 
     def on_exit(self):
         active=[t for t in queue if t.status not in ("finished","cancelled","error")]
@@ -459,12 +496,13 @@ class App(tk.Tk):
         self.t1=ttk.Frame(self.nb);self.t2=ttk.Frame(self.nb);self.t3=ttk.Frame(self.nb)
         self.nb.add(self.t1,text="Transcribe");self.nb.add(self.t2,text="Transcription Queue");self.nb.add(self.t3,text="Download Videos")
 
-        tk.Label(self.t1,text="File").grid(row=0,column=0)
+        ttk.Label(self.t1,text="File").grid(row=0,column=0,padx=10,pady=10,sticky="w")
         self.fv=tk.StringVar()
-        tk.Entry(self.t1,textvariable=self.fv,width=60).grid(row=0,column=1)
-        tk.Button(self.t1,text="Browse",command=self.browse).grid(row=0,column=2)
-        tk.Button(self.t1,text="Transcribe",command=self.add).grid(row=1,column=1)
-        tk.Button(self.t2,text="Clear completed",command=self.clear_completed).pack(anchor="e",padx=10,pady=6)
+        ttk.Entry(self.t1,textvariable=self.fv,width=60).grid(row=0,column=1,padx=(0,6),pady=10,sticky="ew")
+        ttk.Button(self.t1,text="Browse",command=self.browse).grid(row=0,column=2,padx=(0,10),pady=10)
+        ttk.Button(self.t1,text="Transcribe",command=self.add).grid(row=1,column=1,padx=(0,6),pady=(0,10),sticky="w")
+        self.t1.columnconfigure(1,weight=1)
+        ttk.Button(self.t2,text="Clear completed",command=self.clear_completed).pack(anchor="e",padx=10,pady=6)
 
         cols=("file","status","progress","time")
         self.tree=ttk.Treeview(self.t2,columns=cols,show="headings")
@@ -475,7 +513,7 @@ class App(tk.Tk):
         self.pb=ttk.Progressbar(self.t2,length=400)
         self.pb.pack(fill="x",padx=10,pady=10)
 
-        tk.Label(self.t2,textvariable=self.status_var).pack()
+        ttk.Label(self.t2,textvariable=self.status_var).pack()
 
         self.tree.bind("<Button-3>",self.menu_row)
         self.row_map={}
@@ -892,7 +930,7 @@ class App(tk.Tk):
             self.download_row_map[item_id]=task
 
     def log(self,msg):
-        print(msg)
+        self._ui_logger.info(msg)
         self.txt.insert("end",msg+"\n")
         self.txt.see("end")
 

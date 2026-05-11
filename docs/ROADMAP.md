@@ -35,7 +35,7 @@ These are correctness or trust-breaking issues. The user gets a better product t
 
 Set the stage for sustainable growth: modern look, sane logging, proper packaging, tests. None of this is user-visible feature work, but every later phase depends on it.
 
-### 1.1 Modern theme with sv-ttk
+### 1.1 Modern theme with sv-ttk — DONE (Phase 1a)
 
 - **Source:** rdbende/Sun-Valley-ttk-theme
 - **Effort:** XS (10 minutes)
@@ -47,7 +47,7 @@ Set the stage for sustainable growth: modern look, sane logging, proper packagin
   ```
   Add a theme picker (Light / Dark / System) in a new Settings dialog.
 
-### 1.2 platformdirs for config and logs
+### 1.2 platformdirs for config and logs — DONE (Phase 1a)
 
 - **Source:** standard practice
 - **Effort:** S (2 hours)
@@ -57,7 +57,7 @@ Set the stage for sustainable growth: modern look, sane logging, proper packagin
   - First-run migration: if old `config.json` is next to the exe, copy it to the new location and rename old to `.bak`
   - Model cache → `%LOCALAPPDATA%\WhisperProject\models\` instead of the current `X:\whisper_cache2\...`
 
-### 1.3 Proper logging
+### 1.3 Proper logging — DONE (Phase 1a)
 
 - **Source:** standard practice
 - **Effort:** S
@@ -82,12 +82,13 @@ Set the stage for sustainable growth: modern look, sane logging, proper packagin
   - `app/services/download_service.py` ← `build_download_command`, `build_subtitle_command`, `process_download_queue`, `poll_download_events`
   - Whatever's left in `gui.py` is the `App` class wiring the rest together. Should be under 400 lines.
 
-### 1.5 `requirements.txt` / `pyproject.toml`
+### 1.5 `requirements.txt` / `pyproject.toml` — PARTIALLY DONE (Phase 1a)
 
 - **Source:** standard
 - **Effort:** XS
 - **Why:** AUDIT D18.
 - **Implementation:** `pyproject.toml` with `[project.optional-dependencies]` for `gpu`, `dev`, `test`. Pin lower bounds, not upper.
+- **Status:** `requirements.txt` ships sv-ttk and platformdirs in active deps. `pyproject.toml` migration deferred to Phase 1b.
 
 ### 1.6 Tests for `core/` (Phase 1 of test coverage)
 
