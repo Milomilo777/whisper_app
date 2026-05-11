@@ -1,11 +1,21 @@
 # Runtime dependencies for the Whisper Project
-# Tested on Python 3.11+
+# Tested on Python 3.11+ (developer is on 3.14)
 
 # Core transcription
 faster-whisper>=1.0.3
 
 # HTTP for model download + (future) auto-update checks
 requests>=2.31.0
+
+# UI theme (Phase 1.1)
+sv-ttk>=2.6.0
+
+# OS-correct config / cache / log paths (Phase 1.2)
+platformdirs>=4.0.0
+
+# Optional: dark/light system-theme detection used when theme="system"
+# (sv-ttk falls back to dark if missing). Uncomment if desired.
+# darkdetect>=0.8.0
 
 # Note: tkinter is part of Python's standard library on Windows.
 # On Linux, install python3-tk via apt/dnf/pacman.
@@ -19,9 +29,7 @@ requests>=2.31.0
 # heuristic which will be replaced by ctranslate2's native detection
 # (see ROADMAP 2.6).
 
-# --- Phase 1 additions (uncomment when implementing) ---
-# sv-ttk>=2.6.0          # ROADMAP 1.1 — modern Tk theme
-# platformdirs>=4.0.0    # ROADMAP 1.2 — proper config / log / cache paths
+# --- Phase 1 leftover (uncomment when implementing) ---
 # sentry-sdk>=1.40.0     # ROADMAP 1.8 — opt-in crash reporting
 
 # --- Phase 2 additions (uncomment when implementing) ---
