@@ -1,9 +1,12 @@
 
+import logging
 import os,time,json,subprocess,threading
 from pathlib import Path
 from faster_whisper import WhisperModel
 from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
+
+logger = logging.getLogger(__name__)
 
 config = load_config()
 
@@ -25,7 +28,7 @@ def log(msg, cb=None):
     if cb:
         cb(msg)
     else:
-        print(msg)
+        logger.info(msg)
 
 def detect_device():
     if config.get("device") != "auto":
