@@ -293,6 +293,15 @@ class DownloadService:
     def _run_task(self, task: "VideoDownloadTask") -> None:
         app = self.app
         app.download_events.put(("subtitle_status", task, ""))
+        # Phase 3a — record start in history.
+        if getattr(app, "history", None):
+            try:
+                task.history_id = app.history.insert_download(
+                    url=task.url, title=task.title, folder=task.folder,
+                    format_label=task.format_label,
+                )
+            except Exception:  # noqa: BLE001
+                task.history_id = 0
         try:
             self.maybe_update_yt_dlp(task)
 
@@ -451,6 +460,17 @@ class DownloadService:
                     app.log(f"→ Queued for transcription: {os.path.basename(saved_path)}")
                 except Exception as e:  # noqa: BLE001
                     app.log(f"Auto-transcribe wiring failed: {e}")
+        # Phase 3a — finalise the history row.
+        if getattr(app, "history", None) and getattr(task, "history_id", 0):
+            try:
+                app.history.finish_download(
+                    task.history_id,
+                    status=status,
+                    output_paths=[saved_path] if saved_path else [],
+                    detected_language=task.detected_language or "",
+                )
+            except Exception as e:  # noqa: BLE001
+                app.log(f"history record update failed: {e}")
         if app.download_current is task:
             app.download_current = None
         self.process_queue()

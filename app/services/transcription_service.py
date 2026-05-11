@@ -239,6 +239,16 @@ class TranscriptionService:
             t.progress = 0
             t.start_time = _time.time()
             app.update_overall_progress()
+            # Phase 3a — record start in history.
+            if getattr(app, "history", None):
+                try:
+                    t.history_id = app.history.insert_transcription(
+                        file_path=t.file_path,
+                        model=str(app.app_config.get("model", {}).get("name", "")),
+                        language=getattr(t, "language", "") or "",
+                    )
+                except Exception:  # noqa: BLE001
+                    t.history_id = 0
             try:
                 command = {
                     "action": "transcribe",
@@ -260,7 +270,27 @@ class TranscriptionService:
         if not keep_status and not task.cancelled:
             task.status = "finished"
             task.progress = 100
+        # Phase 3a — finalise the history row.
+        app = self.app
+        if getattr(app, "history", None) and getattr(task, "history_id", 0):
+            import time as _time
+            try:
+                duration = (_time.time() - task.start_time) if task.start_time else 0.0
+                base = task.file_path.rsplit(".", 1)[0]
+                paths = [
+                    f"{base}.{ext}"
+                    for ext in (app.app_config.get("output_formats") or ["srt", "json"])
+                ]
+                app.history.finish_transcription(
+                    task.history_id,
+                    status=task.status,
+                    output_paths=paths,
+                    duration_seconds=float(duration),
+                    language=getattr(task, "detected_language", "") or "",
+                )
+            except Exception as e:  # noqa: BLE001
+                app.log(f"history record update failed: {e}")
         worker["task"] = None
-        self.app.update_overall_progress()
-        if worker.get("temporary") and not any(t.status == "waiting" for t in self.app.queue):
+        app.update_overall_progress()
+        if worker.get("temporary") and not any(t.status == "waiting" for t in app.queue):
             self.retire_worker(worker)

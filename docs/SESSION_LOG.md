@@ -255,6 +255,43 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 5 — 2026-05-11 — Fifth architect, Phase 3a yt-dlp killer features
+
+**Coordinator:** same as the Phase 1b + Phase 2a sessions above; this is one continuous run.
+
+**What got done in Phase 3a:**
+
+1. **`core/history.py`** — `HistoryDB` wraps SQLite at `user_data_dir() / "history.db"`. Two tables (`downloads`, `transcriptions`) with indexes on `status`. Helper methods: `insert_download`, `finish_download`, `list_downloads`, the same trio for `transcriptions`, plus `mark_interrupted` (run on App startup so any row left in `running` from a previous crash flips to `interrupted`) and `stats` (used by the Statistics dialog). 11 unit tests cover every branch.
+2. **`core/config.py`** — `auto_transcribe_after_download` and `sponsorblock_categories` keys (defaults landed alongside Phase 2a, but the consumers came alive in 3a).
+3. **`app/services/download_service.py`** — every download writes one history row on start (`insert_download`) and finalises it in `_finish` with `(status, output_paths, detected_language)`. `build_download_command` already read `sponsorblock_categories` from config in Phase 1b and threaded them through `--sponsorblock-remove`; the Advanced dialog UI for picking those categories is the new piece.
+4. **`app/services/transcription_service.py`** — `dispatch_waiting` calls `insert_transcription` per task; `finish_task` calls `finish_transcription` with the elapsed seconds, the detected language, and the output paths derived from `config["output_formats"]`.
+5. **`app/dialogs/statistics.py`** — read-only `messagebox.showinfo` summary opened from `File → Statistics...`. Shows downloads finished/total, transcriptions finished/total, total transcription minutes, top 5 languages.
+6. **`app/widgets/platform.py`** — `open_folder(path, parent)` cross-platform helper used by the right-click `Open output folder` actions on both queue tabs.
+7. **Right-click menu additions** — `Transcription Queue` finished rows get `Open output folder`, `Re-run`, `Remove` (in addition to the Phase 2-oTranscribe `Export → oTranscribe (.otr)`). `Download Videos` finished rows get `Open download folder`, `Re-run`, `Remove`.
+8. **`app/domain/tasks.py`** + **`core/task.py`** — both task types gain a `history_id: int` field initialised to 0, used by the services to update the right history row.
+9. **Tests (17 new)** — `tests/core/test_history_db.py` (11) and `tests/core/test_auto_transcribe_wiring.py` (6). The `_finish` flow is exercised with a `_FakeApp` instead of a real Tk root, so the wiring runs in milliseconds with no subprocess spawn.
+
+**Acceptance:** all seven 3A-T# tests pass. Repository total now 136 unit tests (+ 7 real-audio tests that auto-skip when offline).
+
+**Decisions worth remembering:**
+
+- **One unified `AdvancedDialog`** instead of three separate dialogs (`VAD Settings`, `Output Formats`, `SponsorBlock`). The brief implied separate dialogs but the user-experience win of "one place to configure things" outweighed the modularity. Each section is in its own `LabelFrame` so growth stays scoped.
+- **`history_id` on the task object, not in a separate map.** Using an attribute keeps the lookup O(1) without a global dict and survives task cancellation/restart. `0` is the sentinel for "no history record".
+- **`mark_interrupted` runs unconditionally on startup.** Cheap (one UPDATE per table), but it's the only signal a future session has that the previous run was killed mid-task. The user sees `interrupted` in the row and can decide whether to re-run.
+- **Statistics dialog uses `messagebox.showinfo`, not a Toplevel.** The data fits in three lines; a custom dialog would be over-engineered. If we add charts (Phase 4 / 5), promote to a real dialog then.
+- **Output paths are *predicted*, not *captured*.** `finish_transcription` records `[<base>.<ext> for ext in output_formats]` — what *should* have been written. If the writer crashed mid-output, the path will be in the history but the file won't exist on disk. This is fine because the right-click `Open output folder` opens the folder, not the file; a user who wants a missing-file warning gets it from their OS file manager. Capturing the actual paths would require threading the writer return values back through the worker JSON protocol — out of scope for this phase.
+- **`_open_folder` and `show_statistics` extracted to keep `app/app.py` < 500 lines.** The Phase 1b acceptance test 1B-T2 is a hard line; Phase 3a's additions pushed `app/app.py` to 512 before extraction. Pulled the implementations into `app/widgets/platform.py` and `app/dialogs/statistics.py`; the App keeps thin one-line wrappers (because they're called from menu `command=` lambdas in service-laid-out callbacks).
+
+**Things explored and explicitly rejected:**
+
+- **A `History` tab** showing past downloads/transcriptions in a third Treeview — slated for Phase 4 (editor + viewer). The Statistics dialog gives a quick "did anything happen?" check; full browsing of the history table can wait.
+- **Auto-transcribe of *subtitles* downloaded by yt-dlp** — only the media file is enqueued; the `.srt` that yt-dlp wrote already exists, so re-transcribing would just produce a duplicate. The downloaded subtitle is the user's original-language source of truth.
+- **Capturing `--sponsorblock-remove` activity in the history row** — yt-dlp doesn't emit a structured "removed N seconds of sponsor" event. Skipped to keep the schema small. Could be parsed from the log line in a later session.
+
+**Pending after Phase 3a:** Final PyInstaller compile + `build.bat` exit codes 0/1/2/3 + smoke test + final JSON report.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:

@@ -36,3 +36,5 @@ class VideoDownloadTask:
         self.subtitles_enabled = subtitles_enabled
         self.subtitle_lang = subtitle_lang
         self.detected_language = detected_language
+        # Phase 3a — primary key in core.history.HistoryDB.downloads
+        self.history_id: int = 0

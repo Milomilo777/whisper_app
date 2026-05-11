@@ -13,3 +13,5 @@ class TranscriptionTask:
         self.detected_language: str = ""
         self.language_probability: float = 0.0
         self.language: str | None = None
+        # Phase 3a — primary key in core.history.HistoryDB.transcriptions
+        self.history_id: int = 0

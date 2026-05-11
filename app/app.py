@@ -20,9 +20,12 @@ from app.services.download_service import DownloadService
 from app.services.format_service import FormatService
 from app.services.integrations_service import IntegrationsService
 from app.services.transcription_service import TranscriptionService
+from app.dialogs.statistics import show_statistics as _show_stats
 from app.widgets.console import build_console
+from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcribe_tab
 from core.config import load_config, save_config
+from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 
 logger = logging.getLogger(__name__)
@@ -92,6 +95,16 @@ class App(tk.Tk):
         self.transcription_service = TranscriptionService(self)
         self.integrations_service = IntegrationsService(self)
 
+        # SQLite history (Phase 3a). Mark any pre-crash row as interrupted on launch.
+        try:
+            self.history = HistoryDB()
+            interrupted = self.history.mark_interrupted()
+            if interrupted:
+                logger.info("Marked %d running rows as interrupted on launch", interrupted)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("history.db unavailable: %s", e)
+            self.history = None
+
         self._build_menu()
         self._build_tabs()
         self.txt = build_console(self)
@@ -107,6 +120,8 @@ class App(tk.Tk):
     def _build_menu(self) -> None:
         m = tk.Menu(self)
         f = tk.Menu(m, tearoff=0)
+        f.add_command(label="Statistics...", command=self.show_statistics)
+        f.add_separator()
         f.add_command(label="Exit", command=self.on_exit)
         v = tk.Menu(m, tearoff=0)
         for label, value in (("Light", "light"), ("Dark", "dark"), ("System", "system")):
@@ -121,6 +136,9 @@ class App(tk.Tk):
         m.add_cascade(label="Help", menu=h)
         m.add_cascade(label="About", menu=a)
         self.config(menu=m)
+
+    def show_statistics(self) -> None:
+        _show_stats(self)
 
     def open_log_folder(self) -> None:
         path = open_log_folder()
@@ -307,7 +325,12 @@ class App(tk.Tk):
                     label="Export → oTranscribe (.otr)",
                     command=lambda: self.integrations_service.export_task_to_otr(task),
                 )
+                m.add_command(
+                    label="Open output folder",
+                    command=lambda: self._open_folder(os.path.dirname(task.file_path)),
+                )
                 m.add_separator()
+            m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
             m.add_command(label="Remove", command=lambda: self.remove_task(task))
         m.tk_popup(e.x_root, e.y_root)
 
@@ -322,8 +345,35 @@ class App(tk.Tk):
         if task.status in ("waiting", "running"):
             m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
         elif task.status in ("finished", "cancelled", "error"):
+            m.add_command(
+                label="Open download folder",
+                command=lambda: self._open_folder(task.folder),
+            )
+            m.add_command(label="Re-run", command=lambda: self._rerun_download(task))
             m.add_command(label="Remove", command=lambda: self.remove_download(task))
         m.tk_popup(e.x_root, e.y_root)
+
+    def _open_folder(self, folder: str) -> None:
+        _open_folder_helper(folder, parent=self)
+
+    def _rerun_task(self, task: TranscriptionTask) -> None:
+        new_task = TranscriptionTask(task.file_path)
+        if getattr(task, "language", None):
+            new_task.language = task.language
+        self.queue.append(new_task)
+        self.refresh()
+
+    def _rerun_download(self, task: VideoDownloadTask) -> None:
+        from app.domain.tasks import VideoDownloadTask as VDT
+        copy = VDT(
+            task.url, task.folder, task.format_label, task.format_info, task.title,
+            subtitles_enabled=task.subtitles_enabled,
+            subtitle_lang=task.subtitle_lang,
+            detected_language=task.detected_language,
+        )
+        self.download_queue.append(copy)
+        self.refresh_download_queue()
+        self.download_service.process_queue()
 
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True
