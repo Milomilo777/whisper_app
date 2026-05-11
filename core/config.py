@@ -1,11 +1,17 @@
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
+import platformdirs
+
 logger = logging.getLogger(__name__)
+
+APP_NAME = "WhisperProject"
+APP_AUTHOR = False  # platformdirs: omit author segment on Windows
 
 DEFAULT_CONFIG = {
     "model": {
@@ -22,19 +28,69 @@ DEFAULT_CONFIG = {
     "download_subtitle_lang": "Automatic",
     "auto_update_yt_dlp": False,
     "last_yt_dlp_update_check": "",
+    "theme": "dark",
+    "log_level": "INFO",
 }
 
 
-def config_path():
+def _legacy_config_path():
     base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__)
     return os.path.abspath(os.path.join(base, "..", "config.json"))
 
 
+def user_config_dir():
+    return Path(platformdirs.user_config_dir(APP_NAME, APP_AUTHOR))
+
+
 def user_cache_dir():
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
-        return Path(base) / "WhisperProject"
-    return Path.home() / ".cache" / "WhisperProject"
+    return Path(platformdirs.user_cache_dir(APP_NAME, APP_AUTHOR))
+
+
+def user_log_dir():
+    return Path(platformdirs.user_log_dir(APP_NAME, APP_AUTHOR))
+
+
+def user_data_dir():
+    return Path(platformdirs.user_data_dir(APP_NAME, APP_AUTHOR))
+
+
+def config_path():
+    return str(user_config_dir() / "config.json")
+
+
+def migrate_config_location():
+    """Move a legacy next-to-source config.json into the platformdirs path.
+
+    Returns the new path. Idempotent: if the new file already exists, the legacy
+    one is renamed to .migrated.bak and not copied. Safe to call on every launch.
+    """
+    new_path = config_path()
+    legacy = _legacy_config_path()
+    user_config_dir().mkdir(parents=True, exist_ok=True)
+
+    if not os.path.exists(legacy):
+        return new_path
+    if os.path.abspath(legacy) == os.path.abspath(new_path):
+        return new_path
+
+    if not os.path.exists(new_path):
+        try:
+            shutil.copy2(legacy, new_path)
+            logger.info("Migrated legacy config.json from %s to %s", legacy, new_path)
+        except OSError as e:
+            logger.error("Failed to migrate legacy config: %s", e)
+            return new_path
+
+    backup = legacy + ".migrated.bak"
+    try:
+        if os.path.exists(backup):
+            os.unlink(backup)
+        os.replace(legacy, backup)
+        logger.info("Renamed legacy config to %s", backup)
+    except OSError as e:
+        logger.warning("Could not rename legacy config to .migrated.bak: %s", e)
+
+    return new_path
 
 
 def _drive_is_mounted(path):
@@ -88,6 +144,7 @@ def _merge_with_defaults(loaded):
 
 
 def load_config():
+    migrate_config_location()
     path = config_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -114,6 +171,7 @@ def load_config():
 def save_config(config):
     path = config_path()
     directory = os.path.dirname(path) or "."
+    Path(directory).mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
         prefix=".config-", suffix=".tmp", dir=directory
     )

@@ -52,10 +52,16 @@ bin/yt-dlp.exe
 
 # Local config that may contain absolute paths / personal cache locations
 config.local.json
+# Migration / corruption artifacts (Phase 1.2)
+config.json.corrupt
+config.json.migrated.bak
 
 # Logs (when Phase 1 lands)
 logs/
 *.log
+
+# Test artifact dirs from acceptance runs
+test_output_*/
 
 # Test artifacts
 .pytest_cache/
