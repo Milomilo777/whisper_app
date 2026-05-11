@@ -18,7 +18,7 @@ Effort labels:
 |---|---|---|
 | Phase 0 — correctness baseline + docs | **DONE** (`50a4fea`) | All CRITICAL and HIGH AUDIT items fixed; full docs suite published |
 | Phase 1a — theme + platformdirs + logging | **DONE** (`376141a` + 3 prior) | `sv-ttk`, `%LOCALAPPDATA%` paths, RotatingFileHandler |
-| Phase 1b — split gui.py + tests + type hints + Sentry | TODO | Separate session |
+| Phase 1b — split gui.py + tests + type hints + Sentry | **DONE** (Session 5) | `gui.py` 11 lines; `app/` package with services + dialogs + widgets + observability; 80 tests; pyright clean; `pyproject.toml` with optional deps. See `docs/PHASE_1B_ACCEPTANCE.md`. |
 | Phase 2 — Whisper as serious transcription tool | TODO | VAD, word timestamps, batched inference, model picker, presets |
 | Phase 2-oTranscribe — file-format compatibility | **DONE** (Session 4) | Tier 1 + Tier 2 shipped: bidirectional `.otr` converter, Export/Import UI, `Help → Open oTranscribe`. See [docs/integrations/otranscribe-acceptance.md](integrations/otranscribe-acceptance.md). Tier 3 (vendored fork, in-app editor, forced alignment) deferred — see Phase 5 backlog. |
 | Phase 3 — yt-dlp as serious downloader | TODO | progress JSON, history DB, SponsorBlock, auto-transcribe-after-download |

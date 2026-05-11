@@ -212,6 +212,65 @@ class DownloadService:
         except Exception:  # noqa: BLE001
             pass
 
+    def enqueue_from_form(self) -> None:
+        """Read the download tab form, validate, build a task, and enqueue."""
+        from tkinter import messagebox
+        from app.domain.languages import SUBTITLE_LANGUAGES
+        from app.domain.tasks import VideoDownloadTask
+
+        app = self.app
+        url = app.download_url_var.get().strip()
+        folder = app.download_folder_var.get().strip()
+        mode = app.download_mode_var.get()
+        audio_label = app.audio_format_var.get()
+        video_label = app.video_format_var.get()
+        output = app.output_format_var.get()
+        if not url:
+            messagebox.showwarning("Missing URL", "Enter a URL first.", parent=app)
+            return
+        if not folder:
+            messagebox.showwarning("Missing folder", "Select a download folder first.", parent=app)
+            return
+        if not audio_label or audio_label not in app.audio_format_map:
+            messagebox.showwarning("Missing audio format",
+                                   "Wait for formats to load, then select an audio format.", parent=app)
+            return
+        if mode == "Audio and video" and (not video_label or video_label not in app.video_format_map):
+            messagebox.showwarning("Missing video format",
+                                   "Wait for formats to load, then select a video format.", parent=app)
+            return
+        if not output:
+            messagebox.showwarning("Missing output", "Select an output format.", parent=app)
+            return
+
+        os.makedirs(folder, exist_ok=True)
+        app.app_config["download_folder"] = folder
+        title = app.current_video_title or url
+        subtitles_enabled = app.download_subtitles_var.get()
+        sub_lang_name = app.subtitle_lang_var.get()
+        sub_lang_code = next((code for name, code in SUBTITLE_LANGUAGES if name == sub_lang_name), "")
+        app.app_config["download_subtitles_enabled"] = subtitles_enabled
+        app.app_config["download_subtitle_lang"] = sub_lang_name
+        save_config(app.app_config)
+        label_extra = f" + subs ({sub_lang_name})" if subtitles_enabled else ""
+        format_label = f"{mode} -> {output}{label_extra}"
+        format_info = {
+            "mode": mode,
+            "audio": app.audio_format_map[audio_label],
+            "video": app.video_format_map.get(video_label),
+            "output": output,
+        }
+        app.download_queue.append(
+            VideoDownloadTask(
+                url, folder, format_label, format_info, title,
+                subtitles_enabled=subtitles_enabled,
+                subtitle_lang=sub_lang_code,
+                detected_language=app.current_video_language,
+            )
+        )
+        app.refresh_download_queue()
+        self.process_queue()
+
     # Driver
     def process_queue(self) -> None:
         app = self.app

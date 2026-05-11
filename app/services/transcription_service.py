@@ -213,6 +213,46 @@ class TranscriptionService:
         if self.active_workers():
             app.after(100, self.poll)
 
+    def dispatch_waiting(self) -> None:
+        """Spawn temporary workers as needed and hand them waiting tasks."""
+        app = self.app
+        if not app.queue:
+            return
+        waiting = [t for t in app.queue if t.status == "waiting"]
+        if not waiting:
+            return
+        active_count = len(self.active_workers())
+        idle_count = len(self.idle_workers())
+        needed = min(len(waiting), app.parallel_workers) - idle_count
+        for _ in range(max(0, needed)):
+            if active_count >= app.parallel_workers:
+                break
+            self.start_worker(temporary=True)
+            active_count += 1
+        idle = self.idle_workers()
+        if not idle:
+            return
+        import time as _time
+        for worker, t in zip(idle, waiting):
+            worker["task"] = t
+            t.status = "running"
+            t.progress = 0
+            t.start_time = _time.time()
+            app.update_overall_progress()
+            try:
+                command = {
+                    "action": "transcribe",
+                    "file_path": t.file_path,
+                    "language": getattr(t, "language", None),
+                }
+                worker["process"].stdin.write(json.dumps(command) + "\n")
+                worker["process"].stdin.flush()
+            except Exception as e:  # noqa: BLE001
+                t.status = "error"
+                worker["task"] = None
+                app.log(f"Failed to start transcription: {e}")
+                self.restart_worker(worker)
+
     def finish_task(self, worker: dict[str, Any], keep_status: bool = False) -> None:
         task = worker["task"]
         if not task:

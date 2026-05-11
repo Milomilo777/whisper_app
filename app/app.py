@@ -13,7 +13,6 @@ from typing import Any
 import sv_ttk
 
 from app.dialogs.model_download import ModelDownloadDialog
-from app.domain.languages import SUBTITLE_LANGUAGES
 from app.domain.tasks import TranscriptionTask, VideoDownloadTask
 from app.observability import init_sentry
 from app.services.download_service import DownloadService
@@ -21,6 +20,7 @@ from app.services.format_service import FormatService
 from app.services.integrations_service import IntegrationsService
 from app.services.transcription_service import TranscriptionService
 from app.widgets.console import build_console
+from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcribe_tab
 from core.config import load_config, save_config
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 
@@ -159,160 +159,9 @@ class App(tk.Tk):
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
         self.nb.add(self.t3, text="Download Videos")
-
-        ttk.Label(self.t1, text="File").grid(row=0, column=0, padx=10, pady=10, sticky="w")
-        self.fv = tk.StringVar()
-        ttk.Entry(self.t1, textvariable=self.fv, width=60).grid(row=0, column=1, padx=(0, 6), pady=10, sticky="ew")
-        ttk.Button(self.t1, text="Browse", command=self.browse).grid(row=0, column=2, padx=(0, 10), pady=10)
-        ttk.Button(self.t1, text="Transcribe", command=self.add).grid(row=1, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
-        ttk.Separator(self.t1, orient="horizontal").grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6))
-        ttk.Label(self.t1, text="oTranscribe").grid(row=3, column=0, padx=10, pady=(0, 10), sticky="w")
-        ttk.Button(
-            self.t1, text="Import .otr → SRT...", command=self.integrations_service.import_otr_to_srt
-        ).grid(row=3, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
-        self.t1.columnconfigure(1, weight=1)
-        ttk.Button(self.t2, text="Clear completed", command=self.clear_completed).pack(anchor="e", padx=10, pady=6)
-
-        cols = ("file", "status", "progress", "language", "time")
-        self.tree = ttk.Treeview(self.t2, columns=cols, show="headings")
-        for c in cols:
-            self.tree.heading(c, text=c)
-        self.tree.column("language", width=140)
-        self.tree.pack(fill="both", expand=True)
-
-        self.pb = ttk.Progressbar(self.t2, length=400)
-        self.pb.pack(fill="x", padx=10, pady=10)
-
-        ttk.Label(self.t2, textvariable=self.status_var).pack()
-
-        self.tree.bind("<Button-3>", self.menu_row)
-        self.row_map: dict[str, TranscriptionTask] = {}
-
-        self._build_download_tab()
-
-    def _build_download_tab(self) -> None:
-        top = ttk.Frame(self.t3, padding=10)
-        top.pack(fill="x")
-
-        ttk.Label(top, text="URL").grid(row=0, column=0, sticky="w")
-        self.download_url_var = tk.StringVar()
-        self.download_url_var.trace_add("write", lambda *_: self.format_service.schedule_lookup())
-        ttk.Entry(top, textvariable=self.download_url_var, width=80).grid(
-            row=0, column=1, columnspan=2, sticky="ew", padx=(6, 0)
-        )
-
-        ttk.Label(top, text="Folder").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.download_folder_var = tk.StringVar(value=self.app_config.get("download_folder", ""))
-        ttk.Entry(top, textvariable=self.download_folder_var, width=70).grid(
-            row=1, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
-        )
-        ttk.Button(top, text="Browse", command=self.browse_download_folder).grid(
-            row=1, column=2, sticky="ew", padx=(6, 0), pady=(8, 0)
-        )
-
-        ttk.Label(top, text="Mode").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        self.download_mode_var = tk.StringVar(value="Audio and video")
-        self.download_mode_combo = ttk.Combobox(
-            top,
-            textvariable=self.download_mode_var,
-            state="readonly",
-            values=("Audio and video", "Audio"),
-            width=24,
-        )
-        self.download_mode_combo.grid(row=2, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
-        self.download_mode_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_download_mode())
-
-        ttk.Label(top, text="Audio").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        self.audio_format_var = tk.StringVar()
-        self.audio_format_combo = ttk.Combobox(
-            top, textvariable=self.audio_format_var, state="readonly", width=76
-        )
-        self.audio_format_combo.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
-
-        ttk.Label(top, text="Video").grid(row=4, column=0, sticky="w", pady=(8, 0))
-        self.video_format_var = tk.StringVar()
-        self.video_format_combo = ttk.Combobox(
-            top, textvariable=self.video_format_var, state="readonly", width=76
-        )
-        self.video_format_combo.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
-
-        ttk.Label(top, text="Output").grid(row=5, column=0, sticky="w", pady=(8, 0))
-        self.output_format_var = tk.StringVar(value="mp4")
-        self.output_format_combo = ttk.Combobox(
-            top, textvariable=self.output_format_var, state="readonly", width=20
-        )
-        self.output_format_combo.grid(row=5, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
-
-        ttk.Label(top, text="Subtitles").grid(row=6, column=0, sticky="w", pady=(8, 0))
-        sub_frame = ttk.Frame(top)
-        sub_frame.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
-        saved_sub_enabled = bool(self.app_config.get("download_subtitles_enabled", False))
-        self.download_subtitles_var = tk.BooleanVar(value=saved_sub_enabled)
-        ttk.Checkbutton(
-            sub_frame,
-            text="Download subtitles (auto + manual when present)",
-            variable=self.download_subtitles_var,
-            command=self.update_subtitle_state,
-        ).pack(side="left")
-        saved_sub_lang = self.app_config.get("download_subtitle_lang") or SUBTITLE_LANGUAGES[0][0]
-        if saved_sub_lang not in [name for name, _ in SUBTITLE_LANGUAGES]:
-            saved_sub_lang = SUBTITLE_LANGUAGES[0][0]
-        self.subtitle_lang_var = tk.StringVar(value=saved_sub_lang)
-        self.subtitle_lang_combo = ttk.Combobox(
-            sub_frame,
-            textvariable=self.subtitle_lang_var,
-            state="disabled",
-            values=[name for name, _ in SUBTITLE_LANGUAGES],
-            width=24,
-        )
-        self.subtitle_lang_combo.pack(side="left", padx=(10, 0))
-        self.subtitle_status_var = tk.StringVar(value="")
-        ttk.Label(sub_frame, textvariable=self.subtitle_status_var, foreground="#666").pack(
-            side="left", padx=(10, 0)
-        )
-
-        # Auto-transcribe checkbox (Phase 3a)
-        self.auto_transcribe_var = tk.BooleanVar(
-            value=bool(self.app_config.get("auto_transcribe_after_download", False))
-        )
-        ttk.Checkbutton(
-            top,
-            text="Transcribe after download",
-            variable=self.auto_transcribe_var,
-            command=self._save_auto_transcribe_pref,
-        ).grid(row=7, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0))
-
-        self.format_status_var = tk.StringVar(value="Enter a URL to load available formats")
-        ttk.Label(top, textvariable=self.format_status_var).grid(
-            row=8, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0)
-        )
-        ttk.Button(top, text="Download", command=self.add_download).grid(
-            row=9, column=2, sticky="e", pady=(10, 0)
-        )
-
-        top.columnconfigure(1, weight=1)
-
-        bottom = ttk.Frame(self.t3, padding=(10, 0, 10, 10))
-        bottom.pack(fill="both", expand=True)
-
-        cols = ("name", "url", "format", "status", "progress", "time")
-        self.download_tree = ttk.Treeview(bottom, columns=cols, show="headings", height=8)
-        for c in cols:
-            self.download_tree.heading(c, text=c)
-        self.download_tree.column("name", width=220)
-        self.download_tree.column("url", width=420)
-        self.download_tree.column("format", width=180)
-        self.download_tree.column("status", width=100)
-        self.download_tree.column("progress", width=80)
-        self.download_tree.column("time", width=80)
-        self.download_tree.pack(fill="both", expand=True)
-        self.download_tree.bind("<Button-3>", self.download_menu_row)
-        self.download_row_map: dict[str, VideoDownloadTask] = {}
-
-        self.update_download_mode()
-        self.update_subtitle_state()
-        self.after(200, self.format_service.poll)
-        self.after(300, self.download_service.poll)
+        build_transcribe_tab(self, self.t1)
+        build_queue_tab(self, self.t2)
+        build_download_tab(self, self.t3)
 
     def _save_auto_transcribe_pref(self) -> None:
         self.app_config["auto_transcribe_after_download"] = bool(self.auto_transcribe_var.get())
@@ -368,80 +217,6 @@ class App(tk.Tk):
         if "Model loaded" in msg:
             self.model_ready = True
 
-    # Service-driven shims (kept for tests + tk callbacks) -------------------
-    def start_standby_worker(self) -> None:
-        self.transcription_service.start_standby()
-
-    def start_worker(self, worker: dict[str, Any] | None = None, temporary: bool = False) -> None:
-        self.transcription_service.start_worker(worker=worker, temporary=temporary)
-
-    def stop_worker(self, worker: dict[str, Any]) -> None:
-        self.transcription_service.stop_worker(worker)
-
-    def stop_workers(self) -> None:
-        self.transcription_service.stop_all()
-
-    def restart_worker(self, worker: dict[str, Any]) -> None:
-        self.transcription_service.restart_worker(worker)
-
-    def retire_worker(self, worker: dict[str, Any]) -> None:
-        self.transcription_service.retire_worker(worker)
-
-    def active_workers(self) -> list[dict[str, Any]]:
-        return self.transcription_service.active_workers()
-
-    def ready_workers(self) -> list[dict[str, Any]]:
-        return self.transcription_service.ready_workers()
-
-    def idle_workers(self) -> list[dict[str, Any]]:
-        return self.transcription_service.idle_workers()
-
-    def update_model_state(self) -> None:
-        self.transcription_service.update_model_state()
-
-    def poll_worker_events(self) -> None:
-        self.transcription_service.poll()
-
-    def poll_format_events(self) -> None:
-        self.format_service.poll()
-
-    def poll_download_events(self) -> None:
-        self.download_service.poll()
-
-    def schedule_format_lookup(self) -> None:
-        self.format_service.schedule_lookup()
-
-    def lookup_formats(self) -> None:
-        self.format_service.lookup_formats()
-
-    def process_download_queue(self) -> None:
-        self.download_service.process_queue()
-
-    def maybe_update_yt_dlp(self, task: VideoDownloadTask) -> None:
-        self.download_service.maybe_update_yt_dlp(task)
-
-    def build_subtitle_command(self, task: VideoDownloadTask, lang: str) -> list[str]:
-        return self.download_service.build_subtitle_command(task, lang)
-
-    def build_download_command(self, task: VideoDownloadTask) -> list[str]:
-        return self.download_service.build_download_command(task)
-
-    def resolve_subtitle_lang(self, task: VideoDownloadTask) -> str:
-        return self.download_service.resolve_subtitle_lang(task)
-
-    def subtitle_lang_args(self, lang: str) -> str:
-        from app.domain.languages import subtitle_lang_args as _f
-        return _f(lang)
-
-    def export_task_to_otr(self, task: TranscriptionTask) -> None:
-        self.integrations_service.export_task_to_otr(task)
-
-    def import_otr_to_srt(self) -> None:
-        self.integrations_service.import_otr_to_srt()
-
-    def open_otranscribe(self) -> None:
-        self.integrations_service.open_otranscribe()
-
     # Modal model setup -------------------------------------------------------
     def ensure_model_with_modal(self, mandatory: bool = False) -> bool:
         if self.model_ready:
@@ -495,73 +270,7 @@ class App(tk.Tk):
         self.refresh()
 
     def add_download(self) -> None:
-        url = self.download_url_var.get().strip()
-        folder = self.download_folder_var.get().strip()
-        mode = self.download_mode_var.get()
-        audio_label = self.audio_format_var.get()
-        video_label = self.video_format_var.get()
-        output = self.output_format_var.get()
-        if not url:
-            messagebox.showwarning("Missing URL", "Enter a URL first.", parent=self)
-            return
-        if not folder:
-            messagebox.showwarning("Missing folder", "Select a download folder first.", parent=self)
-            return
-        if not audio_label or audio_label not in self.audio_format_map:
-            messagebox.showwarning(
-                "Missing audio format",
-                "Wait for formats to load, then select an audio format.",
-                parent=self,
-            )
-            return
-        if mode == "Audio and video" and (
-            not video_label or video_label not in self.video_format_map
-        ):
-            messagebox.showwarning(
-                "Missing video format",
-                "Wait for formats to load, then select a video format.",
-                parent=self,
-            )
-            return
-        if not output:
-            messagebox.showwarning("Missing output", "Select an output format.", parent=self)
-            return
-
-        os.makedirs(folder, exist_ok=True)
-        self.app_config["download_folder"] = folder
-        title = self.current_video_title or url
-        subtitles_enabled = self.download_subtitles_var.get()
-        sub_lang_name = self.subtitle_lang_var.get()
-        sub_lang_code = next(
-            (code for name, code in SUBTITLE_LANGUAGES if name == sub_lang_name), ""
-        )
-        self.app_config["download_subtitles_enabled"] = subtitles_enabled
-        self.app_config["download_subtitle_lang"] = sub_lang_name
-        save_config(self.app_config)
-        label_extra = ""
-        if subtitles_enabled:
-            label_extra = f" + subs ({sub_lang_name})"
-        format_label = f"{mode} -> {output}{label_extra}"
-        format_info = {
-            "mode": mode,
-            "audio": self.audio_format_map[audio_label],
-            "video": self.video_format_map.get(video_label),
-            "output": output,
-        }
-        self.download_queue.append(
-            VideoDownloadTask(
-                url,
-                folder,
-                format_label,
-                format_info,
-                title,
-                subtitles_enabled=subtitles_enabled,
-                subtitle_lang=sub_lang_code,
-                detected_language=self.current_video_language,
-            )
-        )
-        self.refresh_download_queue()
-        self.download_service.process_queue()
+        self.download_service.enqueue_from_form()
 
     # Right-click context menus -----------------------------------------------
     def menu_row(self, e: tk.Event) -> None:
@@ -584,7 +293,7 @@ class App(tk.Tk):
             if task.status == "finished":
                 m.add_command(
                     label="Export → oTranscribe (.otr)",
-                    command=lambda: self.export_task_to_otr(task),
+                    command=lambda: self.integrations_service.export_task_to_otr(task),
                 )
                 m.add_separator()
             m.add_command(label="Remove", command=lambda: self.remove_task(task))
@@ -704,47 +413,6 @@ class App(tk.Tk):
             self.txt.see("end")
 
     # Driver loops ------------------------------------------------------------
-    def process(self) -> None:
-        if not self.queue:
-            return
-        waiting = [task for task in self.queue if task.status == "waiting"]
-        if not waiting:
-            return
-        active_count = len(self.transcription_service.active_workers())
-        idle_count = len(self.transcription_service.idle_workers())
-        needed = min(len(waiting), self.parallel_workers) - idle_count
-        for _ in range(max(0, needed)):
-            if active_count >= self.parallel_workers:
-                break
-            self.transcription_service.start_worker(temporary=True)
-            active_count += 1
-        idle = self.transcription_service.idle_workers()
-        if not idle:
-            return
-        for worker, t in zip(idle, waiting):
-            worker["task"] = t
-            t.status = "running"
-            t.progress = 0
-            t.start_time = time.time()
-            self.update_overall_progress()
-            try:
-                command = {
-                    "action": "transcribe",
-                    "file_path": t.file_path,
-                    "language": getattr(t, "language", None),
-                }
-                import json as _json
-                worker["process"].stdin.write(_json.dumps(command) + "\n")
-                worker["process"].stdin.flush()
-            except Exception as e:  # noqa: BLE001
-                t.status = "error"
-                worker["task"] = None
-                self.log(f"Failed to start transcription: {e}")
-                self.transcription_service.restart_worker(worker)
-
-    def finish_worker_task(self, worker: dict[str, Any], keep_status: bool = False) -> None:
-        self.transcription_service.finish_task(worker, keep_status=keep_status)
-
     def update_overall_progress(self) -> None:
         running = [t for t in self.queue if t.status == "running"]
         if not running:
@@ -754,6 +422,6 @@ class App(tk.Tk):
 
     def loop(self) -> None:
         self.refresh()
-        self.process()
+        self.transcription_service.dispatch_waiting()
         self.download_service.process_queue()
         self.after(500, self.loop)

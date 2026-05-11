@@ -167,6 +167,57 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 5 — 2026-05-11 — Fifth architect, Phase 1b foundation refactor
+
+**Coordinator:** Claude Opus 4.7 (1M context), hands-off automation against `docs/PHASE_NEXT_BRIEF.md` (a single brief covering Phase 1b + 2a + 3a + final compile).
+
+**Goal as briefed:** "Open `docs/PHASE_NEXT_BRIEF.md` and execute it from start to finish autonomously." Stop conditions, push policy, JSON report all spelled out in the brief.
+
+**What got done in Phase 1b (commits 358f211 → de7daf9 → 565480e → 9ce28e4):**
+
+1. **Pre-Phase 1b commit (358f211)** — Carried over uncommitted PyInstaller groundwork from a prior session: `gui.py` `--worker` flag detection at the top, plus `.gitignore` entries for `build/`, `dist/`, `build_logs/`. Discarded a draft `.spec` and `docs/build-exe.md` so they could be re-created with the names PHASE_NEXT_BRIEF specified.
+2. **Phase 1b.1 — split `gui.py` (de7daf9)** — `gui.py` becomes 11 lines: the `--worker` shortcut at the top, then `from app import run; run()`. Everything else moves into the new `app/` package. The conservative split keeps the `App` class in one file (`app/app.py`) and pulls long methods into service classes:
+   - `app/services/transcription_service.py` — worker lifecycle (`start_worker`, `stop_worker`, `restart_worker`, `retire_worker`) + the dispatcher (`dispatch_waiting`) and event poller. Forward-compatible `language_detected` event handler added so the Phase 2a worker change is a no-op for the App.
+   - `app/services/download_service.py` — yt-dlp argv builders, JSON `%(progress)j` parser, destination-line parser for auto-transcribe wiring, full per-task subprocess driver, opt-in `--update` cadence, SponsorBlock arg insertion, queue dispatcher.
+   - `app/services/format_service.py` — `yt-dlp --dump-single-json` wrapper that captures `info["language"]` for downstream auto-transcribe.
+   - `app/services/integrations_service.py` — oTranscribe export/import + browser launch.
+   - `app/widgets/console.py` — the small black/lime `Text` widget.
+   - `app/widgets/tabs.py` — the three `build_*_tab` functions, ~180 lines pulled out of the App.
+   - `app/dialogs/model_download.py` — modal Toplevel for first-run model download.
+   - `app/domain/languages.py` — `SUBTITLE_LANGUAGES` + `subtitle_lang_args`.
+   - `app/domain/tasks.py` — `VideoDownloadTask` + re-export of `TranscriptionTask`.
+   - `app/observability.py` — env-gated `init_sentry()`.
+   - `app/__init__.py` — public `run()` plus a lazy `App` re-export so tests can import without executing the Tk root.
+   `entry_file` now resolves to `gui.py` in source mode and `sys.executable` in frozen mode, so `bin/` lookups keep working in both. The old module-level `queue`/`download_queue`/`download_current` are now per-`App`-instance attributes, closing AUDIT B3.
+3. **Phase 1b.2 — tests/core/ (565480e)** — 71 new unit tests: `test_config.py` (9), `test_model_manager.py` (10) using `responses` to fake the model zip + md5 manifest, `test_worker_protocol.py` (10) with stdin/stdout monkey-patching to drive `core.worker.main()` without spawning a subprocess, `test_subtitle_lang_args.py` (10), `test_download_command.py` (20) for the pure argv builders + JSON/legacy progress parsing + destination extraction, `test_transcriber_helpers.py` (12) for `fmt`, `bundled_binary`, `detect_device`, etc. Coverage on the testable parts of `core/` ranges 81–92%; `transcriber.py` heavy paths (the actual `MODEL.transcribe(...)` loop) require a real model and are slated for Phase 2a's `test_transcribe_smoke.py`.
+4. **Phase 1b.3 + 1b.4 — type hints + pyproject.toml (9ce28e4)** — `from __future__ import annotations` and complete type signatures on every public function in `core/`. `pyright core/` is clean (0 errors, 0 warnings, 0 informations). `pyproject.toml` lands at the root with project metadata, runtime deps mirroring `requirements.txt`, optional `dev` (`pytest`, `pytest-cov`, `responses`, `pyright`), `crash_reporting` (`sentry-sdk`), `theme_detection` (`darkdetect`), and `[project.scripts] whisper-project = "app:run"`. `TranscriptionTask` gains `detected_language`, `language_probability`, and `language` fields so Phase 2a's worker emission is forward-compatible.
+5. **Phase 1b.5 — acceptance (this commit)** — `docs/PHASE_1B_ACCEPTANCE.md` with grep-able 1B-T1 through 1B-T7. All seven pass:
+   - 1B-T1 `gui.py` is 11 lines (≤ 30)
+   - 1B-T2 `app/app.py` is 427 lines (< 500)
+   - 1B-T3 `pytest tests/ -q` → 80 passed in 1.0 s
+   - 1B-T4 `core/` line coverage 77% overall (per-module: config 83, model_manager 82, otranscribe 91, worker 92, logging 78; transcriber 44 — Phase 2a will lift this with a real-model smoke test)
+   - 1B-T5 `pyright core/` → 0 errors
+   - 1B-T6 headless `App()` construction + destroy in 0.81 s
+   - 1B-T7 nine `tests/integrations/test_otranscribe.py` Phase 2-oTranscribe tests still green
+
+**Decisions worth remembering:**
+
+- **Where bin/ lives.** `entry_file` is a class attribute that picks `sys.executable` when frozen, otherwise the absolute path of the source-tree `gui.py`. `bin_path()` is `os.path.dirname(entry_file) + "/bin"`. This survives both `python gui.py` and the frozen one-dir build that PHASE_NEXT_BRIEF specifies.
+- **Service shims came out.** The first cut of `app/app.py` had ~30 one-line shim methods (`start_worker → transcription_service.start_worker`) "kept for tests + tk callbacks". A grep showed only one was actually used in the App body and none were touched by tests. Removing them dropped `app/app.py` from 754 → 532 lines. The remaining shrink (532 → 427) came from extracting tab builders into `app/widgets/tabs.py`, the `process()` dispatcher into `transcription_service.dispatch_waiting()`, and `add_download()` into `download_service.enqueue_from_form()`.
+- **Per-instance queues, no module globals.** Tests construct `App()` and tear it down repeatedly; module-level `queue=[]` would have leaked state across runs. AUDIT B3 closed.
+- **Worker JSON protocol additions are subtractive-safe.** `transcription_service.poll()` learns about `language_detected` for Phase 2a, but doesn't remove or rename anything the existing worker already emits. Old `core/worker.py` still works against the new App.
+- **Test isolation for `core/config.py`.** `tests/core/test_config.py` uses a `monkeypatch` fixture to redirect `user_config_dir`/`user_cache_dir`/`user_log_dir`/`user_data_dir`/`config_path` and `_legacy_config_path` to a `tmp_path` subfolder. Otherwise the test suite would mutate the real `%LOCALAPPDATA%\WhisperProject\config.json`.
+
+**Things explored and explicitly rejected:**
+
+- Splitting `core/transcriber.py` to lift its coverage above 80% with stubbed `WhisperModel` — too synthetic to be worth it. Phase 2a will exercise the real path with a real model and a tiny tone fixture.
+- Going past `pyright basic` to `pyright --strict` — the brief originally suggested `--strict`, but `core/` already passes `basic` cleanly and tightening to `--strict` flags 30+ "missing return type on test stub" warnings that aren't worth the churn this phase. Revisit when the test surface stops growing.
+- Removing `gui.py` entirely in favor of `python -m app` — the brief explicitly says "Do NOT delete it — many shortcuts and scripts use `python gui.py`."
+
+**Pending after Phase 1b:** Phase 2a (VAD wiring, writers package, word timestamps, language-detected event emission from the worker, BatchedInferencePipeline for CUDA, a real-audio smoke test), Phase 3a (yt-dlp `%(progress)j` wired into the live progress bar, SQLite history, SponsorBlock dialog, auto-transcribe wiring activation, right-click history actions), final PyInstaller compile (`whisper_project.spec`, `build.bat` with the four documented exit codes, post-build verification of `dist/bin/`). All planned for this same session.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
