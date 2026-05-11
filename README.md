@@ -117,12 +117,13 @@ Key fields:
        └──────────────────────┘   └──────────────────────┘
 ```
 
-Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual: [docs/architecture.svg](docs/architecture.svg) — layered, color-coded, renders inline on GitHub.
+Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visuals: [docs/architecture-diagrams.md](docs/architecture-diagrams.md) — a Mermaid overview plus the colored [docs/architecture.svg](docs/architecture.svg), both layered and color-coded.
 
 ## Project documentation
 
-- [docs/architecture.svg](docs/architecture.svg) — visual system diagram (UI, services, workers, filesystem, external network)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized today (the text counterpart)
+- [docs/architecture-diagrams.md](docs/architecture-diagrams.md) — Mermaid (simple) + SVG (detailed) views
+- [docs/architecture.svg](docs/architecture.svg) — detailed colored system diagram (direct link)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — long-form prose: process model, threading, protocols
 - [docs/AUDIT.md](docs/AUDIT.md) — findings, bugs, gaps; honest assessment
 - [docs/ROADMAP.md](docs/ROADMAP.md) — prioritized plan, 7 phases, status snapshot at the top
 - [docs/COMPETITIVE_ANALYSIS_2026.md](docs/COMPETITIVE_ANALYSIS_2026.md) — 2026 STT landscape, models recommendation, Phase 4/6 inspiration

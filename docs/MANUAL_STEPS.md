@@ -6,31 +6,7 @@ If you complete everything here, the project's current state has nothing pending
 
 ---
 
-## A. Security — do once, today
-
-### A1. Revoke any GitHub Personal Access Tokens that appeared in this chat
-
-During the publish step we briefly used two fine-grained PATs to push to the new repo from the CLI:
-
-```
-github_pat_11A4A4WMY0nqOVDReCtXLd_…   (Metadata: Read only — push 403'd)
-github_pat_11A4A4WMY0BqepPMjUQvqK_…   (Contents: R/W — push succeeded)
-```
-
-**Both are visible in this chat transcript and must be considered compromised.** Even though the first one had insufficient permissions to push, treat both equally — revoke them.
-
-How:
-
-1. Open https://github.com/settings/tokens
-2. Under the fine-grained tokens section, find the two tokens by their `whisper-project-…` name (or by the prefix above)
-3. Click `Delete` for each
-4. Confirm
-
-If you don't see them, they may have already expired (the second one was scoped to 2026-06-10 UTC). If they're gone, you're done.
-
----
-
-## B. Repository hygiene — done by the orchestrator, no human action needed
+## A. Repository hygiene — done by the orchestrator, no human action needed
 
 You don't have to do these. They're listed so you know what was cleaned up.
 
@@ -49,7 +25,7 @@ git show archive/phase-0-baseline   # see the tag annotation
 
 ---
 
-## C. Optional: tag the current `master` as `v0.5.0`
+## B. Optional: tag the current `master` as `v0.5.0`
 
 The current `master` (`7bda654`) is a coherent release-able snapshot:
 
@@ -69,7 +45,7 @@ That's it. GitHub will surface it under `Releases` on the repo home.
 
 ---
 
-## D. None of the original "Known limitations" need human work
+## C. None of the original "Known limitations" need human work
 
 When the project was first audited, the README listed:
 
@@ -84,7 +60,7 @@ The current limitations are all design choices or out-of-scope features waiting 
 
 ---
 
-## E. If you want to change the active Whisper model right now (no UI picker yet)
+## D. If you want to change the active Whisper model right now (no UI picker yet)
 
 The model picker is Phase 2b (deferred). Until then:
 
@@ -98,13 +74,13 @@ If the path is unreachable on startup, the new fallback in Phase 0 will substitu
 
 ---
 
-## F. If you want to switch theme
+## E. If you want to switch theme
 
 `View → Theme → Light / Dark / System` from the menubar. The setting persists in `config.json` (`theme` key).
 
 ---
 
-## G. If you want to enable `auto_update_yt_dlp` or `auto_transcribe_after_download`
+## F. If you want to enable `auto_update_yt_dlp` or `auto_transcribe_after_download`
 
 Open `%LOCALAPPDATA%\WhisperProject\config.json` and set:
 
@@ -119,7 +95,7 @@ Restart. The auto-update checks GitHub at most once per 24 hours and never block
 
 ---
 
-## H. If something goes wrong
+## G. If something goes wrong
 
 - App won't start: open `%LOCALAPPDATA%\WhisperProject\logs\app.log` — Phase 1.3 set up rotation; the most recent run is at the bottom
 - Config got corrupt: it's been renamed to `config.json.corrupt` next to the live file, defaults restored automatically (Phase 0 C2 fix)
@@ -129,9 +105,4 @@ Restart. The auto-update checks GitHub at most once per 24 hours and never block
 
 ## Summary
 
-There are exactly **two** items that need a human:
-
-1. **Revoke the two leaked GitHub tokens** (Section A1 above) — security
-2. **Decide later** which Phase to implement next, or whether to tag `v0.5.0`
-
-Everything else is either already handled or waiting on a roadmap decision that doesn't have a deadline.
+Nothing here blocks you. The one open human decision is **which Phase to implement next** (or whether to tag `v0.5.0` first) — see [ROADMAP.md](ROADMAP.md) Progress snapshot for the candidates. Sections D–G above cover the few settings the GUI doesn't yet expose, in case you want to tweak them by hand.

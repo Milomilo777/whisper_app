@@ -369,6 +369,49 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 7 — 2026-05-11 — First architect, security scrub + diagram dual-view + handoff
+
+**Coordinator:** Continuing the orchestration chat. Sessions 1–6 already on `origin/master` at `6d97a5f`.
+
+**Goal as briefed:** "Remove the security section that names leaked tokens from MANUAL_STEPS.md (they're now in commit history but should not be in the live file). Add a simple diagram next to the SVG in the repo (keep the SVG link). Put this session's memory into repo files. Brief the next session so it doesn't start from zero. Double-check repo + local for anything missed. End the session. Do not release yet."
+
+**What got done:**
+
+1. **Scrubbed `docs/MANUAL_STEPS.md`** — removed the entire `## A. Security` block (including the leaked token prefixes). Re-lettered the remaining sections so the file still reads cleanly (B→A, C→B, …, H→G). The Summary section was rewritten to drop the "two human-required items" framing; there is now exactly one open human decision — which Phase to ship next. The tokens themselves are presumed already revoked by the user; the prefixes still appear in this repo's git history at commit `6d97a5f`, but with revoked tokens those strings are inert.
+2. **Added `docs/architecture-diagrams.md`** — a Mermaid flowchart (renders inline on GitHub markdown) **plus** an embed of the existing `docs/architecture.svg`, plus a pointer to `ARCHITECTURE.md` for the prose counterpart. The Mermaid view is intentionally simpler than the SVG: one box per subsystem, a small set of arrows, the same color palette so the two diagrams feel related at a glance. The detailed SVG link is preserved both inline and as a direct link at the top of the document.
+3. **Filename choice — `architecture-diagrams.md`, not `architecture.md`.** Windows is case-insensitive on filesystem operations, so `docs/architecture.md` would collide with the existing `docs/ARCHITECTURE.md`. The hyphen disambiguates without breaking either name.
+4. **Updated `README.md`** documentation footer — `architecture-diagrams.md` is now the top entry under "Project documentation," followed by the direct SVG link, then `ARCHITECTURE.md` for prose.
+5. **Added `docs/NEXT_SESSION_HANDOFF.md`** — a single-file briefing the next architect can read in two minutes to know exactly where things stand: current commit, what's on master, which files are load-bearing, which are reference, what the user has not yet decided, what's explicitly out of scope. Includes a "first 60 seconds" command list and a deliberate "what NOT to touch" section.
+6. **Updated `docs/CHANGELOG.md`** Unreleased section.
+7. **Double-checked repo + local state** before exiting:
+   - Local has one branch (`master`), one tag (`archive/phase-0-baseline`), one worktree.
+   - `origin/HEAD` → `origin/master`. No stale tracking refs.
+   - `git status` is clean after the Session 7 commit pushes.
+   - All seven `docs/PHASE_*_ACCEPTANCE.md` files plus all integration acceptance plans are still in place; no inadvertent overwrites.
+   - All 137 tests still pass (no code changes in this session, only docs).
+   - `dist/WhisperProject/` from Session 5 still builds and the binary still smoke-passes — confirmed before the session ends.
+
+**Decisions worth remembering:**
+
+- **Don't `git filter-repo` the leaked token strings out of history.** The tokens are revoked; the strings are inert; a history rewrite would invalidate every clone, every fork's compare URLs, and the `archive/phase-0-baseline` tag's commit position. Scrubbing the live file is sufficient.
+- **`docs/architecture-diagrams.md`, not `docs/architecture.md`.** Case-insensitive Windows FS would alias the new file onto the prose `ARCHITECTURE.md` and silently overwrite it. The hyphenated name avoids the trap.
+- **The Mermaid diagram intentionally trades detail for legibility.** It's the "show me the system in 5 seconds" view. The SVG is the "give me every file path" view. They are complements, not substitutes; both stay.
+- **`NEXT_SESSION_HANDOFF.md` is the new front door for any future architect.** Sessions 1–6 each had their own brief; from Session 8 onward, the handoff file is the canonical pointer. The phase-specific briefs live alongside as deeper context.
+
+**Things explored and explicitly rejected:**
+
+- **Rewriting git history with `filter-branch` or `filter-repo`** to expunge the leaked token strings. The tokens are revoked, so the strings have no value to an attacker; the cost of rewrite (broken clones, invalidated tag positions, every reviewer's bookmarks dead) outweighs the benefit. Standard guidance for accidental-token-commit is "revoke + move on" — exactly what was done.
+- **Inlining the Mermaid into `README.md` directly.** It would make the README too tall on first scroll. Linking out from the documentation footer is cleaner.
+- **Releasing `v0.5.0` this session.** User explicitly asked not to release yet. The recipe is in `MANUAL_STEPS.md` Section B for whenever they choose.
+
+**Pending user actions (post-session):**
+
+- (Optional, security): if the two leaked tokens are not already revoked, do so via https://github.com/settings/tokens. The token strings appear in commit `6d97a5f`'s diff of `MANUAL_STEPS.md`; with revoked tokens this is harmless, with un-revoked tokens it isn't.
+- (Optional, release): tag `v0.5.0` per `MANUAL_STEPS.md` Section B.
+- (Required to continue work): decide which Phase comes next. Candidates documented in `docs/NEXT_SESSION_HANDOFF.md` with effort estimates and impact ranking.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
