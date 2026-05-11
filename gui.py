@@ -1,8 +1,18 @@
 
+import sys
+
+# When packaged as a frozen exe (PyInstaller), the same executable doubles as
+# the worker subprocess. Detect the --worker flag before any heavy imports and
+# route to core.worker.main() so we don't pull in tkinter / sv_ttk just to run
+# a transcription worker.
+if "--worker" in sys.argv:
+    from core.worker import main as _worker_main
+    sys.exit(_worker_main())
+
 import logging
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
-import json,re,subprocess,sys,threading,time,os,webbrowser
+import json,re,subprocess,threading,time,os,webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from queue import Empty, Queue
@@ -300,7 +310,10 @@ class App(tk.Tk):
         worker["task"]=None
         self.status_var.set(f"Loading model worker {worker['id']}...")
 
-        cmd=[sys.executable,"-u","-m","core.worker"]
+        if getattr(sys, "frozen", False):
+            cmd=[sys.executable,"--worker"]
+        else:
+            cmd=[sys.executable,"-u","-m","core.worker"]
         kwargs={
             "cwd":os.path.dirname(os.path.abspath(__file__)),
             "stdin":subprocess.PIPE,

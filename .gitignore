@@ -63,6 +63,11 @@ logs/
 # Test artifact dirs from acceptance runs
 test_output_*/
 
+# PyInstaller build outputs
+build/
+dist/
+build_logs/
+
 # Test artifacts
 .pytest_cache/
 .coverage
