@@ -72,7 +72,7 @@ The brief for each phase has not been written yet. When the user picks, draft a 
 
 ## What's explicitly out of scope right now
 
-- **Persian / Arabic / RTL.** Removed in Session 6 — user's audience is 94% Chinese plus EN/FR/DE. No bidirectional text features.
+- **Persian / Arabic / RTL.** Removed in Session 6 — user's audience is 94% English plus CH/FR/DE. No bidirectional text features.
 - **Cloud LLM calls as default.** "Bring-your-own-key" for Ollama / Claude / GPT is a Phase 7 backlog item, off-by-default.
 - **Mobile.** Different problem domain; the Seal Android app owns yt-dlp-on-mobile.
 - **Real-time streaming / live-mic.** Backlog Phase 5.3.
