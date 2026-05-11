@@ -2,13 +2,15 @@
 import logging
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
-import json,re,subprocess,sys,threading,time,os
+import json,re,subprocess,sys,threading,time,os,webbrowser
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from queue import Empty, Queue
 import sv_ttk
 from core.task import TranscriptionTask
 from core.config import load_config, save_config, user_log_dir
 from core.logging_setup import setup_logging, get_ui_logger, open_log_folder
+from core.integrations.otranscribe import srt_to_otr, otr_to_srt
 from core.model_manager import DownloadCancelled, ensure_model
 
 logger = logging.getLogger(__name__)
@@ -461,6 +463,7 @@ class App(tk.Tk):
             v.add_radiobutton(label=label,value=value,variable=self.theme_var,command=self.apply_theme)
         h=tk.Menu(m,tearoff=0)
         h.add_command(label="Open log folder",command=self.open_log_folder)
+        h.add_command(label="Open oTranscribe...",command=self.open_otranscribe)
         a=tk.Menu(m,tearoff=0)
         a.add_command(label="About",command=lambda:messagebox.showinfo("About","Whisper"))
         m.add_cascade(label="File",menu=f)
@@ -472,6 +475,10 @@ class App(tk.Tk):
     def open_log_folder(self):
         path=open_log_folder()
         logger.info("Opened log folder: %s", path)
+
+    def open_otranscribe(self):
+        webbrowser.open("https://otranscribe.com/")
+        self.log("Opened https://otranscribe.com/ in your browser. Drag the audio and the .otr file into the page.")
 
     def apply_theme(self):
         name=self.theme_var.get()
@@ -501,6 +508,9 @@ class App(tk.Tk):
         ttk.Entry(self.t1,textvariable=self.fv,width=60).grid(row=0,column=1,padx=(0,6),pady=10,sticky="ew")
         ttk.Button(self.t1,text="Browse",command=self.browse).grid(row=0,column=2,padx=(0,10),pady=10)
         ttk.Button(self.t1,text="Transcribe",command=self.add).grid(row=1,column=1,padx=(0,6),pady=(0,10),sticky="w")
+        ttk.Separator(self.t1,orient="horizontal").grid(row=2,column=0,columnspan=3,sticky="ew",padx=10,pady=(6,6))
+        ttk.Label(self.t1,text="oTranscribe").grid(row=3,column=0,padx=10,pady=(0,10),sticky="w")
+        ttk.Button(self.t1,text="Import .otr → SRT...",command=self.import_otr_to_srt).grid(row=3,column=1,padx=(0,6),pady=(0,10),sticky="w")
         self.t1.columnconfigure(1,weight=1)
         ttk.Button(self.t2,text="Clear completed",command=self.clear_completed).pack(anchor="e",padx=10,pady=6)
 
@@ -856,9 +866,49 @@ class App(tk.Tk):
             m.add_command(label="Cancel",command=lambda:self.cancel(task))
 
         elif task.status in ("finished","cancelled","error"):
+            if task.status == "finished":
+                m.add_command(label="Export → oTranscribe (.otr)",command=lambda:self.export_task_to_otr(task))
+                m.add_separator()
             m.add_command(label="Remove",command=lambda:self.remove_task(task))
 
         m.tk_popup(e.x_root,e.y_root)
+
+    def export_task_to_otr(self,task):
+        base,_=os.path.splitext(task.file_path)
+        srt_path=base+".srt"
+        if not os.path.exists(srt_path):
+            messagebox.showwarning("Cannot export","No SRT file found next to the source — has the transcription completed?",parent=self)
+            return
+        otr_path=base+".otr"
+        try:
+            payload=srt_to_otr(srt_path,os.path.basename(task.file_path))
+            with open(otr_path,"w",encoding="utf-8") as f:
+                f.write(payload)
+        except Exception as e:
+            logger.exception("Export to .otr failed")
+            messagebox.showerror("Export failed",str(e),parent=self)
+            return
+        self.log(f"Saved {otr_path}")
+        self.status_var.set(f"Saved {os.path.basename(otr_path)}")
+
+    def import_otr_to_srt(self):
+        otr_path=filedialog.askopenfilename(title="Choose an .otr file",filetypes=[("oTranscribe files","*.otr"),("All files","*.*")],parent=self)
+        if not otr_path:
+            return
+        suggested=Path(otr_path).with_suffix(".srt").name
+        srt_path=filedialog.asksaveasfilename(title="Save SRT as...",defaultextension=".srt",initialfile=suggested,filetypes=[("SubRip subtitle","*.srt"),("All files","*.*")],parent=self)
+        if not srt_path:
+            return
+        try:
+            text=otr_to_srt(otr_path)
+            with open(srt_path,"w",encoding="utf-8") as f:
+                f.write(text)
+        except Exception as e:
+            logger.exception("Import .otr → SRT failed")
+            messagebox.showerror("Import failed",str(e),parent=self)
+            return
+        self.log(f"Wrote {srt_path}")
+        self.status_var.set(f"Saved {os.path.basename(srt_path)}")
 
     def pause(self,t):
         t.paused=True
