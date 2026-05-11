@@ -22,12 +22,19 @@ Effort labels:
 | Phase 2a — Whisper as serious transcription tool | **DONE** (Session 5) | VAD on by default + tunable; word timestamps opt-in; `BatchedInferencePipeline` on CUDA; multi-format writers (SRT/VTT/TSV/TXT/JSON/LRC); language detection in queue; Advanced settings dialog. See `docs/PHASE_2A_ACCEPTANCE.md`. Phase 2b (UI for `initial_prompt` / `hotwords`, model picker, presets) deferred. |
 | Phase 2-oTranscribe — file-format compatibility | **DONE** (Session 4) | Tier 1 + Tier 2 shipped: bidirectional `.otr` converter, Export/Import UI, `Help → Open oTranscribe`. See [docs/integrations/otranscribe-acceptance.md](integrations/otranscribe-acceptance.md). Tier 3 (vendored fork, in-app editor, forced alignment) deferred — see Phase 5 backlog. |
 | Phase 3a — yt-dlp as serious downloader | **DONE** (Session 5) | `--progress-template` JSON; SQLite history DB + `Statistics` menu; SponsorBlock category list in Advanced dialog; auto-transcribe-after-download fully wired; right-click `Open output folder` + `Re-run`. See `docs/PHASE_3A_ACCEPTANCE.md`. |
-| Phase 4 — editor and viewer | TODO | RTL Persian editor, bilingual side-by-side, subtitle linter |
-| Phase 5 — power features | TODO | Diarization, vocal separation, live mic, REST, CLI, packaging |
+| Phase 4 — editor and viewer | TODO | Click-word→audio, edit-back-to-subtitle, gap detection, speaker rename, filler removal (re-prioritized after Session 6 research — see `docs/COMPETITIVE_ANALYSIS_2026.md` §4) |
+| Phase 5 — power features | TODO | Diarization, vocal separation, live mic, REST, CLI |
+| Phase 6 — CJK polish + backend abstraction | NEW (Session 6 research) | SenseVoice + Parakeet backends, Chinese punctuation post-processor, CJK line splitting, simplified↔traditional normalization. See `docs/COMPETITIVE_ANALYSIS_2026.md` §1-3 |
 
 Integration briefs live under `docs/integrations/` and follow a separate cadence from the numbered phases — each is a single hands-off session.
 
+**Visual:** [`docs/architecture.svg`](architecture.svg) renders the system at-a-glance: UI layer, services, subprocess workers, vendored binaries, filesystem state, external network. Color-coded by layer; killer-flow `auto-transcribe-after-download` is highlighted in red.
+
 ---
+
+## Research notes
+
+- **`docs/COMPETITIVE_ANALYSIS_2026.md`** (Session 6) — 2026 snapshot of the speech-to-text landscape: Alibaba FunAudioLLM stack (SenseVoice / FunASR / CapsWriter), NVIDIA NeMo (Parakeet-TDT-0.6B-v3, Canary-1B-v2), Whisper speedups (Insanely-Fast-Whisper, WhisperX, stable-ts, WhisperKit), commercial reference (Deepgram Nova-3, AssemblyAI LeMUR, ElevenLabs Scribe v2, Descript, MacWhisper 12, Apple Voice Memos). Synthesizes 15 candidate features, Chinese-specific gotchas, backend abstraction proposal, Phase 4 editor blueprint.
 
 ## Completed integrations
 
@@ -385,33 +392,48 @@ Take the app from "produces subtitle files" to "produces good subtitle files tha
   - Word-level highlight follows playback position
   - "Save SRT" / "Save VTT" buttons re-emit the file
 
-### 4.2 RTL / Persian text rendering
+### 4.2 Edit-back-to-subtitle with re-flowed timestamps
 
-- **Source:** **own niche** — no competitor handles this well
+- **Source:** Descript, competitor synthesis §4 item 4
 - **Effort:** M
-- **Why:** Persian and Arabic text in Tk widgets renders left-to-right by default, looking broken. The user works heavily with Persian — this is essential for the editor in 4.1.
-- **Implementation:** detect RTL languages, switch Text widget to `wrap="word"` with `justify="right"`, set font to a Persian-supporting one (Vazirmatn, Sahel, or system default). Ship Vazirmatn TTF in `bin/fonts/` and load via `tkextrafont` if needed.
+- **Why:** When the user merges/splits/edits cues in the editor view, the output SRT/VTT must keep working caption sync. Arithmetic redistribution of timestamps (`duration * chars_before / chars_total`) is the standard approach.
+- **Implementation:** writer in `core/writers/` that takes the edited segment list (with text changes) and the original word-timestamps, re-distributes proportionally. Add a "preserve original timing" toggle.
 
-### 4.3 Bilingual side-by-side editor
+### 4.3 Gap / silence detection panel
 
-- **Source:** **own niche** — built for the Supreme Master TV / BMD workflow this user lives in
-- **Effort:** L
-- **Why:** Many of the user's transcripts end up as bilingual EN | FA subtitle files. Having a column view where each row pairs English and Persian and the user can edit either side is faster than two passes in SubtitleEdit.
-- **Implementation:** extension of 4.1. The Persian side starts as machine-translated (via `task="translate"` for Persian→English, but the user often wants the reverse — we'd integrate a small NLLB-200 model or hook an external translator). Aligns to English timestamps.
+- **Source:** Riverside, Descript, competitor synthesis §4 item 5
+- **Effort:** M
+- **Why:** A sortable list of all silences > N seconds. Click → audio jumps. "Delete dead air" command shifts downstream timestamps. Critical for podcast/lecture post-prod.
+- **Implementation:** scan VAD output or segment gaps; render a side panel.
 
-### 4.4 Subtitle quality linter
+### 4.4 Speaker labels with global rename
+
+- **Source:** Descript, MacWhisper 12, competitor synthesis §4 item 2
+- **Effort:** M (depends on 5.1 diarization)
+- **Why:** Diarization emits `SPK_00`, `SPK_01`. Editor lets the user rename them once (`SPK_01 → Marie`) and the change propagates with a single undo step. Color-code on the timeline.
+
+### 4.5 Filler-word bulk operations (multilingual)
+
+- **Source:** Descript filler-word removal, competitor synthesis §4 item 3
+- **Effort:** M
+- **Why:** Detect language-specific fillers — EN: `um, uh, like, you know`; FR: `euh, ben, voilà`; DE: `ähm, also`; ZH: `嗯, 啊, 那个, 这个`. Two removal modes: **caption-only** (cleaner subtitles, audio untouched) and **cut** (when audio is re-rendered). The dual-mode is a longstanding Descript pain point users explicitly want.
+- **Implementation:** dictionary per language + UI panel ("Found 47 fillers, preview, Remove all in selection").
+
+### 4.6 Subtitle quality linter
 
 - **Source:** subtitle-edit, professional workflows
 - **Effort:** M
-- **Why:** Flag rows that violate Netflix/BBC rules: CPS > 17, line length > 42, gap < 0.083s, etc.
-- **Implementation:** column in the editor that shows a colored badge per row; tooltip with the specific violation.
+- **Why:** Flag rows that violate Netflix/BBC rules: CPS > 17 (Latin) / > 12 (CJK), line length > 42 (Latin) / > 16 (zh-Hans) / > 20 (zh-Hant), gap < 0.083s, duration < 0.833s, etc.
+- **Implementation:** column in the editor with colored badges; tooltip with the specific violation. CJK rules pulled in from Phase 6.3.
 
-### 4.5 Word-confidence visualization
+### 4.7 Word-confidence visualization
 
 - **Source:** Buzz, Pikurrot/whisper-gui
 - **Effort:** S (depends on 2.2)
 - **Why:** Help the user find places to review. Words with `probability < 0.5` get underlined red.
 - **Implementation:** color tags in the Text widget tied to word confidence from 2.2.
+
+> **Implementation order** (per `docs/COMPETITIVE_ANALYSIS_2026.md` §4): 4.1 → 4.2 → 4.3 → 4.4 → 4.5. Items 4.1/4.2/4.3 are pure media-player + data-structure work; 4.4/4.5 sit on top of the Phase 5 diarization branch. 4.6/4.7 are independent and can land at any time after 2.2.
 
 ---
 
@@ -481,19 +503,93 @@ These are the items that take the project beyond "best-in-class for our niche" i
 
 ---
 
-## Phase 6 — Hardening and operations (ongoing)
+## Phase 6 — CJK polish + pluggable backends (new, Session 6 research)
+
+Driven by `docs/COMPETITIVE_ANALYSIS_2026.md`. The target audience is producing transcripts in EN/CJK/FR/DE; the gaps versus 2026 state-of-the-art are sharply localized in those four languages, and the research surfaced concrete fixes. Persian/Arabic are out of scope.
+
+### 6.1 Pluggable transcription backends
+
+- **Source:** competitor synthesis §3 — no single OSS model wins all four target languages
+- **Effort:** L
+- **Why:** `faster-whisper-large-v3` is the only OSS choice that covers EN+CJK+FR+DE in one model, but SenseVoice beats it on CJK by a large margin, and Parakeet-TDT-0.6B-v3 beats it on EU-language batch throughput. A pluggable interface unlocks both wins without losing our baseline.
+- **Implementation:**
+  - `core/backends/base.py` — `TranscriptionBackend` ABC with `transcribe(media_path, lang_hint, **opts) -> Iterable[Segment]`
+  - `core/backends/faster_whisper.py` — wrap the current code (no behavior change)
+  - `core/backends/sensevoice.py` — load FunAudioLLM/SenseVoiceSmall, route ZH/YUE/JA/KO via this
+  - `core/backends/parakeet.py` — optional NeMo-based fast path for EN/FR/DE on long batches, gated behind a config flag and a NeMo install
+  - Router policy: detected language ∈ {zh, yue, ja, ko} ⇒ SenseVoice; user opt-in for Parakeet on EU langs; default ⇒ faster-whisper
+  - `core/backends/__init__.py` exposes `pick_backend(config, detected_lang) -> TranscriptionBackend`
+- **Tests:** mock backends, exercise router; integration test with a tiny SenseVoice variant if download permits
+
+### 6.2 Chinese punctuation post-processor
+
+- **Source:** competitor synthesis §1 item 1 — biggest single CJK quality lift
+- **Effort:** S
+- **Why:** Whisper's Mandarin output is wall-of-text. CJK readers expect `。，！？` separators; without them, subtitle line-splitting and downstream NLP both suffer.
+- **Implementation:**
+  - Default mitigation: pin `initial_prompt="以下是普通话的句子。"` (zh-Hans) or `"以下是普通話的句子。"` (zh-Hant) when detected language is `zh*`, set `condition_on_previous_text=False` to suppress English hallucinations
+  - Optional: ship FunASR `ct-punc` (~50 MB, CPU) as a post-processor for plain-text refinement after transcription. Toggle in Advanced dialog.
+  - SenseVoice (6.1) emits punctuation natively, so this is unnecessary when SenseVoice routes the job
+- **Tests:** golden-file diff before/after on a ZH fixture
+
+### 6.3 CJK-aware line splitting
+
+- **Source:** competitor synthesis §2 — Netflix style guide
+- **Effort:** S
+- **Why:** our current 42-char default targets Latin; CJK readers want ≤ 16 zh-Hans chars or ≤ 20 zh-Hant per line. Each Han glyph is a full-width cell.
+- **Implementation:** add a `width_aware_split(text, max_cells, max_lines)` to `core/writers/`. CJK fullwidth characters count as 2 cells; Latin as 1. Per-language defaults: `zh-Hans` 32 cells (≈16 glyphs), `zh-Hant` 40 cells, others 42 cells. CPS budget: 9-12 for CJK, 15-17 for Latin.
+- **Tests:** unit test on width counting; round-trip with a ZH fixture
+
+### 6.4 Simplified ↔ Traditional normalization
+
+- **Source:** competitor synthesis §2
+- **Effort:** XS
+- **Why:** Whisper drifts mid-file. Users want a deterministic choice.
+- **Implementation:** dependency `opencc-python-reimplemented` (Apache-2.0). New setting `zh_variant: zh-Hans | zh-Hant | auto`. Apply as a post-processor when detected lang is `zh` and `zh_variant != auto`.
+
+### 6.5 Number / date normalization for CJK
+
+- **Source:** competitor synthesis §2 gotcha 4
+- **Effort:** XS
+- **Why:** Whisper writes `"二零二六年"` where users often want `"2026 年"`. Configurable both ways.
+- **Implementation:** dependency `cn2an` (Apache-2.0). New setting `zh_numerals: chinese | arabic | preserve`.
+
+### 6.6 Hallucination / repetition cleanup
+
+- **Source:** competitor synthesis §2 gotcha 1+3
+- **Effort:** S
+- **Why:** Whisper inserts "Thank you for watching." into silence; repeats the same line 5-10x on noisy input. Both are well-documented in our intended audio.
+- **Implementation:** post-processor that drops segments matching a small phrase blocklist when the surrounding language is CJK, and collapses adjacent identical-text segments into one. Toggle in Advanced.
+
+### 6.7 stable-ts integration (forced alignment lite)
+
+- **Source:** competitor synthesis §1 item 2
+- **Effort:** S
+- **Why:** WhisperX-style alignment is desirable for Phase 4 editor (`click word → audio jumps`). Full WhisperX adds heavy deps (pyannote, wav2vec2); `stable-ts` is a near-drop-in for faster-whisper with much better timestamps and an excellent `split_callback`.
+- **Implementation:** add `stable-ts` as opt-in dep; when enabled, route transcription through `stable_whisper.WhisperModel` instead of bare `WhisperModel`. Same output shape.
+
+### 6.8 Sound-event tagging for SDH subtitles
+
+- **Source:** ElevenLabs Scribe v2, competitor synthesis §1 item 14
+- **Effort:** M
+- **Why:** SDH (subtitles for the deaf and hard-of-hearing) requires `[Music]`, `[Applause]`, `[Laughter]` cues. SenseVoice emits AED tags natively; if backend is SenseVoice, we get this for free.
+- **Implementation:** define a small canonical tag set; when backend supports AED, surface as inline cues per industry convention.
+
+---
+
+## Phase 7 — Hardening and operations (ongoing)
 
 Not phase-locked; do as items mature.
 
-### 6.1 Sentry crash reports → fixes
+### 7.1 Sentry crash reports → fixes
 
 Once 1.8 ships, every release cycle should triage Sentry issues.
 
-### 6.2 Test coverage growth
+### 7.2 Test coverage growth
 
 Phase 1 establishes infra. Goal: 80% on `core/`, 50% on `app/services/`, smoke tests on `app/views/`.
 
-### 6.3 GitHub release workflow
+### 7.3 GitHub release workflow
 
 `v1.0.0` tag triggers an Actions workflow that:
 - Builds the PyInstaller bundle
@@ -501,11 +597,11 @@ Phase 1 establishes infra. Goal: 80% on `core/`, 50% on `app/services/`, smoke t
 - Uploads the ZIP and an installer to the release
 - Updates the latest-version JSON used by 5.7
 
-### 6.4 Internationalization (when 2nd locale arrives)
+### 7.4 Internationalization (when 2nd locale arrives)
 
-Start with a simple `dict[str, dict[str, str]]` in `app/i18n.py`. Migrate to Babel only when string count > 100.
+Start with a simple `dict[str, dict[str, str]]` in `app/i18n.py`. Migrate to Babel only when string count > 100. Persian is no longer a target locale; CJK rendering already works in Tk on Windows without special handling.
 
-### 6.5 Architecture Decision Records
+### 7.5 Architecture Decision Records
 
 Every chunky choice gets a short ADR in `docs/decisions/NNNN-title.md`. Start now while the rationale is fresh. First three to write:
 

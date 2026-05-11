@@ -117,15 +117,21 @@ Key fields:
        └──────────────────────┘   └──────────────────────┘
 ```
 
-Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual: [docs/architecture.svg](docs/architecture.svg) — layered, color-coded, renders inline on GitHub.
 
 ## Project documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized today
+- [docs/architecture.svg](docs/architecture.svg) — visual system diagram (UI, services, workers, filesystem, external network)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organized today (the text counterpart)
 - [docs/AUDIT.md](docs/AUDIT.md) — findings, bugs, gaps; honest assessment
-- [docs/ROADMAP.md](docs/ROADMAP.md) — prioritized plan to elevate the project
-- [docs/auto-subtitles-feature.md](docs/auto-subtitles-feature.md) — deep dive on the subtitle download feature
+- [docs/ROADMAP.md](docs/ROADMAP.md) — prioritized plan, 7 phases, status snapshot at the top
+- [docs/COMPETITIVE_ANALYSIS_2026.md](docs/COMPETITIVE_ANALYSIS_2026.md) — 2026 STT landscape, models recommendation, Phase 4/6 inspiration
+- [docs/SESSION_LOG.md](docs/SESSION_LOG.md) — narrative record of the orchestrated build sessions
+- [docs/integrations/](docs/integrations/) — third-party interop research, briefs, acceptance plans (currently: oTranscribe)
+- [docs/BUILD.md](docs/BUILD.md) — PyInstaller pipeline, exit codes, `bin/` fallback rationale
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — release notes
+- [docs/DECISIONS.md](docs/DECISIONS.md) — ADRs for load-bearing architectural choices
+- [docs/auto-subtitles-feature.md](docs/auto-subtitles-feature.md) — deep dive on the subtitle download feature
 
 ## Known limitations
 

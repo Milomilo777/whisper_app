@@ -327,6 +327,48 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 6 — 2026-05-11 — First architect, competitive research + architecture diagram
+
+**Coordinator:** Continuing the orchestration chat. Sessions 1–5 already on `origin/master` at `d98b8b5` (Phase 0 through Phase 3a + final compile).
+
+**Goal as briefed:** "We transcribe Chinese / English / French / German (94% Chinese). Persian is no longer needed. Research how our project compares to similar projects on GitHub and commercial products. Inject any worthwhile ideas. Produce a graphical architecture diagram with workflow and the files involved at each step. Keep the repo and docs up to date — always."
+
+**What got done:**
+
+1. **Spawned a research agent** scoped to the 2026 STT landscape with explicit Persian/Arabic exclusion and EN+CJK+FR+DE focus. ~300 s of research; 25+ open-source projects + 17 commercial products covered.
+2. **`docs/COMPETITIVE_ANALYSIS_2026.md`** authored (≈2900 words, ~40 cited sources). Five sections: open-source landscape (Alibaba FunAudioLLM stack — SenseVoice / FunASR / CapsWriter; NVIDIA NeMo — Parakeet-TDT-0.6B-v3, Canary-1B-v2; Whisper speedups — Insanely-Fast-Whisper, WhisperX, stable-ts, WhisperKit; Tencent Covo-Audio; Vibe/Handy/VoiceTypr wrappers), commercial signals (Deepgram Nova-3, AssemblyAI Universal-3-Pro + LeMUR, ElevenLabs Scribe v2, Descript, MacWhisper 12, Krisp, Apple Voice Memos, etc.), top-15 candidate features ranked by impact, Chinese-language considerations (tokenization, punctuation insertion, simplified/traditional, line-length, CPS, hallucination/repetition gotchas), best-model-per-language matrix with backend-abstraction recommendation, and a five-feature Descript-style Phase 4 editor blueprint with suggested implementation order.
+3. **`docs/architecture.svg`** authored (1500×1100, ~20 KB) after four reflection passes. Layered color coding: user (pink), UI/Tk (blue), core/ pure Python (green), subprocess workers (orange), external processes / network (purple), filesystem (gray dashed), test+build artifacts (amber). Drop shadows via SVG `filter`. Dashed arrows for async/event/file-write, solid for sync calls; red thick arrow specifically labels the **Phase 3a `auto-transcribe-after-download` killer flow**. Legend at the bottom. Renders directly in GitHub and the Launch preview panel — no separate image build step.
+4. **`docs/ROADMAP.md` rewritten in three places:**
+   - Progress snapshot table — Phase 4 description updated to drop RTL Persian and adopt the Descript-style editor blueprint; Phase 6 added as "CJK polish + backend abstraction (new, Session 6 research)"; old Phase 6 (Hardening) renumbered to Phase 7 with no content loss.
+   - New "Research notes" subsection above "Completed integrations" pointing at the competitive-analysis file.
+   - New full **Phase 6** chapter with 8 sub-items: 6.1 pluggable transcription backends (FasterWhisperBackend / SenseVoiceBackend / ParakeetBackend with a language-detect router), 6.2 Chinese punctuation post-processor (FunASR `ct-punc` opt-in plus `initial_prompt` default plus `condition_on_previous_text=False` for ZH), 6.3 CJK-aware line splitting (Netflix style: 16 zh-Hans / 20 zh-Hant glyphs, 9-12 CPS budget; full-width-aware splitter), 6.4 simplified↔traditional normalization via OpenCC, 6.5 number/date normalization via cn2an, 6.6 hallucination + repetition cleanup, 6.7 stable-ts integration for word-perfect timestamps (cheaper than WhisperX, near drop-in), 6.8 sound-event tagging for SDH subtitles.
+   - **Phase 4 (editor) chapter rewritten** to drop the RTL Persian items entirely. New 4.2 is "edit-back-to-subtitle with re-flowed timestamps" (Descript pattern); 4.3 gap/silence panel; 4.4 speaker labels with global rename; 4.5 multilingual filler-word bulk operations with EN/FR/DE/ZH dictionaries and the dual-mode caption-only vs. cut semantics that Descript users explicitly want; 4.6 subtitle linter now CJK-aware with rules pulled from Phase 6.3; 4.7 word-confidence visualization unchanged. Implementation order pulled directly from the competitive analysis §4.
+5. **`README.md` updated** to point at the diagram and the competitive analysis in the documentation footer (so a new reader finds them in 30 s).
+6. **`docs/CHANGELOG.md`** Unreleased section updated with entries for both new docs and the ROADMAP changes.
+
+**Decisions worth remembering:**
+
+- **Persian / RTL is officially de-scoped.** 94% of the user's workload is now Chinese, the rest EN/FR/DE. Phase 4 lost the RTL/bilingual-EN-Persian items. CJK doesn't need RTL but **does** need width-aware splitting (every Han glyph counts as 2 cells).
+- **No single OSS model wins all four target languages.** SenseVoice-Small dominates CJK; Parakeet-TDT-0.6B-v3 and Canary-1B-v2 dominate the EU langs but lack Chinese; `faster-whisper-large-v3` is the only OSS option that covers all four competently in a single model. Phase 6.1's pluggable backend with a language-detect router is the route to having SenseVoice + Parakeet **without** losing the baseline.
+- **The biggest single CJK quality lever is punctuation insertion**, not better acoustic modeling. Whisper's Mandarin output is wall-of-text by default. Three workable mitigations documented (initial_prompt nudge, FunASR `ct-punc` post-processor, switch to SenseVoice). Phase 6.2 commits to all three.
+- **42-char line splitting is wrong for Chinese.** Netflix style caps zh-Hans at ~16 glyphs (32 cells), zh-Hant at ~20. CPS budget 9-12 for CJK vs 15-17 for Latin. Width-aware splitter is a small, focused change with a big readability win for the user's primary use case.
+- **WhisperX is overkill; stable-ts is the right size.** Forced alignment via WhisperX drags in pyannote + wav2vec2; stable-ts is a near-drop-in for `faster-whisper` with much better timestamps for free. Phase 6.7 commits to stable-ts and defers full WhisperX to Phase 5 (diarization-only).
+- **The architecture diagram lives in the repo as SVG, not PNG.** Diffs cleanly, scales infinitely, GitHub renders it inline, no build step. Editing is just XML. Tailwind-style flat colors plus drop shadows via SVG `filter` give it a modern look without bitmap toolchains.
+
+**Things explored and explicitly rejected:**
+
+- **Migrating wholesale to SenseVoice.** It covers CJK + EN but not FR or DE; a single-backend swap would regress two of four target languages. Pluggable backends instead.
+- **A separate Persian build.** The user is no longer producing Persian content. Any Phase 4 entry previously scoped to RTL is removed.
+- **AssemblyAI-style LeMUR cloud LLM integration as a core feature.** Identified but parked in the Phase 7 backlog as opt-in "bring-your-own-key" because the project's identity is offline-first.
+- **Vendoring an oTranscribe fork.** Researched in Session 3 and rejected then. Session 6 reaffirms: in-app editor in Phase 4 is cleaner than maintaining a fork.
+
+**Pending user actions (post-session):**
+
+- Pick the next implementation phase. The natural candidates ranked by impact-per-effort: **Phase 6.2 Chinese punctuation** (S, biggest CJK quality lift, ships with three options: prompt nudge, ct-punc, or SenseVoice route), **Phase 6.3 CJK line splitting** (S, immediate readability win), **Phase 4.1 in-app editor** (L, unique competitive position), **Phase 6.1 pluggable backends** (L, unlocks SenseVoice + Parakeet), **Phase 5.1 diarization via pyannote** (L, opens Phase 4.4/4.5).
+- Consider tagging current `master` as `v0.5.0` — the Session 5 compile pipeline + Session 6 docs feel release-able as a foundation snapshot.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
