@@ -1,0 +1,41 @@
+# Runtime dependencies for the Whisper Project
+# Tested on Python 3.11+
+
+# Core transcription
+faster-whisper>=1.0.3
+
+# HTTP for model download + (future) auto-update checks
+requests>=2.31.0
+
+# Note: tkinter is part of Python's standard library on Windows.
+# On Linux, install python3-tk via apt/dnf/pacman.
+# On macOS, tkinter ships with the python.org build.
+
+# Optional: GPU support
+# Install one of these manually if you want CUDA acceleration:
+#   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# Or rely on a system CUDA install — faster-whisper will pick it up.
+# Torch is NOT required for inference, only for the current device-detection
+# heuristic which will be replaced by ctranslate2's native detection
+# (see ROADMAP 2.6).
+
+# --- Phase 1 additions (uncomment when implementing) ---
+# sv-ttk>=2.6.0          # ROADMAP 1.1 — modern Tk theme
+# platformdirs>=4.0.0    # ROADMAP 1.2 — proper config / log / cache paths
+# sentry-sdk>=1.40.0     # ROADMAP 1.8 — opt-in crash reporting
+
+# --- Phase 2 additions (uncomment when implementing) ---
+# tkinterdnd2>=0.4.0     # ROADMAP 2.12 — drag-and-drop
+# watchdog>=3.0.0        # ROADMAP 2.12 — folder watcher
+
+# --- Optional features (uncomment per feature) ---
+# whisperx>=3.1.0        # ROADMAP 5.1 — speaker diarization
+# demucs>=4.0.1          # ROADMAP 5.2 — vocal separation
+# sounddevice>=0.4.6     # ROADMAP 5.3 — live mic
+# fastapi>=0.110.0       # ROADMAP 5.4 — REST server mode
+# uvicorn>=0.27.0        # ROADMAP 5.4
+
+# --- Dev / test (use `pip install -r requirements-dev.txt` instead) ---
+# pytest>=8.0.0
+# ruff>=0.4.0
+# pyright>=1.1.350

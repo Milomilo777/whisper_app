@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
 import json,re,subprocess,sys,threading,time,os
+from datetime import datetime, timedelta, timezone
 from queue import Empty, Queue
 from core.task import TranscriptionTask
 from core.config import load_config, save_config
@@ -903,6 +904,45 @@ class App(tk.Tk):
         codes=[c.strip() for c in lang.split(",") if c.strip()]
         return ",".join(codes) if codes else ""
 
+    def maybe_update_yt_dlp(self,task):
+        if not self.app_config.get("auto_update_yt_dlp", False):
+            return
+        last=self.app_config.get("last_yt_dlp_update_check") or ""
+        if last:
+            try:
+                last_dt=datetime.fromisoformat(last)
+                if datetime.now(timezone.utc) - last_dt < timedelta(hours=24):
+                    return
+            except ValueError:
+                pass
+        try:
+            update_cmd=[self.yt_dlp_path(),"--update"]
+            update=subprocess.run(
+                update_cmd,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0,
+            )
+            if update.stdout.strip():
+                self.download_events.put(("log",task,update.stdout.strip()))
+            if update.stderr.strip():
+                self.download_events.put(("log",task,update.stderr.strip()))
+            if update.returncode:
+                self.download_events.put(("log",task,f"yt-dlp update returned code {update.returncode}; continuing with current binary"))
+        except subprocess.TimeoutExpired:
+            self.download_events.put(("log",task,"yt-dlp update timed out; continuing with current binary"))
+        except Exception as e:
+            self.download_events.put(("log",task,f"yt-dlp update skipped: {e}"))
+        self.app_config["last_yt_dlp_update_check"]=datetime.now(timezone.utc).isoformat()
+        try:
+            save_config(self.app_config)
+        except Exception:
+            pass
+
     def build_subtitle_command(self,task,lang):
         output=os.path.join(task.folder,"%(title)s.%(ext)s")
         sub_langs=self.subtitle_lang_args(lang)
@@ -961,14 +1001,7 @@ class App(tk.Tk):
             global download_current
             self.download_events.put(("subtitle_status",task,""))
             try:
-                update_cmd=[self.yt_dlp_path(),"--update"]
-                update=subprocess.run(update_cmd,cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding="utf-8",errors="replace")
-                if update.stdout.strip():
-                    self.download_events.put(("log",task,update.stdout.strip()))
-                if update.stderr.strip():
-                    self.download_events.put(("log",task,update.stderr.strip()))
-                if update.returncode:
-                    raise RuntimeError("yt-dlp update failed")
+                self.maybe_update_yt_dlp(task)
 
                 if task.subtitles_enabled and not task.cancelled:
                     sub_lang=self.resolve_subtitle_lang(task)
@@ -1002,6 +1035,13 @@ class App(tk.Tk):
                         sub_rc=task.process.wait()
                         task.process=None
                         if task.cancelled:
+                            for partial in wrote_files:
+                                try:
+                                    if os.path.isfile(partial):
+                                        os.unlink(partial)
+                                        self.download_events.put(("log",task,f"Removed partial subtitle file: {partial}"))
+                                except OSError as e:
+                                    self.download_events.put(("log",task,f"Could not remove partial subtitle file {partial}: {e}"))
                             self.download_events.put(("subtitle_status",task,"cancelled"))
                             self.download_events.put(("done",task,"cancelled"))
                             return

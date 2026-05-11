@@ -11,6 +11,16 @@ MODEL=None
 MODEL_READY=False
 MODEL_ERROR=None
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+BIN_DIR = PROJECT_ROOT / "bin"
+
+
+def bundled_binary(name):
+    exe = f"{name}.exe" if os.name == "nt" else name
+    candidate = BIN_DIR / exe
+    return str(candidate) if candidate.exists() else name
+
+
 def log(msg, cb=None):
     if cb:
         cb(msg)
@@ -18,13 +28,24 @@ def log(msg, cb=None):
         print(msg)
 
 def detect_device():
+    if config.get("device") != "auto":
+        return config.get("device", "cpu"), config.get("compute_type", "int8")
+    try:
+        import ctranslate2
+        if ctranslate2.contains_cuda_device():
+            supported = set(ctranslate2.get_supported_compute_types("cuda"))
+            for ct in ("float16", "int8_float16", "int8"):
+                if ct in supported:
+                    return "cuda", ct
+    except (ImportError, AttributeError, RuntimeError):
+        pass
     try:
         import torch
-        if config["device"]=="auto" and torch.cuda.is_available():
-            return "cuda","float16"
-    except:
+        if torch.cuda.is_available():
+            return "cuda", "float16"
+    except (ImportError, AttributeError):
         pass
-    return "cpu",config["compute_type"]
+    return "cpu", config.get("compute_type", "int8")
 
 device,compute_type=detect_device()
 
@@ -92,7 +113,18 @@ def start_background_model_load(status_cb=None):
     threading.Thread(target=load_model_async,args=(status_cb,),daemon=True).start()
 
 def get_duration(path):
-    r=subprocess.run(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path],capture_output=True,text=True)
+    ffprobe = bundled_binary("ffprobe")
+    r=subprocess.run(
+        [ffprobe,"-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        raise RuntimeError(
+            f"ffprobe failed (exit={r.returncode}) for {path}: {r.stderr.strip() or 'no output'}"
+        )
     return float(r.stdout.strip())
 
 def fmt(sec):
