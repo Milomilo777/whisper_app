@@ -72,8 +72,9 @@ htmlcov/
 .AppleDouble
 .LSOverride
 
-# Claude Code worktrees (local, ephemeral)
+# Claude Code worktrees and per-machine permission settings (local, ephemeral)
 .claude/worktrees/
+.claude/settings.local.json
 
 # Local notes that should not be committed
 New Text Document.txt

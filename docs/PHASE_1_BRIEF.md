@@ -179,21 +179,37 @@ Run every test in `docs/PHASE_1_ACCEPTANCE.md`. Fail policy is identical: stop, 
 
 ---
 
-## Step 8 — Final report
+## Step 8 — Push and final report
 
-When (and only when) both `PHASE_0_ACCEPTANCE` and `PHASE_1_ACCEPTANCE` return `"overall": "ACCEPTED"`, emit a single combined report:
+When (and only when) both `PHASE_0_ACCEPTANCE` and `PHASE_1_ACCEPTANCE` return `"overall": "ACCEPTED"`:
+
+1. Push to origin:
+
+```bash
+git push origin master
+```
+
+2. Capture the push outcome (commit shas pushed, any warnings).
+
+3. Emit the combined JSON report below.
+
+If push fails (credential helper missing, network error, sandbox block, anything), set `"push": {"status": "failed", "error": "<message>"}` in the report. Do not retry more than twice. Do not embed tokens in URLs.
+
+If either acceptance is `"REJECTED"`, skip the push entirely. Emit the report with `"push": {"status": "skipped_due_to_failure"}` and the failure evidence. The user will decide whether to manually intervene.
+
+Report shape:
 
 ```json
 {
-  "branch": "<current-branch>",
+  "branch": "master",
   "commits_added": ["<sha>", "<sha>", "..."],
   "phase_0": { "overall": "ACCEPTED", "tests": { "T1_syntax": {...}, ... } },
   "phase_1a": { "overall": "ACCEPTED", "tests": { "P1-T1": {...}, ... } },
-  "next_action": "Ask user to confirm `git push origin <branch>` and `git push origin master --ff-only` if appropriate."
+  "push": { "status": "ok", "remote": "origin/master", "head": "<sha>" }
 }
 ```
 
-Then stop. Do not push.
+After emitting the report, exit. The user does not need to be prompted to push — you already did it.
 
 ---
 
@@ -205,6 +221,7 @@ Then stop. Do not push.
 - **Test what you ship.** Every code change you make must be covered by an acceptance test you also write. If you can't write a test, write down why in `docs/PHASE_1_TESTING_GAPS.md`.
 - **Respect AUDIT severity.** If your refactor uncovers a CRITICAL or HIGH item not in Phase 0, add a row to `docs/AUDIT.md` and fix it before continuing.
 - **No new features.** Items 1.4 (split gui.py), 1.6 (test infra), 1.7 (type hints), 1.8 (Sentry) are explicitly out of scope for Phase 1a. They are Phase 1b, separate session.
+- **No tokens in code or commits.** Never embed a GitHub PAT in a URL, a commit message, a config file, or any committed text. Use the host credential helper (GitHub Desktop on Windows leaves credentials in the Windows Credential Manager, which `git push` reads automatically). If push fails for credential reasons, surface the error in the JSON report and stop — do not ask the user for a token mid-session.
 
 ---
 
