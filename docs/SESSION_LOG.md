@@ -218,6 +218,43 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 5 — 2026-05-11 — Fifth architect, Phase 2a Whisper masterpiece
+
+**Coordinator:** same as the Phase 1b session above; this is one continuous run.
+
+**What got done in Phase 2a (commit f11e72d):**
+
+1. **`core/writers/` package** — six pure writers (`srt`, `vtt`, `tsv`, `txt`, `json`, `lrc`) plus a `get_writer` registry with case-insensitive lookup. SRT keeps the comma decimal mark (`HH:MM:SS,ms`); VTT uses the period and emits `<HH:MM:SS.ms><c>word</c>` karaoke spans when a segment has a `words` list. JSON preserves `words` with their probabilities so downstream karaoke tools can re-render without re-running Whisper. LRC carries an optional `[ti:<basename>]` tag.
+2. **`core/transcriber.py` rewritten** — `vad_filter` is on by default; `vad_parameters` are read from config (`vad_min_silence_ms`, `vad_threshold`, `vad_speech_pad_ms`). `word_timestamps` is an opt-in. `info.language` + `info.language_probability` are captured and posted via a new `language_cb(lang, prob)` callback. `BatchedInferencePipeline` wraps the model on CUDA when available; `batch_size` (default 16) is read from config and forwarded only when running through the pipeline. `initial_prompt` and `hotwords` are plumbed (UI for them comes in Phase 2b). The hand-written SRT loop is gone — every output goes through `core/writers/` and is gated by `config["output_formats"]` (defaults to `["srt", "json"]`).
+3. **`core/worker.py`** — passes the `language` field from the transcribe command into the task and emits `language_detected` events. The existing protocol (`ready`/`started`/`progress`/`done`/`error`/`worker_exit`) is unchanged — Phase 1b's `transcription_service.poll()` already handles `language_detected`.
+4. **`core/config.py`** — Phase 2a + 3a defaults: `vad_*`, `word_timestamps`, `output_formats`, `batch_size`, `initial_prompt`, `hotwords`, `auto_transcribe_after_download`, `sponsorblock_categories`.
+5. **`app/dialogs/advanced.py`** — modal Advanced settings dialog. Three VAD sliders (min silence, threshold, speech pad) with live echo labels, a checkbox grid for output formats, a `batch_size` Spinbox, `initial_prompt` and `hotwords` text fields, and the SponsorBlock category checkboxes + the auto-transcribe-after-download flag (these last two are Phase 3a hooks). Saving syncs the on-tab `auto_transcribe_var` so the Download tab checkbox stays consistent.
+6. **`app/widgets/tabs.py`** — VAD + word-timestamps checkboxes + `Advanced...` button on the Transcribe tab. Persisted via a new `_save_transcribe_prefs` slot on the App.
+7. **Real audio fixtures** — `tests/fixtures/audio/silent_1s.wav` (32 KB) and `tone_440hz_2s.wav` (64 KB) generated from `wave + struct + math`. Regeneration script in the fixture folder's README.
+8. **Tests (39 new)** — `test_writers.py` (25), `test_batched_pipeline.py` (7), `test_transcribe_smoke.py` (4 real-audio), `test_transcribe_end_to_end.py` (3). Smoke + e2e download tiny.en into a tmp dir; both auto-skip when ffmpeg or network is unavailable. `test_worker_protocol.py` got the new `language_cb=None` keyword in its transcribe stub.
+
+**Acceptance:** all eight 2A-T# tests in `docs/PHASE_2A_ACCEPTANCE.md` pass. Total test count rose 80 → 119. `core/` line coverage rose 77% → 81% (writers 94–100%; transcriber 44 → 62 thanks to the real-audio paths).
+
+**Decisions worth remembering:**
+
+- **VAD on by default.** The Phase 0 baseline ran with no VAD; users were getting bursts of spurious "Bye." text on silent intros. The brief made this default ON. Tunable via the Advanced dialog if a user has reason to keep silence segments.
+- **`info.language_probability` may be `int` 1.** On pure silence, faster-whisper returns the integer literal `1` instead of `1.0`. The smoke test asserts `(int, float)` instead of `float`. Filed in this log so future tweaks don't accidentally tighten the assertion.
+- **`BatchedInferencePipeline` import is `try/except`.** Older `faster-whisper` wheels (< 1.0.3) lack it; the wrapper falls back to the plain `MODEL.transcribe(...)` path. The Pipeline construction itself is wrapped in try/except too, so a broken CUDA install doesn't kill startup.
+- **Writers are module-level pure functions.** No class hierarchy, no protocol stubs — just `write(segments, audio_path) -> str`. The registry (`WRITERS` dict) can be extended in one line without subclassing anything. This is what made the test suite trivial (one fixture, one assertion per writer).
+- **VTT karaoke is opt-in via `word_timestamps`.** If words are absent, the writer falls back to a single text payload. Browsers gracefully ignore karaoke spans they don't understand, but emitting them when there's nothing to highlight would just bloat the file.
+- **`config["output_formats"]` is a list, not a set.** Keeps deterministic order so the user's preferred format ends up first in the list of written files (visible in the log line). The Advanced dialog falls back to `["srt"]` if the user unchecks every format.
+- **`tests/core/test_transcribe_smoke.py` and `test_transcribe_end_to_end.py` download tiny.en.** This is ~39 MB into a `tmp_path_factory` cache scoped to the module — they run in ~16 s on first invocation, then fast on warm cache. They auto-skip when network or ffmpeg is missing so the suite stays green offline.
+
+**Things explored and explicitly rejected:**
+
+- **A protocol class for writers** — overkill for six functions with identical signatures. The registry dict is simpler and the type checker doesn't complain.
+- **A SponsorBlock-only dialog** — the brief asks for SponsorBlock category checkboxes "in a Download Settings dialog accessible from the Download Videos tab." Folded into the unified `AdvancedDialog` instead so the user has one place to look. The `Advanced...` button on the Transcribe tab opens it; we'll add a second entrypoint from the Download tab in Phase 3a if needed (the dialog already houses the relevant controls).
+- **A separate `karaoke.vtt` output file** — the brief mentioned writing a separate `<base>.karaoke.vtt`. Decided that the same file should carry karaoke content when `word_timestamps` is on; the writer detects the `words` list and adapts. One less file path for the user to track.
+
+**Pending after Phase 2a:** Phase 3a wiring (parsed JSON progress lines already done in Phase 1b, so what's left is SQLite history, right-click history actions, Statistics dialog, and verifying auto-transcribe-after-download fires end-to-end), then PyInstaller compile + smoke + final report.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
