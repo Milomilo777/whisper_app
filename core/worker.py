@@ -58,8 +58,15 @@ def main() -> int:
 
         try:
             task=TranscriptionTask(file_path)
+            forced_lang=command.get("language")
+            if forced_lang:
+                task.language=forced_lang
             emit("started", file_path=file_path)
-            transcribe(task, progress_cb, log_cb)
+
+            def language_cb(lang: str, prob: float) -> None:
+                emit("language_detected", language=lang, probability=prob, file_path=file_path)
+
+            transcribe(task, progress_cb, log_cb, language_cb=language_cb)
             emit("done", file_path=file_path)
         except Exception as e:
             emit("error", message=str(e), file_path=file_path)

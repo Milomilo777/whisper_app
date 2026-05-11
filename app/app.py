@@ -12,6 +12,7 @@ from typing import Any
 
 import sv_ttk
 
+from app.dialogs.advanced import AdvancedDialog
 from app.dialogs.model_download import ModelDownloadDialog
 from app.domain.tasks import TranscriptionTask, VideoDownloadTask
 from app.observability import init_sentry
@@ -169,6 +170,17 @@ class App(tk.Tk):
             save_config(self.app_config)
         except Exception:  # noqa: BLE001
             pass
+
+    def _save_transcribe_prefs(self) -> None:
+        self.app_config["vad_enabled"] = bool(self.vad_enabled_var.get())
+        self.app_config["word_timestamps"] = bool(self.word_timestamps_var.get())
+        try:
+            save_config(self.app_config)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def open_advanced_dialog(self) -> None:
+        AdvancedDialog(self)
 
     # Generic helpers ---------------------------------------------------------
     def yt_dlp_path(self) -> str:

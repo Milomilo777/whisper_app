@@ -33,6 +33,19 @@ DEFAULT_CONFIG = {
     "last_yt_dlp_update_check": "",
     "theme": "dark",
     "log_level": "INFO",
+    # Phase 2a — Whisper masterpiece
+    "vad_enabled": True,
+    "vad_min_silence_ms": 500,
+    "vad_threshold": 0.5,
+    "vad_speech_pad_ms": 400,
+    "word_timestamps": False,
+    "output_formats": ["srt", "json"],
+    "batch_size": 16,
+    "initial_prompt": "",
+    "hotwords": "",
+    # Phase 3a — yt-dlp killer features
+    "auto_transcribe_after_download": False,
+    "sponsorblock_categories": [],
 }
 
 

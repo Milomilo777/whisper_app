@@ -27,13 +27,35 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Button(parent, text="Transcribe", command=app.add).grid(
         row=1, column=1, padx=(0, 6), pady=(0, 10), sticky="w"
     )
-    ttk.Separator(parent, orient="horizontal").grid(
-        row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+
+    # Phase 2a — VAD + word timestamps controls.
+    options = ttk.Frame(parent)
+    options.grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
+    app.vad_enabled_var = tk.BooleanVar(value=bool(app.app_config.get("vad_enabled", True)))
+    ttk.Checkbutton(
+        options,
+        text="Voice Activity Detection",
+        variable=app.vad_enabled_var,
+        command=app._save_transcribe_prefs,
+    ).pack(side="left")
+    app.word_timestamps_var = tk.BooleanVar(value=bool(app.app_config.get("word_timestamps", False)))
+    ttk.Checkbutton(
+        options,
+        text="Word timestamps",
+        variable=app.word_timestamps_var,
+        command=app._save_transcribe_prefs,
+    ).pack(side="left", padx=(20, 0))
+    ttk.Button(options, text="Advanced...", command=app.open_advanced_dialog).pack(
+        side="left", padx=(20, 0)
     )
-    ttk.Label(parent, text="oTranscribe").grid(row=3, column=0, padx=10, pady=(0, 10), sticky="w")
+
+    ttk.Separator(parent, orient="horizontal").grid(
+        row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+    )
+    ttk.Label(parent, text="oTranscribe").grid(row=4, column=0, padx=10, pady=(0, 10), sticky="w")
     ttk.Button(
         parent, text="Import .otr → SRT...", command=app.integrations_service.import_otr_to_srt
-    ).grid(row=3, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
+    ).grid(row=4, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
     parent.columnconfigure(1, weight=1)
 
 

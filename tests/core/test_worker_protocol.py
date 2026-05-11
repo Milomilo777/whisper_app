@@ -75,7 +75,7 @@ def test_main_rejects_missing_file_path(monkeypatch, capsys):
 
 def test_main_emits_started_then_done_on_transcribe(monkeypatch, capsys):
     monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
-    monkeypatch.setattr(worker, "transcribe", lambda task, p, l: None)
+    monkeypatch.setattr(worker, "transcribe", lambda task, p, l, language_cb=None: None)
     inputs = json.dumps({"action": "transcribe", "file_path": "/tmp/x.wav"}) + "\n" + json.dumps({"action": "shutdown"}) + "\n"
     monkeypatch.setattr(sys, "stdin", io.StringIO(inputs))
     worker.main()
