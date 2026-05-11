@@ -135,12 +135,28 @@ Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual
 
 ## Known limitations
 
-See [docs/AUDIT.md](docs/AUDIT.md) for the full list. The most important ones today:
+The list below reflects the current state after Sessions 1–6. For everything fixed since the project started, see [docs/CHANGELOG.md](docs/CHANGELOG.md) (Unreleased + v0.3.0). For the full backlog see [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- `yt-dlp --update` runs unconditionally before every download — breaks offline use until fixed (Phase 0)
-- `ffprobe` is called from `PATH`, not from `bin/` — breaks on clean machines (Phase 0)
-- No theming, no drag-and-drop, no folder watcher, no model picker — see roadmap Phases 1-2
-- No tests, no CI — see roadmap Phase 1
+**Working as designed but with rough edges:**
+
+- **Chinese transcripts come out as wall-of-text.** Whisper's Mandarin output has very little punctuation by default. Mitigation strategies (initial-prompt nudge, FunASR `ct-punc` post-processor, SenseVoice backend) are documented in [Phase 6.2](docs/ROADMAP.md). Not yet implemented — manual editing in the transcript output is the current workaround.
+- **Subtitle line splitting uses the Latin-text 42-char default everywhere.** For Chinese you want ~16 zh-Hans glyphs per line, not 42 cells. Width-aware splitting is [Phase 6.3](docs/ROADMAP.md) — not yet implemented.
+- **No model picker UI.** The active model is hard-coded to `faster-whisper-large-v3` via `config.json` `model_path`. To use a different model, edit `%LOCALAPPDATA%\WhisperProject\config.json` manually and point `model_path` at the new folder. UI picker is part of Phase 2b (deferred).
+- **No drag-and-drop, no folder watcher.** Add files via the Browse button; no batch-watch on a folder. Phase 2c.
+- **No live microphone / dictation mode.** Offline file transcription only. Phase 5.3 (live mic) is a separate effort.
+- **No CI yet.** The 137 local tests run with `pytest`, but no GitHub Actions workflow runs them on every push. Phase 7.3.
+- **No in-app transcript editor.** Subtitles are written to disk as SRT/VTT/JSON; if you need to proofread, open them in oTranscribe (round-trip is built in: `Export → oTranscribe (.otr)` on the queue tab) or any subtitle editor. In-app editor is Phase 4.
+- **`large-v3` model is ~3 GB on disk and needs ~5 GB VRAM on GPU at fp16, or ~3 GB RAM on CPU int8.** Smaller models (e.g. `tiny`, `base`, `medium`, `distil-large-v3`) would be a click away if the model picker landed.
+
+**Already fixed since the project was first audited (so the original Known limitations are gone):**
+
+- ✅ `yt-dlp --update` no longer runs unconditionally — gated behind `auto_update_yt_dlp` config flag and a 24h timestamp (Phase 0)
+- ✅ `ffprobe` resolves to `bin/ffprobe.exe` via the `bundled_binary` helper (Phase 0)
+- ✅ Sun Valley theme with Light/Dark/System picker under `View` menu (Phase 1.1)
+- ✅ 137 unit tests + 77% coverage on `core/` + `pytest` infrastructure (Phase 1b)
+- ✅ Multi-format output (SRT/VTT/TSV/TXT/JSON/LRC), VAD on by default, word-level timestamps, language detection display, `BatchedInferencePipeline` on GPU (Phase 2a)
+- ✅ SQLite history with restore-on-launch, SponsorBlock integration, auto-transcribe-after-download, `--progress-template "%(progress)j"` (Phase 3a)
+- ✅ PyInstaller build pipeline with `build.bat`, smoke test, BUILD.md (Session 5 final compile)
 
 ## License
 
