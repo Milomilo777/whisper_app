@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -5,6 +7,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import platformdirs
 
@@ -33,32 +36,32 @@ DEFAULT_CONFIG = {
 }
 
 
-def _legacy_config_path():
+def _legacy_config_path() -> str:
     base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__)
     return os.path.abspath(os.path.join(base, "..", "config.json"))
 
 
-def user_config_dir():
+def user_config_dir() -> Path:
     return Path(platformdirs.user_config_dir(APP_NAME, APP_AUTHOR))
 
 
-def user_cache_dir():
+def user_cache_dir() -> Path:
     return Path(platformdirs.user_cache_dir(APP_NAME, APP_AUTHOR))
 
 
-def user_log_dir():
+def user_log_dir() -> Path:
     return Path(platformdirs.user_log_dir(APP_NAME, APP_AUTHOR))
 
 
-def user_data_dir():
+def user_data_dir() -> Path:
     return Path(platformdirs.user_data_dir(APP_NAME, APP_AUTHOR))
 
 
-def config_path():
+def config_path() -> str:
     return str(user_config_dir() / "config.json")
 
 
-def migrate_config_location():
+def migrate_config_location() -> str:
     """Move a legacy next-to-source config.json into the platformdirs path.
 
     Returns the new path. Idempotent: if the new file already exists, the legacy
@@ -93,7 +96,7 @@ def migrate_config_location():
     return new_path
 
 
-def _drive_is_mounted(path):
+def _drive_is_mounted(path: str | Path) -> bool:
     if os.name != "nt":
         return True
     try:
@@ -105,7 +108,7 @@ def _drive_is_mounted(path):
     return Path(p.drive + os.sep).exists()
 
 
-def _apply_runtime_fallbacks(config):
+def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     model_path = (config.get("model_path") or "").strip()
     if not model_path or not _drive_is_mounted(model_path):
         model_name = (config.get("model") or {}).get("name") or "whisper-model"
@@ -133,7 +136,7 @@ def _apply_runtime_fallbacks(config):
     return config
 
 
-def _merge_with_defaults(loaded):
+def _merge_with_defaults(loaded: dict[str, Any]) -> dict[str, Any]:
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     for key, value in loaded.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -143,7 +146,7 @@ def _merge_with_defaults(loaded):
     return merged
 
 
-def load_config():
+def load_config() -> dict[str, Any]:
     migrate_config_location()
     path = config_path()
     try:
@@ -168,7 +171,7 @@ def load_config():
     return _apply_runtime_fallbacks(_merge_with_defaults(loaded))
 
 
-def save_config(config):
+def save_config(config: dict[str, Any]) -> None:
     path = config_path()
     directory = os.path.dirname(path) or "."
     Path(directory).mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 import logging
 import sys
+from typing import Any
 
 from .config import load_config
 from .logging_setup import setup_logging
@@ -9,11 +12,11 @@ from .transcriber import load_existing_model, transcribe
 
 logger = logging.getLogger(__name__)
 
-def emit(event, **payload):
+def emit(event: str, **payload: Any) -> None:
     payload["event"]=event
     print(json.dumps(payload), flush=True)
 
-def main():
+def main() -> int:
     setup_logging(load_config().get("log_level","INFO"))
     logger.info("Worker starting (pid=%d)", __import__("os").getpid())
 

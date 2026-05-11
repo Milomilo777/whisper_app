@@ -1,12 +1,21 @@
+from __future__ import annotations
 
-import hashlib, shutil, time, zipfile, requests
+import hashlib
+import shutil
+import threading
+import time
+import zipfile
 from pathlib import Path
+from typing import Any, Callable, Iterable
 from urllib.parse import unquote, urlparse
+
+import requests
+
 
 class DownloadCancelled(RuntimeError):
     pass
 
-def md5_file(path, cancel_event=None):
+def md5_file(path: str | Path, cancel_event: threading.Event | None = None) -> str:
     h=hashlib.md5()
     with open(path,'rb') as f:
         for chunk in iter(lambda:f.read(1024*1024),b''):
@@ -15,21 +24,22 @@ def md5_file(path, cancel_event=None):
             h.update(chunk)
     return h.hexdigest()
 
-def _remove_path(path):
+def _remove_path(path: str | Path) -> None:
     path=Path(path)
     if path.is_dir():
         shutil.rmtree(path)
     elif path.exists():
         path.unlink()
 
-def _fmt_bytes(value):
+def _fmt_bytes(value: float | int | None) -> str:
     value=float(value or 0)
     for unit in ("B","KB","MB","GB","TB"):
         if value < 1024 or unit == "TB":
             return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} {unit}"
         value/=1024
+    return f"{value:.1f} TB"
 
-def _fmt_time(seconds):
+def _fmt_time(seconds: float | int | None) -> str:
     if seconds is None:
         return "--:--"
     seconds=max(0,int(seconds))
@@ -38,16 +48,16 @@ def _fmt_time(seconds):
     s=seconds%60
     return f"{h:02}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
 
-def _notify(progress_cb, **payload):
+def _notify(progress_cb: Callable[[dict[str, Any]], None] | None, **payload: Any) -> None:
     if progress_cb:
         progress_cb(payload)
 
-def _zip_name_from_url(zip_url):
+def _zip_name_from_url(zip_url: str) -> str:
     name=Path(unquote(urlparse(zip_url).path)).name
     return name or "model.zip"
 
-def _parse_md5_manifest(text):
-    entries=[]
+def _parse_md5_manifest(text: str) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
     for line in text.splitlines():
         line=line.strip()
         if not line:
@@ -64,7 +74,12 @@ def _parse_md5_manifest(text):
         entries.append((checksum.lower(),path))
     return entries
 
-def _download_zip(zip_url, zip_path, progress_cb=None, cancel_event=None):
+def _download_zip(
+    zip_url: str,
+    zip_path: Path,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> Path:
     existing=zip_path.stat().st_size if zip_path.exists() else 0
     headers={}
     mode="wb"
@@ -127,7 +142,13 @@ def _download_zip(zip_url, zip_path, progress_cb=None, cancel_event=None):
 
     return zip_path
 
-def _verify_extracted_files(cache_dir, md5_url, status_cb=None, progress_cb=None, cancel_event=None):
+def _verify_extracted_files(
+    cache_dir: Path,
+    md5_url: str,
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> list[tuple[str, str, str]]:
     response=requests.get(md5_url, timeout=(10, 30))
     response.raise_for_status()
     entries=_parse_md5_manifest(response.text)
@@ -135,7 +156,7 @@ def _verify_extracted_files(cache_dir, md5_url, status_cb=None, progress_cb=None
         raise RuntimeError("MD5 manifest does not contain any files")
 
     cache_root=cache_dir.resolve()
-    mismatches=[]
+    mismatches: list[tuple[str, str, str]] = []
 
     for index,(expected,relative_path) in enumerate(entries,1):
         if cancel_event and cancel_event.is_set():
@@ -181,7 +202,12 @@ def _verify_extracted_files(cache_dir, md5_url, status_cb=None, progress_cb=None
     )
     return mismatches
 
-def ensure_model(config, status_cb=None, progress_cb=None, cancel_event=None):
+def ensure_model(
+    config: dict[str, Any],
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> str:
     model=config["model"]
     model_path=Path(config["model_path"])
     zip_url=model["url"]

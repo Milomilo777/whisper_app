@@ -1,10 +1,19 @@
+from __future__ import annotations
 
+import json
 import logging
-import os,time,json,subprocess,threading
+import os
+import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import Any, Callable
+
 from faster_whisper import WhisperModel
+
 from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
+from .task import TranscriptionTask
 
 logger = logging.getLogger(__name__)
 
@@ -18,24 +27,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BIN_DIR = PROJECT_ROOT / "bin"
 
 
-def bundled_binary(name):
+def bundled_binary(name: str) -> str:
     exe = f"{name}.exe" if os.name == "nt" else name
     candidate = BIN_DIR / exe
     return str(candidate) if candidate.exists() else name
 
 
-def log(msg, cb=None):
+def log(msg: str, cb: Callable[[str], None] | None = None) -> None:
     if cb:
         cb(msg)
     else:
         logger.info(msg)
 
-def detect_device():
+def detect_device() -> tuple[str, str]:
     if config.get("device") != "auto":
         return config.get("device", "cpu"), config.get("compute_type", "int8")
     try:
         import ctranslate2
-        if ctranslate2.contains_cuda_device():
+        if ctranslate2.contains_cuda_device():  # type: ignore[attr-defined]
             supported = set(ctranslate2.get_supported_compute_types("cuda"))
             for ct in ("float16", "int8_float16", "int8"):
                 if ct in supported:
@@ -43,7 +52,7 @@ def detect_device():
     except (ImportError, AttributeError, RuntimeError):
         pass
     try:
-        import torch
+        import torch  # type: ignore[import-not-found]
         if torch.cuda.is_available():
             return "cuda", "float16"
     except (ImportError, AttributeError):
@@ -52,13 +61,13 @@ def detect_device():
 
 device,compute_type=detect_device()
 
-def is_model_ready():
+def is_model_ready() -> bool:
     return MODEL_READY
 
-def get_model_error():
+def get_model_error() -> str | None:
     return MODEL_ERROR
 
-def load_existing_model(status_cb=None):
+def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
     global MODEL, MODEL_READY, MODEL_ERROR
     MODEL_READY=False
     MODEL_ERROR=None
@@ -80,7 +89,11 @@ def load_existing_model(status_cb=None):
         if status_cb: status_cb(f"Existing model failed to load: {e}")
         return False
 
-def load_model(status_cb=None, progress_cb=None, cancel_event=None):
+def load_model(
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> bool:
     global MODEL, MODEL_READY, MODEL_ERROR
     MODEL_READY=False
     MODEL_ERROR=None
@@ -106,16 +119,20 @@ def load_model(status_cb=None, progress_cb=None, cancel_event=None):
         if status_cb: status_cb(f"ERROR: {e}")
         raise
 
-def load_model_async(status_cb=None, progress_cb=None, cancel_event=None):
+def load_model_async(
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> None:
     try:
         load_model(status_cb, progress_cb, cancel_event)
     except Exception:
         pass
 
-def start_background_model_load(status_cb=None):
+def start_background_model_load(status_cb: Callable[[str], None] | None = None) -> None:
     threading.Thread(target=load_model_async,args=(status_cb,),daemon=True).start()
 
-def get_duration(path):
+def get_duration(path: str) -> float:
     ffprobe = bundled_binary("ffprobe")
     r=subprocess.run(
         [ffprobe,"-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",path],
@@ -130,11 +147,15 @@ def get_duration(path):
         )
     return float(r.stdout.strip())
 
-def fmt(sec):
+def fmt(sec: float) -> str:
     h=int(sec//3600);m=int((sec%3600)//60);s=int(sec%60)
     return f"{h:02}:{m:02}:{s:02}"
 
-def transcribe(task,progress_cb=None,log_cb=None):
+def transcribe(
+    task: TranscriptionTask,
+    progress_cb: Callable[[int], None] | None = None,
+    log_cb: Callable[[str], None] | None = None,
+) -> None:
     global MODEL
     while not MODEL_READY:
         if MODEL_ERROR:
@@ -145,6 +166,7 @@ def transcribe(task,progress_cb=None,log_cb=None):
     start=time.time()
     log(f"Processing: {task.file_path}",log_cb)
 
+    assert MODEL is not None  # MODEL_READY guarantees this
     segments,_=MODEL.transcribe(task.file_path)
     base=os.path.splitext(task.file_path)[0]
 
