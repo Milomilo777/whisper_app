@@ -121,6 +121,52 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 4 — 2026-05-11 — Third architect, Phase 2-oTranscribe (hands-off)
+
+**Coordinator:** A fresh Claude Code session, briefed via `docs/integrations/otranscribe-brief.md`. Hands-off mode (autonomous push when all acceptances green).
+
+**Goal as briefed:** "Implement the oTranscribe integration — Tier 1 + Tier 2 from the research note — without breaking Phase 0 or Phase 1a. Push to origin/master automatically when green."
+
+**What got done:**
+
+1. **Re-ran sample Phase 0 + Phase 1a tests in-process** before touching anything (T1 syntax, T2 no-bare-except, P1 GUI smoke). All green.
+2. **Built `core/integrations/otranscribe.py`** — four public functions (`fmt_otr_time`, `srt_to_otr`, `whisper_json_to_otr`, `otr_to_srt`), one private `_OtrParser(HTMLParser)`, two private helpers (`_parse_srt`, `_segments_to_otr_string`). Stdlib only. The HTML parser tracks an `_in_timestamp` flag to skip the span's own display text and only collect the segment body that follows.
+3. **Wrote nine pytest cases** at `tests/integrations/test_otranscribe.py` covering display format, ASCII / Persian round-trip, whisper-JSON conversion, NBSP boundary invariant, single-line `text` invariant, last-segment end inference, `media` basename normalization. Three fixtures under `tests/integrations/fixtures/`.
+4. **Wired three UI hooks into `gui.py`** — Help → Open oTranscribe..., Transcribe-tab Import .otr → SRT... button under a horizontal separator, Transcription Queue right-click Export → oTranscribe (.otr) for `finished` tasks. Each handler is < 20 lines, calls into the converter module.
+5. **Authored `docs/integrations/otranscribe-acceptance.md`** with eleven grep-able tests (the nine OTR cases plus re-runs of Phase 0 and Phase 1a as gates). Each test prints an exact `*_PASS` token and the doc ends with a mandatory JSON report block.
+6. **Re-ran every Phase 0 and Phase 1a test in-process** before pushing — all 8 + 9 = 17 prior tests still green, plus the 9 new pytest cases plus the 11 acceptance commands = 37 green checks.
+7. **Updated `README.md`, `docs/CHANGELOG.md`, `docs/ROADMAP.md`** (new "Completed integrations" heading + Progress snapshot row marked DONE), **`docs/integrations/README.md`** (status flipped from "brief written" to "shipped").
+8. **Pushed `master` to `origin/master`** via the host credential helper.
+
+**Commits added:**
+
+```
+2c37245  Phase 2-oTranscribe: bidirectional .otr converter (core + tests)
+0e82986  Phase 2-oTranscribe: wire .otr import / export / Help into the GUI
+3b29df4  Phase 2-oTranscribe: docs (CHANGELOG, README, ROADMAP, integrations index, acceptance plan)
+<this-commit>  Session 4 log
+```
+
+**Decisions worth remembering:**
+
+- **Stdlib HTMLParser is enough.** No `beautifulsoup4` or `lxml`. The `_OtrParser` has 30 lines and handles the multi-paragraph, NBSP-prefixed segment bodies correctly. The brief explicitly forbade new dependencies — and the test fixtures (ASCII + Persian + whisper-JSON) exercise the parser thoroughly enough that the constraint costs nothing.
+- **Drop the `.*` glob trap from Phase 0.3.** The earlier subtitle work taught us that overly permissive matchers download the wrong files. Same instinct applied here: `srt_to_otr` writes one `<span class="timestamp">` per SRT cue, no fanout, no translation siblings.
+- **Last-segment end = `max(media_time, start + 5.0)`.** Documented in the function docstring and in the acceptance plan. Prevents a zero-duration last cue when the user loaded media in oTranscribe but never seeked past the start.
+- **NBSP discipline is testable.** `test_otr_text_uses_nbsp` and `OTR-T4` both check the U+00A0 boundary and the absence of a regular ASCII space at the same boundary. Future drift will be caught.
+- **GUI handlers stay tiny.** Each is a wrapper around the pure converter functions. Easier to test the converter (which we do, in-process) than the GUI (which requires Tk).
+
+**Things explored and explicitly rejected:**
+
+- Tier 3 (vendored fork of oTranscribe with URL-param preload, in-app editor, forced alignment after human edit) — flagged in `docs/ROADMAP.md` as a future enhancement, not in scope for this session.
+- Auto-export `.otr` on every transcription finish — open question in the research note; deferred until the user expresses a preference.
+- Embedding word-level timestamps in `.otr` — oTranscribe discards them on import; they belong in the JSON sidecar instead. Documented in the research note's "Risk and footnote" section.
+
+**Pending user actions:**
+
+- None for this scope. Phase 1b (split `gui.py` + tests + type hints + Sentry) and Phase 2 (Whisper VAD / word timestamps / batched / model picker) remain available as separate sessions.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
