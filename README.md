@@ -15,6 +15,7 @@ Built for the workflow of producing bilingual subtitle files (English ↔ Persia
 - **Crash isolation.** Transcription runs in a long-lived subprocess worker; if the model crashes the UI stays up.
 - **Multiple parallel workers** for transcription, each holding the model in memory.
 - **Per-phase status** during downloads — you see when the subtitle phase succeeds, fails, or has no captions available, separately from the media phase.
+- **oTranscribe round-trip** — export a finished transcription to `.otr` for human proofing in [oTranscribe](https://otranscribe.com/), then import the edited `.otr` back to SRT.
 
 ## Status
 
@@ -71,9 +72,11 @@ On the first launch, the app will check for the Whisper model. If it isn't found
 
 Pick a local audio or video file. The transcribe button enqueues it for the worker subprocess. SRT and JSON are written next to the input file with the same base name.
 
+The `Import .otr → SRT...` button below the transcribe controls reads an oTranscribe-edited `.otr` file and writes a clean SRT to a folder of your choice. End times are inferred from the next segment's start; the last segment's end is the file's `media-time` (or `start + 5s`, whichever is greater).
+
 ### Transcription Queue
 
-Live status of all enqueued transcription jobs. Right-click a row to cancel a running job or remove a finished one.
+Live status of all enqueued transcription jobs. Right-click a row to cancel a running job, remove a finished one, or — when the job is `finished` — `Export → oTranscribe (.otr)` to write an `.otr` file next to the source media for downstream proofing in oTranscribe.
 
 ### Download Videos
 

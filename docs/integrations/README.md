@@ -13,7 +13,7 @@ The pattern is the same for every integration:
 
 | Integration | Status | Research | Brief | Acceptance |
 |---|---|---|---|---|
-| oTranscribe (web app for manual transcription) | brief written, not implemented | [otranscribe-research.md](otranscribe-research.md) | [otranscribe-brief.md](otranscribe-brief.md) | _coming with implementation_ |
+| oTranscribe (web app for manual transcription) | **shipped** (Phase 2-oTranscribe, Session 4) | [otranscribe-research.md](otranscribe-research.md) | [otranscribe-brief.md](otranscribe-brief.md) | [otranscribe-acceptance.md](otranscribe-acceptance.md) |
 
 ## How to add a new integration
 
