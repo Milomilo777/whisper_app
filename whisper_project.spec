@@ -67,6 +67,12 @@ exe = EXE(
     name='WhisperProject',
     console=False,
     icon=None,
+    # Pre-6.x flat layout: place bundled data (bin/) and DLLs alongside the
+    # exe, not inside _internal/. The app resolves bin/ via
+    # dirname(sys.executable); without this, ffmpeg/ffprobe/yt-dlp end up at
+    # dist/WhisperProject/_internal/bin/ and the exe silently can't find
+    # them at runtime.
+    contents_directory='.',
 )
 coll = COLLECT(
     exe,
