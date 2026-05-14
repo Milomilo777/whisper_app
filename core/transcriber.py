@@ -176,8 +176,16 @@ def load_model_async(
 ) -> None:
     try:
         load_model(status_cb, progress_cb, cancel_event)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        # Don't propagate (background thread); but logging matters —
+        # silently swallowing this hid a real model-corruption case for a
+        # whole session in the field.
+        logger.exception("Async model load failed: %s", e)
+        if status_cb:
+            try:
+                status_cb(f"ERROR: {e}")
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def start_background_model_load(status_cb: Callable[[str], None] | None = None) -> None:
