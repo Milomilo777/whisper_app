@@ -194,14 +194,28 @@ def start_background_model_load(status_cb: Callable[[str], None] | None = None) 
 
 def get_duration(path: str) -> float:
     ffprobe = bundled_binary("ffprobe")
-    r = subprocess.run(
-        [ffprobe, "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", path],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    kwargs: dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        # If the user feeds in something pathological (broken container,
+        # network mount that stalls), don't block transcription forever.
+        "timeout": 60,
+    }
+    if os.name == "nt":
+        # Without this, ffprobe pops a black console window every time the
+        # transcriber starts a new file. Invisible in dev (we run from a
+        # terminal); user-visible from the windowed exe.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        r = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            **kwargs,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"ffprobe timed out for {path}") from e
     if r.returncode != 0 or not r.stdout.strip():
         raise RuntimeError(
             f"ffprobe failed (exit={r.returncode}) for {path}: "
