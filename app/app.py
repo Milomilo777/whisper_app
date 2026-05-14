@@ -168,6 +168,23 @@ class App(tk.Tk):
         self.transcription_service.stop_all()
         self.destroy()
 
+    def destroy(self) -> None:  # type: ignore[override]
+        # Cancel every pending after() callback before tearing down the
+        # Tcl interpreter. Otherwise the service poll loops fire one last
+        # time after destroy() and spam the console with
+        #   invalid command name "<id>poll"
+        # because their bound-method Tcl command no longer exists.
+        try:
+            pending = self.tk.call("after", "info") or ""
+            for cb_id in str(pending).split():
+                try:
+                    self.after_cancel(cb_id)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+        super().destroy()
+
     # Tabs --------------------------------------------------------------------
     def _build_tabs(self) -> None:
         self.nb = ttk.Notebook(self)
