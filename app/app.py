@@ -130,7 +130,10 @@ class App(tk.Tk):
         h.add_command(label="Open log folder", command=self.open_log_folder)
         h.add_command(label="Open oTranscribe...", command=self.integrations_service.open_otranscribe)
         a = tk.Menu(m, tearoff=0)
-        a.add_command(label="About", command=lambda: messagebox.showinfo("About", "Whisper"))
+        a.add_command(
+            label="About",
+            command=lambda: messagebox.showinfo("About", "Whisper", parent=self),
+        )
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
