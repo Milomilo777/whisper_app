@@ -460,6 +460,51 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 9 — 2026-05-14 — Deep audit + end-user distribution
+
+**Coordinator:** Claude Opus 4.7 (1M context), interactive session with the user.
+
+**Goal as briefed:** "I want a deep audit of the whole project, fix anything broken; smoke tests then real tests; ship a downloadable build from the repo so non-technical users can install without Python; written in a fresh branch, then merge to master, tag, delete the branch."
+
+**What got done:**
+
+1. **Branched off master to `audit/session-9-deep`**. All Session 9 work landed on this branch as one-fix-per-commit so any single change is rollback-able.
+2. **Parallel deep audits** of `core/` and `app/` (two Explore agents, independent passes). Validated each finding by reading the named lines before treating it as real.
+3. **Fix #1 (BLOCKER) — `app/app.py:destroy`**. The smoke-test shutdown log was full of `invalid command name "<id>poll"` because `TranscriptionService.poll`, `FormatService.poll`, and `DownloadService.poll` reschedule themselves every tick and were never cancelled before `app.destroy()` tore down the Tcl interpreter. Override `destroy()` to enumerate every pending after id via `tk.call("after", "info")` and cancel each before delegating. Verified by re-running the headless smoke test — zero error spam now.
+4. **Fix #2 (HIGH) — `core/transcriber.py:load_model_async`**. Was swallowing exceptions silently with `try: load_model(...) except Exception: pass`. Now logs via `logger.exception` and forwards to `status_cb` so UI/log can react.
+5. **Fix #3 (MEDIUM) — `core/transcriber.py:get_duration`**. Added `timeout=60` and (on Windows) `creationflags=subprocess.CREATE_NO_WINDOW` to the ffprobe call. A stalled ffprobe used to hang transcription with no escape; the missing flag also caused a black console window to pop up for every probed file in the windowed exe.
+6. **Fix #4 (LOW) — `app/app.py` About dialog**. Added `parent=self` so the messagebox centers on the app window.
+7. **Discarded findings that turned out not to be real bugs after verification:**
+   - LRC timestamp overflow > 99:59 — the LRC spec accepts `MM` ≥ 2 digits, no real issue
+   - `PROJECT_ROOT = Path(__file__).parent.parent` in `core/transcriber.py` — works fine in PyInstaller because `contents_directory='.'` flattens MEIPASS to exe_dir; both `__file__` and `sys.executable` resolve to the same dir
+   - Race on the `MODEL` global — single-thread load in practice, the worker subprocess pattern means each worker has its own copy
+   - Format-lookup TOCTOU — Tk is single-threaded; trace callbacks are serialized
+   - `filedialog` missing `initialdir` — UX nit, not a bug
+8. **Distribution as a GitHub Release.** The compiled `dist/WhisperProject/` (467 MB) is too large to ship in the git tree. Built `WhisperProject-v0.6.0-windows-x64.zip` (192 MB compressed), installed `gh` CLI via winget, user authenticated separately, then `gh release create` attached the ZIP. README updated to point at the release.
+9. **`docs/INSTALL.md`** — end-user guide aimed at someone who knows no Python: download release, extract, run, handle SmartScreen, handle the 3 GB model download, troubleshoot DLL / antivirus / config issues. Written with Persian-friendly framing per the user's audience.
+10. **Full test pass before merge:** 136 unit tests + 10 smoke tests (7 headless App driver + 3 exe-driven real transcription, with skip-guards). Real EXE transcription on `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` produces the same 860-byte SRT it did in Session 8. No regressions.
+
+**Decisions worth remembering:**
+
+- **One-fix-per-commit on audit branches.** Pre-arranged each fix as its own commit so a regression bisect points at a single 5–20-line diff. Easier to revert than a "deep audit" mega-commit.
+- **Don't fix what the source-side test can't see.** Two agents flagged the `__file__` / PROJECT_ROOT pattern as a PyInstaller risk; verifying showed it's fine with the current spec. Held the change. Code that **happens to work** because of an upstream guarantee is still working code; refactoring for "robustness" without a concrete failure mode is scope creep.
+- **GitHub Release, not Git LFS, not raw commit.** Repo stays slim; users get a single click download; gh CLI workflow is reproducible from any maintainer's box.
+- **`build.bat smoke`'s 5-second alive check is necessary but not sufficient.** Locked in by Session 8; this session adds `tests/smoke/` as the real packaging gate.
+
+**Things explored and explicitly rejected:**
+
+- **Adding a `tests` mode to `build.bat`** that runs the pytest smoke suite. Tempting, but `build.bat` should stay PyInstaller-focused; CI / dev workflow runs pytest separately.
+- **Removing the `build.bat` xcopy fallback** now that the spec is correct. Kept for one more release as belt-and-suspenders.
+- **Code-signing the exe.** Out of scope; SmartScreen warning documented in `INSTALL.md` instead.
+- **Bundling the 3 GB model into the release ZIP.** Would push the asset past 3 GB (GitHub's per-asset limit is 2 GB) and bloat downloads even when the user already has it. Kept the auto-download dialog as-is.
+
+**Pending user actions (post-session):**
+
+- (Optional, release): tag `v0.6.0-audit` and `v0.6.0` per `MANUAL_STEPS.md`. The audit branch is already tagged for archival.
+- (Required to continue work): pick the next Phase. Candidates in `docs/NEXT_SESSION_HANDOFF.md`.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:

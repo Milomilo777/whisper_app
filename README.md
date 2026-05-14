@@ -25,6 +25,18 @@ The app is usable today for the core flows. The roadmap describes how it gets fr
 
 ## Quick start
 
+### Option A — Download the pre-built exe (no Python required)
+
+For end users who just want to run the app:
+
+🔗 **[Download the latest release](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)** — a single ~450 MB ZIP that contains the exe, all DLLs, bundled `ffmpeg`/`ffprobe`/`yt-dlp`, and the Silero VAD asset. Extract anywhere, run `WhisperProject.exe`. The 3 GB Whisper model downloads automatically on first launch.
+
+Step-by-step installation guide (Persian-friendly, end-user focused): **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+### Option B — Build from source
+
+For developers who want to hack on the code.
+
 ### Prerequisites
 
 - Windows 10 / 11 (Linux and macOS are not officially supported yet, but the Python code is mostly portable)
@@ -129,6 +141,7 @@ Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual
 - [docs/COMPETITIVE_ANALYSIS_2026.md](docs/COMPETITIVE_ANALYSIS_2026.md) — 2026 STT landscape, models recommendation, Phase 4/6 inspiration
 - [docs/SESSION_LOG.md](docs/SESSION_LOG.md) — narrative record of the orchestrated build sessions
 - [docs/integrations/](docs/integrations/) — third-party interop research, briefs, acceptance plans (currently: oTranscribe)
+- [docs/INSTALL.md](docs/INSTALL.md) — end-user install guide (Persian-friendly): download the release, extract, run, troubleshoot SmartScreen / antivirus / DLL errors
 - [docs/BUILD.md](docs/BUILD.md) — PyInstaller pipeline, exit codes, `bin/` fallback rationale, packaging-bug regression notes
 - [docs/SESSION_8_PACKAGING_FIX.md](docs/SESSION_8_PACKAGING_FIX.md) — Session 8 bug write-up: silero VAD ONNX missing from bundle
 - [tests/smoke/README.md](tests/smoke/README.md) — why the compiled exe needs its own integration tests
