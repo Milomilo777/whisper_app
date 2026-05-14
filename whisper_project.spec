@@ -11,12 +11,23 @@
 # at the top of gui.py.
 # pyright: reportMissingImports=false
 
+from PyInstaller.utils.hooks import collect_data_files
+
+# faster_whisper ships a Silero VAD model under faster_whisper/assets/.
+# It is loaded by file path at runtime (not via importlib.resources), so
+# PyInstaller's default Python-module collection misses it. Without this,
+# transcription crashes the worker with:
+#   ONNXRuntimeError ... silero_vad_v6.onnx failed: File doesn't exist
+# every time VAD is enabled (which is the default).
+faster_whisper_datas = collect_data_files('faster_whisper')
+
 a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
     datas=[
         ('bin', 'bin'),
+        *faster_whisper_datas,
     ],
     hiddenimports=[
         'app',

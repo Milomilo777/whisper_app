@@ -412,6 +412,54 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 8 — 2026-05-14 — Eighth architect, packaging-bug hunt + smoke-test discipline
+
+**Coordinator:** Claude Opus 4.7 (1M context), interactive session with the user.
+
+**Goal as briefed:** "It is broken, and does load faster-whisper. Nice GUI but broken app. AI does not test code it produce, that's why i go into small increment changes test them and commit or rollback."
+
+**What got done:**
+
+1. **Re-validated everything testable from source.** Ran the 136-test pytest suite (still pass), built an end-to-end headless driver that instantiates the real `App`, hides the window with `withdraw()`, and exercises every service through the same callbacks the UI buttons call. 11/11 pass: App init, bundled binaries, HistoryDB, FormatService probe, all six writers, oTranscribe round-trip, real worker transcription, dialogs (Statistics + Advanced) open+close, theme switching (light/dark/system), shutdown.
+2. **Spawned the compiled `WhisperProject.exe --worker` directly** with a JSON `transcribe` command on stdin. This is the only test that exercises the PyInstaller bundle's actual file layout. **Caught a real bug the source-side tests could not see:**
+
+   ```
+   [ONNXRuntimeError] : 3 : NO_SUCHFILE : Load model from
+     dist\WhisperProject\faster_whisper\assets\silero_vad_v6.onnx failed:
+     File doesn't exist
+   ```
+
+   `faster-whisper` loads the Silero VAD ONNX by file path at VAD-filter time. VAD is on by default, so every default-configuration transcription on the compiled exe crashed the worker on the first segment. This was the user's colleague's "nice GUI, broken app" symptom — the GUI loads fine, the worker subprocess dies the moment you click Transcribe.
+
+3. **Fixed `whisper_project.spec`** by adding `collect_data_files('faster_whisper')` to `Analysis(datas=...)`. Rebuilt, re-ran the exe smoke test, transcription succeeded end-to-end (84s for the 60-second test clip; lang=en p=1.00; 9 segments; SRT + JSON written to `E:\3029-NWN-Daily-Scroll-2m_0002.{srt,json}`).
+4. **Added `tests/smoke/` to the repo** so this class of bug can't regress silently:
+   - `test_exe_real_e2e.py` — drives the compiled exe through a real transcription, plus regression guards `test_exe_bundles_silero_vad_asset` and `test_exe_bundles_ffmpeg`.
+   - `test_app_headless.py` — the source-side App driver.
+   - `conftest.py` — `pytest.skip(...)` guards for missing model/video/exe so the suite degrades gracefully on a clean machine.
+   - `README.md` — explains why these tests must exist alongside the unit suite.
+5. **Wrote `docs/SESSION_8_PACKAGING_FIX.md`** documenting the bug, the fix, and the test-discipline lesson.
+6. **Updated `docs/CHANGELOG.md`** with new `### Added` and `### Fixed` entries under `[Unreleased]`.
+
+**Decisions worth remembering:**
+
+- **Source-side tests cannot catch packaging bugs by construction.** They resolve assets from `site-packages`, which the bundle does not see. If you ship an exe, at least one test in CI/local must drive the compiled exe end-to-end on a real input. The earlier `build.bat smoke` (process-alive-for-5-seconds) was necessary but not sufficient; it doesn't trigger VAD load.
+- **`collect_data_files(pkg)` is the right default for any third-party package that loads data files by path** (not via `importlib.resources`). When adding a new heavy dep, audit it for `open()` calls on package-relative paths.
+- **Smoke tests live in `tests/smoke/` with skip-guards, not in `build_logs/`.** Putting them in `build_logs/` means they get `.gitignore`d and never run from CI/checkout. They have to be tracked.
+- **`contents_directory='.'` from the prior compile fix is preserved.** It moves bundled `bin/` next to the exe (where `app.bin_path()` looks for it) rather than under `_internal/`. The `build.bat` xcopy fallback is now dead code on a clean build; left in place as belt-and-suspenders.
+
+**Things explored and explicitly rejected:**
+
+- **`Tree('bin', prefix='bin')` in `COLLECT(...)` instead of `contents_directory='.'`.** Tried it; PyInstaller 6 routes the Tree through `_internal/` anyway because COLLECT now reroutes all data files there. `contents_directory='.'` on the `EXE()` call is the only way to flatten back to pre-6.x layout.
+- **Adding a CLI to the exe for testing.** The exe is GUI-only by design; the worker subprocess interface (stdin JSON) already exists and is the right test surface. No new code path to maintain.
+- **Driving the GUI with `pywinauto` (UIA backend).** Tkinter widgets are not Win32 controls and UIA only sees the top-level pane. `pywinauto` was installed and tried; produced an empty inventory. Falling back to the headless App driver is more reliable and faster.
+
+**Pending user actions (post-session):**
+
+- (Optional) Re-evaluate whether the `build.bat` xcopy fallback should be removed now that the spec produces the correct layout on its own. Recommended: leave it for one more release as a safety net, then remove in a Session 9 cleanup.
+- (Required to continue work): pick the next Phase. Candidates in `docs/NEXT_SESSION_HANDOFF.md`.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:

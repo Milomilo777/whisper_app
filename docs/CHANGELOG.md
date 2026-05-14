@@ -6,8 +6,15 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
+- **Session 8** — `tests/smoke/` integration suite for the compiled exe. Three pytest files (`test_exe_real_e2e.py`, `test_app_headless.py`, plus a `conftest.py` with skip-guards for missing model / video / exe) and a `README.md` explaining why these tests have to live alongside the unit suite — packaging bugs are invisible from source-side. `test_exe_real_e2e.py` spawns `WhisperProject.exe --worker`, sends the actual JSON `transcribe` command, and asserts SRT + JSON land on disk; `test_app_headless.py` drives the Tk App in a withdrawn window through every service. Regression guards `test_exe_bundles_silero_vad_asset` and `test_exe_bundles_ffmpeg` lock in the Session 8 packaging fix.
+- **Session 8** — `docs/SESSION_8_PACKAGING_FIX.md` documenting the silero_vad_v6.onnx packaging bug and why source-side tests didn't catch it.
 - **Session 7** — `docs/architecture-diagrams.md` (Mermaid simple overview + SVG embed + pointer to prose ARCHITECTURE.md). Hyphenated filename to avoid a case-insensitive Windows clash with the existing `ARCHITECTURE.md`. The Mermaid view uses the same color palette as the SVG so the two diagrams feel related at a glance. README now links to it as the first "Project documentation" entry.
 - **Session 7** — `docs/NEXT_SESSION_HANDOFF.md` — two-minute briefing for any future architect. Includes the current commit/branch/tag inventory, a 60-second orientation command list, the candidate phases ranked by impact-per-effort, the hard rules (single branch, no tokens, `bin/` ignored, Tk single-threaded, JSON protocol sacred), what's explicitly out of scope (Persian/Arabic, cloud LLMs, mobile, streaming), where to look when something feels weird, files not to touch, and a one-paragraph user prompt to start the next session.
+
+### Fixed
+
+- **Session 8** — `whisper_project.spec` now collects `faster_whisper`'s data files via `collect_data_files('faster_whisper')`. Without this, the compiled exe crashed the moment a user clicked **Transcribe** with VAD enabled (the default) because `silero_vad_v6.onnx` was absent from the bundle. The bug was invisible from `python gui.py` because source-side code resolves the asset from `site-packages/faster_whisper/assets/`. Only spawning the compiled `WhisperProject.exe --worker` and sending a real `transcribe` command exposed it. Now covered by the smoke suite — see Added above.
+- **Session 8** — `whisper_project.spec` retains the Session 8a `contents_directory='.'` on the `EXE()` call so bundled `bin/` lands beside the exe, not inside `_internal/`. The `build.bat` xcopy fallback is no longer triggered on a clean build.
 
 ### Changed
 
