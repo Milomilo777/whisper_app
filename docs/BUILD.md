@@ -34,15 +34,52 @@ Output lands at `dist\WhisperProject\WhisperProject.exe`.
 
 1. (`clean` only) deletes `build\` and `dist\`.
 2. (unless `verify`) runs `pyinstaller --noconfirm whisper_project.spec`.
-3. If `dist\bin\` is missing — that means the spec file's
-   `datas=[('bin', 'bin')]` silently dropped — **falls back to a manual
-   `xcopy` of the repo's `bin\` into `dist\bin\`.** This is the
-   belt-and-suspenders defense the brief asked for.
+3. If `dist\bin\` is missing — historically PyInstaller's `datas=` could
+   silently drop directories — **falls back to a manual `xcopy` of the
+   repo's `bin\` into `dist\bin\`.** As of Session 7's spec fix
+   (`contents_directory='.'` on the `EXE()` call), this path is dead on
+   a clean build; the spec emits the right layout natively. The fallback
+   stays in place as a belt-and-suspenders defense.
 4. Verifies `dist\WhisperProject\WhisperProject.exe`,
    `dist\WhisperProject\bin\ffmpeg.exe`,
    `dist\WhisperProject\bin\ffprobe.exe`,
    `dist\WhisperProject\bin\yt-dlp.exe` all exist. Any missing → exit 2.
 5. (`smoke` only) starts the exe, waits 5 s, checks `tasklist`, kills it.
+
+### Critical packaging detail: `collect_data_files('faster_whisper')`
+
+Session 8 found that `build.bat smoke`'s "exe stays alive for 5 s" check
+is **necessary but not sufficient**. The exe started fine but crashed
+the worker the moment a transcription kicked off, because the spec did
+not bundle `faster_whisper/assets/silero_vad_v6.onnx` and `faster-whisper`
+loads it by file path when VAD is enabled (the default).
+
+The fix lives at the top of `whisper_project.spec`:
+
+```python
+from PyInstaller.utils.hooks import collect_data_files
+faster_whisper_datas = collect_data_files('faster_whisper')
+```
+
+…spread into `Analysis(datas=[..., *faster_whisper_datas])`.
+
+If you ever add a new heavy dependency that loads data files by path
+(common offenders: ML packages with bundled model weights, tokenizer
+vocab JSONs, language-detection N-gram tables), repeat the pattern.
+
+### Real packaging-bug test (CI-skipped, locally enforced)
+
+`tests/smoke/test_exe_real_e2e.py` spawns `WhisperProject.exe --worker`,
+sends a real `transcribe` command via stdin, and asserts an SRT lands on
+disk. It is the only test that catches packaging regressions like the
+silero VAD miss. Run it before releasing:
+
+```
+python -m pytest tests/smoke/ -v -s
+```
+
+On a clean machine without the model or test video, the suite skips
+cleanly instead of failing.
 
 ## Why `config.json` is NOT in `dist\`
 

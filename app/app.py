@@ -130,7 +130,10 @@ class App(tk.Tk):
         h.add_command(label="Open log folder", command=self.open_log_folder)
         h.add_command(label="Open oTranscribe...", command=self.integrations_service.open_otranscribe)
         a = tk.Menu(m, tearoff=0)
-        a.add_command(label="About", command=lambda: messagebox.showinfo("About", "Whisper"))
+        a.add_command(
+            label="About",
+            command=lambda: messagebox.showinfo("About", "Whisper", parent=self),
+        )
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
@@ -167,6 +170,23 @@ class App(tk.Tk):
                 task.process.terminate()
         self.transcription_service.stop_all()
         self.destroy()
+
+    def destroy(self) -> None:  # type: ignore[override]
+        # Cancel every pending after() callback before tearing down the
+        # Tcl interpreter. Otherwise the service poll loops fire one last
+        # time after destroy() and spam the console with
+        #   invalid command name "<id>poll"
+        # because their bound-method Tcl command no longer exists.
+        try:
+            pending = self.tk.call("after", "info") or ""
+            for cb_id in str(pending).split():
+                try:
+                    self.after_cancel(cb_id)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+        super().destroy()
 
     # Tabs --------------------------------------------------------------------
     def _build_tabs(self) -> None:

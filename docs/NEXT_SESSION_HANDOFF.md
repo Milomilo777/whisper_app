@@ -1,6 +1,6 @@
 # Next session — handoff briefing
 
-You're the eighth architect (or beyond). This file is your two-minute briefing. Read it before anything else. Then choose your scope, then read the corresponding deep-context file.
+You're the ninth architect (or beyond). This file is your two-minute briefing. Read it before anything else. Then choose your scope, then read the corresponding deep-context file.
 
 ---
 
@@ -9,8 +9,8 @@ You're the eighth architect (or beyond). This file is your two-minute briefing. 
 - **Current head:** `master` on `origin`, latest commit visible with `git log --oneline -1`
 - **Branches:** exactly one — `master`. Don't make new ones.
 - **Tags:** `archive/phase-0-baseline` (historical, on commit `50a4fea`). Don't delete.
-- **Latest tested state:** all 137 unit tests pass, 77% coverage on `core/`, PyInstaller `dist/WhisperProject/WhisperProject.exe` builds and smoke-launches for ≥ 5 s.
-- **What's done (high-level):** Phases 0 + 1a + 1b + 2a + 2-oTranscribe + 3a + final compile + research notes + architecture diagrams. See `docs/SESSION_LOG.md` for the full narrative of seven prior sessions.
+- **Latest tested state:** 136 unit tests pass + 8 `tests/smoke/` tests (skip-guarded; pass on this dev box with the model installed). PyInstaller `dist/WhisperProject/WhisperProject.exe` builds and **actually transcribes** a real video end-to-end (Session 8 added the real-workload exe smoke test that catches packaging regressions).
+- **What's done (high-level):** Phases 0 + 1a + 1b + 2a + 2-oTranscribe + 3a + final compile + research notes + architecture diagrams + Session 8 packaging-bug fix (`silero_vad_v6.onnx` now bundled). See `docs/SESSION_LOG.md` for the full narrative of eight prior sessions.
 - **No release tag yet.** User has parked the `v0.5.0` decision; don't tag without asking.
 
 ---
@@ -22,7 +22,8 @@ cd "C:/Users/Owner/Desktop/whisper_project_claude/whisper_project_direct_downloa
 git status                                  # must be clean
 git log --oneline -10                       # see the recent sessions
 git remote -v                               # origin should be the only remote
-python -m pytest tests/ -q                  # 137 pass, no failures
+python -m pytest tests/ -q                  # 136 pass (+ 8 smoke; skipped without model/exe/video)
+python -m pytest tests/smoke/ -v -s         # local-only: real exe + headless App driver
 test -f docs/PHASE_NEXT_BRIEF.md && echo "OLD BRIEF STILL THERE"   # may be stale; OK
 ```
 

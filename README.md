@@ -25,6 +25,18 @@ The app is usable today for the core flows. The roadmap describes how it gets fr
 
 ## Quick start
 
+### Option A — Download the pre-built exe (no Python required)
+
+For end users who just want to run the app:
+
+🔗 **[Download the latest release](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)** — a single ~450 MB ZIP that contains the exe, all DLLs, bundled `ffmpeg`/`ffprobe`/`yt-dlp`, and the Silero VAD asset. Extract anywhere, run `WhisperProject.exe`. The 3 GB Whisper model downloads automatically on first launch.
+
+Step-by-step installation guide (Persian-friendly, end-user focused): **[docs/INSTALL.md](docs/INSTALL.md)**.
+
+### Option B — Build from source
+
+For developers who want to hack on the code.
+
 ### Prerequisites
 
 - Windows 10 / 11 (Linux and macOS are not officially supported yet, but the Python code is mostly portable)
@@ -129,7 +141,10 @@ Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual
 - [docs/COMPETITIVE_ANALYSIS_2026.md](docs/COMPETITIVE_ANALYSIS_2026.md) — 2026 STT landscape, models recommendation, Phase 4/6 inspiration
 - [docs/SESSION_LOG.md](docs/SESSION_LOG.md) — narrative record of the orchestrated build sessions
 - [docs/integrations/](docs/integrations/) — third-party interop research, briefs, acceptance plans (currently: oTranscribe)
-- [docs/BUILD.md](docs/BUILD.md) — PyInstaller pipeline, exit codes, `bin/` fallback rationale
+- [docs/INSTALL.md](docs/INSTALL.md) — end-user install guide (Persian-friendly): download the release, extract, run, troubleshoot SmartScreen / antivirus / DLL errors
+- [docs/BUILD.md](docs/BUILD.md) — PyInstaller pipeline, exit codes, `bin/` fallback rationale, packaging-bug regression notes
+- [docs/SESSION_8_PACKAGING_FIX.md](docs/SESSION_8_PACKAGING_FIX.md) — Session 8 bug write-up: silero VAD ONNX missing from bundle
+- [tests/smoke/README.md](tests/smoke/README.md) — why the compiled exe needs its own integration tests
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — release notes
 - [docs/DECISIONS.md](docs/DECISIONS.md) — ADRs for load-bearing architectural choices
 - [docs/auto-subtitles-feature.md](docs/auto-subtitles-feature.md) — deep dive on the subtitle download feature
@@ -145,7 +160,7 @@ The list below reflects the current state after Sessions 1–6. For everything f
 - **No model picker UI.** The active model is hard-coded to `faster-whisper-large-v3` via `config.json` `model_path`. To use a different model, edit `%LOCALAPPDATA%\WhisperProject\config.json` manually and point `model_path` at the new folder. UI picker is part of Phase 2b (deferred).
 - **No drag-and-drop, no folder watcher.** Add files via the Browse button; no batch-watch on a folder. Phase 2c.
 - **No live microphone / dictation mode.** Offline file transcription only. Phase 5.3 (live mic) is a separate effort.
-- **No CI yet.** The 137 local tests run with `pytest`, but no GitHub Actions workflow runs them on every push. Phase 7.3.
+- **No CI yet.** 136 local unit tests + 8 smoke tests run with `pytest`, but no GitHub Actions workflow runs them on every push. Phase 7.3.
 - **No in-app transcript editor.** Subtitles are written to disk as SRT/VTT/JSON; if you need to proofread, open them in oTranscribe (round-trip is built in: `Export → oTranscribe (.otr)` on the queue tab) or any subtitle editor. In-app editor is Phase 4.
 - **`large-v3` model is ~3 GB on disk and needs ~5 GB VRAM on GPU at fp16, or ~3 GB RAM on CPU int8.** Smaller models (e.g. `tiny`, `base`, `medium`, `distil-large-v3`) would be a click away if the model picker landed.
 
@@ -154,7 +169,8 @@ The list below reflects the current state after Sessions 1–6. For everything f
 - ✅ `yt-dlp --update` no longer runs unconditionally — gated behind `auto_update_yt_dlp` config flag and a 24h timestamp (Phase 0)
 - ✅ `ffprobe` resolves to `bin/ffprobe.exe` via the `bundled_binary` helper (Phase 0)
 - ✅ Sun Valley theme with Light/Dark/System picker under `View` menu (Phase 1.1)
-- ✅ 137 unit tests + 77% coverage on `core/` + `pytest` infrastructure (Phase 1b)
+- ✅ 136 unit tests + 77% coverage on `core/` + `pytest` infrastructure (Phase 1b)
+- ✅ `tests/smoke/` integration suite — drives the compiled exe end-to-end (catches PyInstaller packaging bugs that source-side tests can't) (Session 8)
 - ✅ Multi-format output (SRT/VTT/TSV/TXT/JSON/LRC), VAD on by default, word-level timestamps, language detection display, `BatchedInferencePipeline` on GPU (Phase 2a)
 - ✅ SQLite history with restore-on-launch, SponsorBlock integration, auto-transcribe-after-download, `--progress-template "%(progress)j"` (Phase 3a)
 - ✅ PyInstaller build pipeline with `build.bat`, smoke test, BUILD.md (Session 5 final compile)
