@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
 
 from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
+from .paths import bundled_binary
 from .task import TranscriptionTask
 from .writers import get_writer, supported_formats
 
@@ -41,15 +42,6 @@ MODEL: Any = None
 PIPELINE: Any = None  # BatchedInferencePipeline wrapper when device == "cuda"
 MODEL_READY = False
 MODEL_ERROR: str | None = None
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BIN_DIR = PROJECT_ROOT / "bin"
-
-
-def bundled_binary(name: str) -> str:
-    exe = f"{name}.exe" if os.name == "nt" else name
-    candidate = BIN_DIR / exe
-    return str(candidate) if candidate.exists() else name
 
 
 def log(msg: str, cb: Callable[[str], None] | None = None) -> None:

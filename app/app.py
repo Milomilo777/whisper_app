@@ -27,6 +27,7 @@ from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcri
 from core.config import load_config, save_config
 from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
+from core.paths import bin_dir as _resource_bin_dir
 
 logger = logging.getLogger(__name__)
 
@@ -234,10 +235,10 @@ class App(tk.Tk):
     # Generic helpers ---------------------------------------------------------
     def yt_dlp_path(self) -> str:
         exe = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
-        return os.path.join(os.path.dirname(os.path.abspath(self.entry_file)), "bin", exe)
+        return os.path.join(_resource_bin_dir(), exe)
 
     def bin_path(self) -> str:
-        return os.path.join(os.path.dirname(os.path.abspath(self.entry_file)), "bin")
+        return _resource_bin_dir()
 
     def browse(self) -> None:
         f = filedialog.askopenfilename()

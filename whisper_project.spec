@@ -1,14 +1,18 @@
 # whisper_project.spec — PyInstaller spec for the desktop app
 #
 # Run:
-#     pyinstaller --noconfirm whisper_project.spec
+#     pyinstaller --noconfirm --clean whisper_project.spec
 #
-# Output: dist/WhisperProject/WhisperProject.exe (one-dir layout).
-# False-positive antivirus rate is dramatically lower on --onedir than on
-# --onefile, so we deliberately stay one-dir.
+# Output: dist/WhisperProject.exe — a single self-contained file.
 #
-# The same exe doubles as the worker subprocess via the --worker flag handled
-# at the top of gui.py.
+# At launch the runtime extracts every bundled binary/data file to a
+# temporary directory exposed via sys._MEIPASS. The app reads bin/,
+# ffmpeg/ffprobe/yt-dlp, and faster_whisper's Silero VAD ONNX through
+# core/paths.py::resource_base() which prefers _MEIPASS in onefile mode.
+#
+# The same exe doubles as the worker subprocess via the --worker flag
+# handled at the top of gui.py — each worker subprocess extracts its
+# own _MEIPASS at start, which is the unavoidable cost of onefile.
 # pyright: reportMissingImports=false
 
 from PyInstaller.utils.hooks import collect_data_files
@@ -50,6 +54,7 @@ a = Analysis(
         'core.history',
         'core.logging_setup',
         'core.model_manager',
+        'core.paths',
         'core.task',
         'core.transcriber',
         'core.worker',
@@ -70,24 +75,27 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# Onefile layout: pass binaries + datas directly to EXE and omit COLLECT.
+# Everything (DLLs, ffmpeg.exe, silero_vad_v6.onnx, the bin/ directory)
+# is embedded in the exe and extracted to sys._MEIPASS on launch.
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
-    name='WhisperProject',
-    console=False,
-    icon=None,
-    # Pre-6.x flat layout: place bundled data (bin/) and DLLs alongside the
-    # exe, not inside _internal/. The app resolves bin/ via
-    # dirname(sys.executable); without this, ffmpeg/ffprobe/yt-dlp end up at
-    # dist/WhisperProject/_internal/bin/ and the exe silently can't find
-    # them at runtime.
-    contents_directory='.',
-)
-coll = COLLECT(
-    exe,
     a.binaries,
     a.datas,
+    [],
     name='WhisperProject',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=None,
 )

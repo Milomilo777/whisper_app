@@ -122,23 +122,44 @@ def test_exe_worker_transcribes_real_video(
             proc.terminate()
 
 
-def test_exe_bundles_silero_vad_asset(exe_path: Path) -> None:
-    """Regression for the Session 8 packaging bug.
-
-    The Silero VAD model (``faster_whisper/assets/silero_vad_v6.onnx``)
-    must be present alongside the exe. Without it, the worker dies the
-    moment VAD-filtered transcription kicks off — which is the default
-    setting. The spec collects it via
-    ``collect_data_files('faster_whisper')``.
+def test_exe_size_within_expected_range(exe_path: Path) -> None:
+    """The onefile exe carries ffmpeg + ffprobe + yt-dlp + faster_whisper
+    deps + Python runtime + Tk + Silero VAD onnx. Anything under 150 MB
+    is missing something major; over 400 MB means upstream wheels
+    got fat and we should investigate before shipping.
     """
-    onnx = exe_path.parent / "faster_whisper" / "assets" / "silero_vad_v6.onnx"
-    assert onnx.exists(), f"Silero VAD onnx missing from bundle: {onnx}"
-    assert onnx.stat().st_size > 1_000_000, "silero VAD asset suspiciously small"
+    size_mb = exe_path.stat().st_size / (1024 * 1024)
+    assert 150 <= size_mb <= 400, f"unexpected exe size: {size_mb:.1f} MB"
 
 
-def test_exe_bundles_ffmpeg(exe_path: Path) -> None:
-    """ffmpeg/ffprobe/yt-dlp must sit beside the exe, not under _internal/."""
-    bin_dir = exe_path.parent / "bin"
-    for name in ("ffmpeg.exe", "ffprobe.exe", "yt-dlp.exe"):
-        p = bin_dir / name
-        assert p.exists(), f"missing bundled binary: {p}"
+def test_exe_boots_and_loads_bundle(exe_path: Path, model_dir: Path) -> None:
+    """Spawn the exe in --worker mode and wait for the 'ready' event.
+
+    Reaching 'ready' means PyInstaller successfully extracted the
+    onefile archive (Silero VAD onnx, ffmpeg/ffprobe in bin/, the Tk
+    runtime, ctranslate2 DLLs) AND the worker imported every module
+    and loaded the Whisper model. This is the single-file analogue of
+    the old per-asset filesystem checks: if anything is missing from
+    the bundle, the worker emits 'startup_error' instead of 'ready'.
+    """
+    creation_flags = 0
+    if sys.platform == "win32":
+        creation_flags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
+    proc = subprocess.Popen(
+        [str(exe_path), "--worker"],
+        cwd=str(exe_path.parent),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        creationflags=creation_flags,
+        bufsize=1,
+    )
+    try:
+        _ready_or_error(proc, deadline_s=300.0)
+    finally:
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
+            proc.stdin.flush()
+            proc.wait(timeout=10)
+        except Exception:
+            proc.terminate()

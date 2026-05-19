@@ -54,18 +54,20 @@ def test_log_falls_back_to_logger(transcriber, caplog):
 
 
 def test_bundled_binary_returns_name_when_missing(transcriber, tmp_path, monkeypatch):
-    monkeypatch.setattr(transcriber, "BIN_DIR", tmp_path / "no-such-dir")
+    import core.paths as paths_mod
+    monkeypatch.setattr(paths_mod, "bin_dir", lambda: str(tmp_path / "no-such-dir"))
     assert transcriber.bundled_binary("ffmpeg") == "ffmpeg"
 
 
 def test_bundled_binary_returns_full_path_when_present(transcriber, tmp_path, monkeypatch):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    import core.paths as paths_mod
+    bin_dir_path = tmp_path / "bin"
+    bin_dir_path.mkdir()
     import os
     exe_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-    fake = bin_dir / exe_name
+    fake = bin_dir_path / exe_name
     fake.write_text("stub")
-    monkeypatch.setattr(transcriber, "BIN_DIR", bin_dir)
+    monkeypatch.setattr(paths_mod, "bin_dir", lambda: str(bin_dir_path))
     result = transcriber.bundled_binary("ffmpeg")
     assert result == str(fake)
 

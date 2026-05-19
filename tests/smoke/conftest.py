@@ -20,7 +20,7 @@ DEFAULT_MODEL_PARENT = (
     / "WhisperProject" / "Cache" / "models"
 )
 DEFAULT_MODEL_DIR = DEFAULT_MODEL_PARENT / "models--Systran--faster-whisper-large-v3"
-DEFAULT_EXE = REPO_ROOT / "dist" / "WhisperProject" / "WhisperProject.exe"
+DEFAULT_EXE = REPO_ROOT / "dist" / "WhisperProject.exe"
 
 
 @pytest.fixture(scope="session")
@@ -43,7 +43,11 @@ def model_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def exe_path() -> Path:
-    """Compiled WhisperProject.exe (one-dir build)."""
+    """Compiled WhisperProject.exe (single-file build).
+
+    Override path via $WHISPER_SMOKE_EXE — useful for testing the exe
+    from a clean directory rather than the dist/ that built it.
+    """
     p = Path(os.environ.get("WHISPER_SMOKE_EXE", str(DEFAULT_EXE)))
     if not p.exists():
         pytest.skip(f"compiled exe not present: {p}  (run build.bat)")
