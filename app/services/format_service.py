@@ -2,6 +2,10 @@
 
 Runs ``yt-dlp --dump-single-json`` in a daemon thread and posts the parsed
 info dict back to the App via ``app.format_events``.
+
+For Supreme Master TV URLs the yt-dlp probe is bypassed entirely; the
+``core.integrations.smtv`` module scrapes the page once and we
+populate the dropdowns from the SmtvEpisode it returns.
 """
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ import subprocess
 import threading
 from queue import Empty
 from typing import TYPE_CHECKING
+
+from core.integrations import smtv as smtv_mod
 
 if TYPE_CHECKING:
     from app.app import App
@@ -38,6 +44,10 @@ class FormatService:
         self.app.video_format_var.set("")
         if not url:
             self.app.format_status_var.set("Enter a URL to load available formats")
+            return
+
+        if smtv_mod.parse_episode_id(url) is not None:
+            self._lookup_smtv(url)
             return
 
         self.app.format_status_var.set("Loading formats...")
@@ -73,6 +83,80 @@ class FormatService:
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _apply_smtv_formats(self, episode: smtv_mod.SmtvEpisode) -> None:
+        """Populate the Download tab dropdowns from a parsed SMTV episode."""
+        app = self.app
+        audio_map: dict[str, dict[str, object]] = {}
+        video_map: dict[str, dict[str, object]] = {}
+
+        quality_labels = {
+            "1080p": ("HD 1080p", "video-1080"),
+            "720p":  ("HD 720p",  "video-720"),
+            "396p":  ("SD 396p",  "video-396"),
+        }
+        for f in episode.files:
+            if f.quality == "audio":
+                audio_map["MP3 (audio only)"] = {
+                    "kind": "smtv",
+                    "mode": "audio",
+                    "quality": "audio",
+                    "url": f.download_url,
+                }
+            elif f.quality in quality_labels:
+                label, mode = quality_labels[f.quality]
+                video_map[label] = {
+                    "kind": "smtv",
+                    "mode": mode,
+                    "quality": f.quality,
+                    "url": f.download_url,
+                }
+
+        app.audio_format_map = audio_map
+        app.video_format_map = video_map
+        app.current_video_title = episode.title
+        app.current_video_language = episode.lang_prefix
+        app._smtv_episode = episode  # type: ignore[attr-defined]
+
+        audio_values = list(audio_map.keys())
+        video_values = list(video_map.keys())
+        app.audio_format_combo["values"] = audio_values
+        app.video_format_combo["values"] = video_values
+        app.audio_format_var.set(audio_values[0] if audio_values else "")
+        app.video_format_var.set(video_values[0] if video_values else "")
+        try:
+            app.update_download_mode()
+        except Exception:  # noqa: BLE001
+            pass
+
+        sib_count = len(episode.siblings)
+        suffix = f"; {sib_count} sibling part{'s' if sib_count != 1 else ''} detected" if sib_count else ""
+        app.format_status_var.set(
+            f"SMTV episode loaded: {len(video_values)} video / "
+            f"{len(audio_values)} audio formats{suffix}"
+        )
+        # Surface the series-toggle checkbox if the tab built one
+        toggle = getattr(app, "_smtv_series_toggle", None)
+        if toggle is not None:
+            try:
+                toggle(visible=sib_count > 0)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _lookup_smtv(self, url: str) -> None:
+        """Background SMTV scrape; posts a ``smtv_formats`` event."""
+        self.app.format_status_var.set("Loading SMTV formats...")
+
+        def run() -> None:
+            try:
+                episode = smtv_mod.fetch_episode(url, timeout=30.0)
+                self.app.format_events.put(("smtv_formats", url, episode))
+            except smtv_mod.SmtvError as e:
+                self.app.format_events.put(("error", url, str(e)))
+            except Exception as e:  # noqa: BLE001
+                self.app.format_events.put(("error", url, f"SMTV lookup failed: {e}"))
+
+        threading.Thread(target=run, daemon=True).start()
+
     def poll(self) -> None:
         app = self.app
         while True:
@@ -86,6 +170,10 @@ class FormatService:
 
             if kind == "error":
                 app.format_status_var.set(payload)
+                continue
+
+            if kind == "smtv_formats":
+                self._apply_smtv_formats(payload)
                 continue
 
             audio_values = ["Best audio"]

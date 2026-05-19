@@ -169,12 +169,34 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         command=app._save_auto_transcribe_pref,
     ).grid(row=7, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0))
 
+    # SMTV "all parts" toggle. Built always, shown only when an SMTV
+    # episode with >=1 sibling parts is detected. format_service sets
+    # visibility via app._smtv_series_toggle().
+    app.smtv_download_all_parts_var = tk.BooleanVar(value=True)
+    smtv_frame = ttk.Frame(top)
+    smtv_check = ttk.Checkbutton(
+        smtv_frame,
+        text="Download all parts of this series (SMTV)",
+        variable=app.smtv_download_all_parts_var,
+    )
+    smtv_check.pack(side="left")
+
+    def _toggle(*, visible: bool) -> None:
+        if visible:
+            smtv_frame.grid(row=8, column=1, columnspan=2, sticky="w",
+                            padx=(6, 0), pady=(4, 0))
+        else:
+            smtv_frame.grid_remove()
+
+    _toggle(visible=False)
+    app._smtv_series_toggle = _toggle  # type: ignore[attr-defined]
+
     app.format_status_var = tk.StringVar(value="Enter a URL to load available formats")
     ttk.Label(top, textvariable=app.format_status_var).grid(
-        row=8, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0)
+        row=9, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0)
     )
     ttk.Button(top, text="Download", command=app.add_download).grid(
-        row=9, column=2, sticky="e", pady=(10, 0)
+        row=10, column=2, sticky="e", pady=(10, 0)
     )
 
     top.columnconfigure(1, weight=1)
