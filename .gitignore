@@ -26,8 +26,9 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.spec
-# ...but keep the committed production spec file.
+# ...but keep the committed production spec files.
 !whisper_project.spec
+!whisper_project_onedir.spec
 *.spec.bak
 
 # Virtual environments
@@ -69,6 +70,8 @@ test_output_*/
 # PyInstaller build outputs
 build/
 dist/
+dist_onedir/
+dist_installer/
 build_logs/
 
 # Test artifacts
