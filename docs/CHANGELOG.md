@@ -6,6 +6,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
+- **Session 11** — Supreme Master TV download integration. New module `core/integrations/smtv.py` (stdlib only) scrapes any `/{lang}1/v/<id>.html` episode page for video qualities (1080p/720p/396p), the MP3 audio file, the article-text transcript, and the sibling-parts playlist; the Download tab automatically routes SMTV URLs through this module instead of yt-dlp. Sub-features:
+  - **Series download.** When a multi-part episode is pasted, a "Download all parts of this series (SMTV)" checkbox appears (default ON) and enqueues one task per sibling part.
+  - **MP3 audio mode.** SMTV serves real MP3 files directly; the Audio mode dropdown shows `MP3 (audio only)` and the download path skips ffmpeg entirely.
+  - **Transcript persistence.** The page's article-text body is saved next to the media as `<base>.txt` (UTF-8). Auto-transcribe-after-download still runs unchanged on top, so users get two transcript surfaces — the site's editorial transcript and whisper's SRT/JSON.
+  - 23 unit tests under `tests/integrations/test_smtv.py` against three HTML fixtures; 2 live-network smoke tests under `tests/smoke/test_smtv_smoke.py` (skipped offline). `docs/integrations/smtv-research.md`, `smtv-brief.md`, `smtv-acceptance.md` document the URL contract and SMTV-T1..T8 verification tokens.
 - **Session 8** — `tests/smoke/` integration suite for the compiled exe. Three pytest files (`test_exe_real_e2e.py`, `test_app_headless.py`, plus a `conftest.py` with skip-guards for missing model / video / exe) and a `README.md` explaining why these tests have to live alongside the unit suite — packaging bugs are invisible from source-side. `test_exe_real_e2e.py` spawns `WhisperProject.exe --worker`, sends the actual JSON `transcribe` command, and asserts SRT + JSON land on disk; `test_app_headless.py` drives the Tk App in a withdrawn window through every service. Regression guards `test_exe_bundles_silero_vad_asset` and `test_exe_bundles_ffmpeg` lock in the Session 8 packaging fix.
 - **Session 8** — `docs/SESSION_8_PACKAGING_FIX.md` documenting the silero_vad_v6.onnx packaging bug and why source-side tests didn't catch it.
 - **Session 7** — `docs/architecture-diagrams.md` (Mermaid simple overview + SVG embed + pointer to prose ARCHITECTURE.md). Hyphenated filename to avoid a case-insensitive Windows clash with the existing `ARCHITECTURE.md`. The Mermaid view uses the same color palette as the SVG so the two diagrams feel related at a glance. README now links to it as the first "Project documentation" entry.
@@ -22,6 +27,8 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Changed
 
+- **Session 11** — `app/services/format_service.py` and `app/services/download_service.py` now branch on SMTV URLs (`core.integrations.smtv.parse_episode_id` and a `kind: "smtv"` marker on the format dict) and bypass the yt-dlp probe / spawn entirely. No behaviour change for YouTube or any other URL.
+- **Session 11** — Both PyInstaller specs (`whisper_project.spec` and `whisper_project_onedir.spec`) gain `core.integrations.smtv` in `hiddenimports` so the module survives onefile bundling and onedir-via-installer packaging.
 - **Session 7** — `docs/MANUAL_STEPS.md` scrubbed: the `## A. Security` block that named two leaked GitHub PAT prefixes was removed. Sections re-lettered (B → A through H → G) so the file still reads cleanly. The Summary was rewritten to drop the "two human-required items" framing; there's now exactly one open human decision — which Phase to ship next.
 - **Session 7** — `README.md` "Project documentation" footer now points at `architecture-diagrams.md` first, then the direct SVG link, then the prose ARCHITECTURE.md, so a new reader hits the visuals before the prose.
 

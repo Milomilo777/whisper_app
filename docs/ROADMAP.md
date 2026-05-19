@@ -39,6 +39,7 @@ Integration briefs live under `docs/integrations/` and follow a separate cadence
 ## Completed integrations
 
 - **oTranscribe** (Session 4) — bidirectional `.otr` ↔ SRT round-trip, Export/Import UI, `Help → Open oTranscribe`. Reference: [research note](integrations/otranscribe-research.md), [implementation brief](integrations/otranscribe-brief.md), [acceptance plan](integrations/otranscribe-acceptance.md).
+- **Supreme Master TV download** (Session 11) — Download tab auto-detects SMTV episode URLs (`/{lang}1/v/<id>.html`), reads `videoPlayerData` from the page, exposes 1080p/720p/396p MP4 plus an MP3 audio mode in the existing dropdowns. Multi-part series get a "Download all parts" checkbox (default on). Page-embedded article transcript is saved as `<base>.txt` next to the media; auto-transcribe-after-download still runs on top for the whisper SRT/JSON. No new dependencies, stdlib only. Reference: [research note](integrations/smtv-research.md), [implementation brief](integrations/smtv-brief.md), [acceptance plan](integrations/smtv-acceptance.md).
 
 ---
 

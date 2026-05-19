@@ -534,6 +534,57 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 11 — 2026-05-20 — Hands-off agent, Supreme Master TV integration
+
+**Coordinator:** Claude Opus 4.7 (1M context) in hands-off mode on `release/single-file-exe`. Continues directly from Session 10's dual-deliverable work — same branch, no rebuild dependency on master.
+
+**Goal as briefed:** "اضافه کردن قابلیت دانلود از سایت Supreme Master TV". Three sub-features named by the user's teammate: (1) series download, (2) MP3 conversion of audio mode, (3) subtitle / transcript handling or auto-transcribe fallback.
+
+**Phase 1 — Research:**
+- yt-dlp 2026.03.17 has **no** SMTV extractor; the generic embed detector also returns "Unsupported URL". Implementation must be original.
+- Every episode page at `/{lang}1/v/<12-digit>.html` carries a JavaScript global `videoPlayerData` that exposes `videoFile` (an array of `[quality, relative_path]` pairs covering 1080p / 720p / 396p / audio), `youTubeUrl`, `videoLength`, `vid`, and `videoPoster`. Multi-part series link all parts from a `<div class="playlist-contaner">` block on every episode page (Part 1 → Part 7 anchors visible from the Part 1 page and vice-versa).
+- Each episode page contains the full article transcript inside `<div class="article-text" id="article-text">`. The "Download Docx" button is generated client-side via `html-docx.js` from the same DOM — there is no server endpoint for the docx.
+- Direct CDN download endpoint: `https://cf-vdo.suprememastertv.com/vod/video/download-mp4.php?file=<path>`. HTTP 200 OK, no auth, `Content-Disposition: attachment` and a permissive Cloudflare. `robots.txt` has no Disallow rules. No captcha during research.
+- Site copyright footer asserts "All Rights Reserved" but no explicit ToS exists and the site itself provides "Download" buttons on every episode page — not a license blocker.
+
+**Phase 2 — Brief:** Locked scope in `docs/integrations/smtv-research.md` (~ 340 lines) and `docs/integrations/smtv-brief.md` (~ 470 lines). Recommended **Option B** (pure-Python module + stdlib HTTP streaming) over the yt-dlp plugin route — the scrape is so direct that the plugin's tax buys nothing. Estimated 9.5 hours of work; no new heavy dependencies; no ToS or scope blocker → proceeded directly to Phase 3.
+
+**Phase 3 — Implementation:**
+- `core/integrations/smtv.py` (~ 430 lines, stdlib only). Public surface: `is_smtv_url`, `parse_episode_id`, `fetch_episode`, `best_url_for_mode`, `filename_for`, `transcript_filename`, plus `SmtvFile / SmtvSibling / SmtvEpisode` dataclasses and an `SmtvError` exception. The sibling-extractor was the only non-trivial regex puzzle: the `playlist-contaner` div has no matching closing `</div>` that's safe to anchor on, so the implementation finds the marker, walks until `id="footer"`, and filters anchors by the title's part-prefix and total-part-count. This correctly drops "you might also like" anchors that sit inside the same container.
+- `tests/integrations/test_smtv.py` (23 tests against three hand-written HTML fixtures + monkey-patched urlopen). Plus `tests/smoke/test_smtv_smoke.py` (2 live-network tests, skipped when offline) that exercise the contract against the real reference URLs.
+- `app/services/format_service.py` — at the top of `lookup_formats`, route URLs that `parse_episode_id` recognises to a new `_lookup_smtv`. Adds an `_apply_smtv_formats` handler that populates the existing audio/video dropdowns from the parsed episode. Stashes the parsed episode on `app._smtv_episode` for the download stage to reuse.
+- `app/services/download_service.py` — `_run_smtv_task` streams the chosen CDN URL via chunked `urllib.request.urlopen` to `<file>.part`, posts throttled `progress` events into the existing queue, atomic-renames to the final basename on success, and writes the page transcript as `<base>.txt`. Emits `done_full` with the saved path so the existing Phase 3a auto-transcribe wiring fires unchanged.
+- `_build_smtv_sibling_tasks` enqueues one task per sibling when the new "Download all parts of this series (SMTV)" checkbox is on. Each sibling task carries its own pre-fetched `SmtvEpisode` so the download thread doesn't need a second page-fetch round-trip.
+- `app/widgets/tabs.py` — new `smtv_download_all_parts_var` checkbox, packed conditionally via `app._smtv_series_toggle()` set by the format service when a sibling list is found.
+- Both PyInstaller specs gain `core.integrations.smtv` in `hiddenimports`. Both deliverables rebuilt: `dist\WhisperProject.exe` (200 114 862 bytes, 190.8 MB) and `dist_installer\WhisperProject-Setup.exe` (143 823 546 bytes, 137.2 MB). Numbers basically unchanged from Session 10's baseline — the new module is tiny.
+
+**Verification:**
+- Unit suite went from 139 → 162 tests passing (+ 23 new SMTV tests). Zero regressions on Phase 0/1a/1b/2a/2-oTranscribe/3a paths.
+- Live `tests/smoke/test_smtv_smoke.py` — 2 passed in 2.83 s. Confirms the contract holds against `suprememastertv.com` as of today.
+- `tests/smoke/test_exe_real_e2e.py` against rebuilt onefile — 3 passed in 144.53 s; reference video transcribed to SRT + JSON with `-->` arrows.
+- Same smoke against `C:\Temp\installed_test\WhisperProject.exe` (post-install) — 1 passed in 108.31 s. Both packaging modes survive the new module.
+- SMTV-T3 / T4 / T5 / T6 documented as manual UI workflows in `docs/integrations/smtv-acceptance.md` because they verify Tk-driven download behaviour the harness cannot script without writing a UI driver.
+
+**Decisions worth remembering:**
+- **No yt-dlp plugin.** The page exposes everything in plain `videoPlayerData[...]` assignments, so a thin scrape is cleaner than wrestling with PyInstaller-bundle plugin discovery. The DownloadService routes on a `kind: "smtv"` marker in the format dict, never invokes a subprocess for SMTV URLs.
+- **Stash the parsed episode on the App.** `format_service._apply_smtv_formats` writes `app._smtv_episode`; `enqueue_from_form` reads it back when building tasks. Saves a duplicate fetch, and the sibling list / transcript / poster all flow through this object.
+- **Filter siblings by title prefix and total part count, not by container position.** The playlist-contaner div has no easily regex-able close marker; filtering anchors after the marker by title-shape ("Same series name, Part N of M with matching M") gives a reliable cut without DOM parsing.
+- **Transcript is `<base>.txt` next to the media.** Auto-transcribe still runs on top, so users get two transcript surfaces — the editorial text from the site and whisper's SRT/JSON. The brief explicitly chose not to add UI to pick between them.
+- **`tk.call("after", "info")` returns a tuple, not a string.** Pinned this in Session 10's `App.destroy` fix; SMTV didn't add new `after()` schedules, so no exposure here, but the regression test still guards it.
+
+**Things explored and explicitly rejected:**
+- *Adding `beautifulsoup4` / `lxml` for HTML parsing.* The regex approach is fragile in theory but the page surface we depend on is stable JS variable assignments, not arbitrary DOM. Pulling in BS4 would inflate the onefile bundle by ~ 3-5 MB for no real safety gain.
+- *Writing a yt-dlp extractor plugin.* PyInstaller plugin discovery inside a onefile bundle is finicky; the page surface is simple enough that the abstraction tax isn't worth it. Documented in the research note's option matrix.
+- *Reproducing the html-docx.js client-side docx generation in Python.* `python-docx` is heavy and the user can use the site's own button. The `.txt` we save covers the "I want the transcript next to my video" need.
+- *Search-driven UI inside the app.* Out of scope per the brief — paste-an-episode-URL handles all three sub-features the user listed.
+
+**Pending user actions:**
+- Run the SMTV-T3..T6 manual workflows in the rebuilt UI to confirm the visible behaviour (the script-driven SMTV-T1, T2, T7, T8 all pass).
+- Decide whether to push the new commits to `origin/release/single-file-exe`.
+- Optional: code-sign both `WhisperProject.exe` and `WhisperProject-Setup.exe` before any wider distribution.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:

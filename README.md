@@ -16,6 +16,7 @@ Built for the workflow of producing bilingual subtitle files (English ↔ Persia
 - **Multiple parallel workers** for transcription, each holding the model in memory.
 - **Per-phase status** during downloads — you see when the subtitle phase succeeds, fails, or has no captions available, separately from the media phase.
 - **oTranscribe round-trip** — export a finished transcription to `.otr` for human proofing in [oTranscribe](https://otranscribe.com/), then import the edited `.otr` back to SRT.
+- **Supreme Master TV download** — paste any `/v/<id>.html` episode URL into the Download tab to pick from the page's HD 1080p / 720p / 396p MP4 or the direct MP3 audio file. Multi-part series can be downloaded in one click, and the page's article transcript is saved next to the media as `<base>.txt`. Bypasses yt-dlp entirely — direct HTTPS to the CDN.
 
 ## Status
 
@@ -140,7 +141,7 @@ Full details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). At-a-glance visual
 - [docs/ROADMAP.md](docs/ROADMAP.md) — prioritized plan, 7 phases, status snapshot at the top
 - [docs/COMPETITIVE_ANALYSIS_2026.md](docs/COMPETITIVE_ANALYSIS_2026.md) — 2026 STT landscape, models recommendation, Phase 4/6 inspiration
 - [docs/SESSION_LOG.md](docs/SESSION_LOG.md) — narrative record of the orchestrated build sessions
-- [docs/integrations/](docs/integrations/) — third-party interop research, briefs, acceptance plans (currently: oTranscribe)
+- [docs/integrations/](docs/integrations/) — third-party interop research, briefs, acceptance plans (currently: oTranscribe, Supreme Master TV)
 - [docs/INSTALL.md](docs/INSTALL.md) — end-user install guide (Persian-friendly): download the release, extract, run, troubleshoot SmartScreen / antivirus / DLL errors
 - [docs/BUILD.md](docs/BUILD.md) — PyInstaller pipeline, exit codes, `bin/` fallback rationale, packaging-bug regression notes
 - [docs/SESSION_8_PACKAGING_FIX.md](docs/SESSION_8_PACKAGING_FIX.md) — Session 8 bug write-up: silero VAD ONNX missing from bundle
