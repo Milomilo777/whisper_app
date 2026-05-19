@@ -505,6 +505,35 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 10 — 2026-05-20 — Hands-off agent, dual deliverable (onefile exe + Inno Setup installer)
+
+**Coordinator:** Claude Opus 4.7 (1M context) in hands-off mode with two roles (architect + agent) on `release/single-file-exe`.
+
+**Goal as briefed:** convert the onedir output into "a single double-clickable file" for non-technical users (Method A), then add a Windows installer (Method B) on the same branch — both must transcribe a real video end-to-end before being declared done.
+
+**What got done:**
+- **Phase 0 — completed Session 9's after-callback fix.** Commit `8235503` looked correct but parsed `tk.call("after", "info")` with `str(pending).split()`. That call returns a tuple in modern Tkinter; the parser produced garbage tokens like `"('after#0',)"`, and `after_cancel` accepted them silently — so the "fix" never cancelled anything. Replaced the parser with a tuple-aware version, added three regression tests including a marker test that fails if anyone reverts to the broken form. Commit `6266aab`.
+- **Phase 1 — Method A: single-file exe.** Added `core/paths.py::resource_base()` to give one place that knows where bundled resources live (`sys._MEIPASS` → onefile, `dirname(sys.executable)` → onedir, repo root → source). Routed `app.bin_path()`, `app.yt_dlp_path()`, and `core.transcriber.bundled_binary` through it. Rewrote `whisper_project.spec` to onefile shape (binaries+datas inside `EXE()`, no `COLLECT`, no `contents_directory`). Updated `tests/smoke/test_exe_real_e2e.py` to use a 150–400 MB size check and a "boot to ready" check instead of the old "files-next-to-exe" assertions that have no meaning under onefile. Built `dist/WhisperProject.exe` at 190.8 MB; D1–D10 all PASS. Commit `a9cdbde` + `2b637c9`. Full evidence in `docs/SESSION_SINGLE_FILE_EXE.md`.
+- **Phase 2 — Method B: Inno Setup installer.** Installed Inno Setup 6 via winget (lands under `%LOCALAPPDATA%\Programs\Inno Setup 6`, *not* Program Files). Authored `whisper_project_onedir.spec` (parallel to the onefile spec, retains `COLLECT` + `contents_directory='.'`) and `installer.iss`. Built `dist_installer/WhisperProject-Setup.exe` at 137.1 MB. Silent install/uninstall both clean, 3 shortcuts created and removed correctly, `test_exe_worker_transcribes_real_video` passes against the installed exe. Full evidence in `docs/SESSION_DUAL_DELIVERABLE.md`.
+
+**Decisions worth remembering:**
+- The dual-spec layout — `whisper_project.spec` (onefile) and `whisper_project_onedir.spec` (onedir) — both build from the same source. `core.paths.resource_base()` is the contract that makes this possible. Don't unify the specs; their structural difference (`COLLECT` vs embedded `EXE`) is exactly the point.
+- The installer's lower size hint (150 MB) was an estimate; the real artefact is 137.1 MB because LZMA2 ultra compressed the 478 MB onedir tree at 28.7 %. Verified completeness through DB4 (every required file present after install) and DB5 (smoke E2E passes from the installed location) — size hint is qualitative.
+- Onefile worker subprocesses re-extract the full bundle on each spawn (~200 MB per `_MEIPASS`). Test harnesses that taskkill-terminate the exe skip the bootloader's atexit cleanup and leak the temp dir. Real users closing the window do not have this problem; tooling needs WM_CLOSE.
+- The installer skips desktop icon creation when launched with `/TASKS="!desktopicon"`; default tasks (or omitting `/TASKS`) install all three shortcuts.
+
+**Things explored and explicitly rejected:**
+- *Refactoring the worker invocation to an in-process thread to skip per-spawn `_MEIPASS` extraction under onefile.* Would break the worker's process-isolation guarantee. Left for a separate design pass if real users complain.
+- *Code-signing both deliverables.* Out of scope — same reason as Session 9 declined it. SmartScreen warning will appear on the installer for unsigned binaries.
+- *Cleaning up `build.bat`'s now-dead xcopy fallback.* Harmless under onefile; left alone to keep this branch tightly scoped.
+- *Renaming the branch from `release/single-file-exe` to `release/dual-deliverable`.* The branch produces both artefacts now, but the rename is cosmetic and the commit history already tells the story. Left to the user's discretion at merge time.
+
+**Pending user actions:**
+- Decide whether to merge to `master`, tag a release, and/or rename the branch. No push/tag/release were performed during this session per the prompt's prohibition list.
+- Optional: code-sign both `WhisperProject.exe` and `WhisperProject-Setup.exe` before public distribution.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
