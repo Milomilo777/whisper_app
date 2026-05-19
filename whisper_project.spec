@@ -59,6 +59,7 @@ a = Analysis(
         'core.transcriber',
         'core.worker',
         'core.integrations.otranscribe',
+        'core.integrations.smtv',
         'core.writers',
         'core.writers.base',
         'core.writers.srt',
