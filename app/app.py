@@ -177,9 +177,20 @@ class App(tk.Tk):
         # time after destroy() and spam the console with
         #   invalid command name "<id>poll"
         # because their bound-method Tcl command no longer exists.
+        #
+        # tk.call("after", "info") returns a tuple of IDs when >=1 callback
+        # is pending and an empty string when none are. The earlier
+        # str(pending).split() path produced garbage tokens like
+        # "('after#0',)" for the tuple case, which after_cancel silently
+        # accepts without actually cancelling — so the fix was a no-op.
         try:
-            pending = self.tk.call("after", "info") or ""
-            for cb_id in str(pending).split():
+            pending = self.tk.call("after", "info")
+            if isinstance(pending, (tuple, list)):
+                ids = list(pending)
+            else:
+                text = str(pending).strip()
+                ids = text.split() if text else []
+            for cb_id in ids:
                 try:
                     self.after_cancel(cb_id)
                 except Exception:  # noqa: BLE001
