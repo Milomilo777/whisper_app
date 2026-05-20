@@ -88,8 +88,20 @@ codebase shipped these corrections under the same tag:
 
 Plus two new regression tests under
 `tests/core/test_transcriber_helpers.py` pin the atomic-write
-contract. Unit suite went from 162 → 164 passed. All three
-deliverables were rebuilt and clean-machine-tested end-to-end:
+contract, and a new live-network E2E suite under
+`tests/smoke/test_smtv_download_e2e.py` exercises the **full SMTV
+download path** against the real CDN: it scrapes a live episode,
+streams a real MP4 to a temp dir, verifies the bytes carry a real
+``ftyp`` MP4 box, confirms the page transcript landed as
+``<base>.txt`` alongside, validates the `done_full` event payload
+that auto-transcribe-after-download keys on, and a second test
+proves cancellation cleans up the ``.part`` + final file. This
+closes the previous gap where the SMTV pipeline was only tested
+against HTML fixtures + a CDN HEAD — never with a real download.
+Unit + smoke now: 164 unit + 6 SMTV-related smoke passes.
+
+All three deliverables were rebuilt and clean-machine-tested
+end-to-end:
 
 | Method | Smoke | Notes |
 |---|---|---|
