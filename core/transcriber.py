@@ -314,6 +314,26 @@ def transcribe(
             raise RuntimeError(MODEL_ERROR)
         time.sleep(0.5)
 
+    # The long-lived worker process reads config once at module
+    # import. Re-read the *runtime-mutable* keys (diarization,
+    # output_formats) so UI toggles take effect without a restart.
+    # Keys read directly off the module-level ``config`` (vad,
+    # word_timestamps, batch_size, …) still respect the
+    # established mutation pattern that tests rely on.
+    runtime_cfg = load_config()
+    config["diarization_enabled"] = bool(
+        runtime_cfg.get("diarization_enabled", config.get("diarization_enabled", False))
+    )
+    config["diarization_num_speakers"] = int(
+        runtime_cfg.get("diarization_num_speakers", config.get("diarization_num_speakers", -1))
+    )
+    config["diarization_cluster_threshold"] = float(
+        runtime_cfg.get(
+            "diarization_cluster_threshold",
+            config.get("diarization_cluster_threshold", 0.5),
+        )
+    )
+
     duration = get_duration(task.file_path)
     start = time.time()
     log(f"Processing: {task.file_path}", log_cb)
@@ -371,6 +391,34 @@ def transcribe(
             progress_cb(percent)
 
         segments_data.append(_segment_to_dict(seg, want_words))
+
+    # Speaker diarization (opt-in). Runs after the transcription
+    # pass on the same audio; uses sherpa-onnx with bundled ONNX
+    # models. Each transcript segment then carries a "speaker"
+    # field, which the writers (SRT/MD/DOCX) surface as a "Speaker
+    # N:" prefix. Failure here logs and continues — diarization is
+    # a nice-to-have, not a hard requirement.
+    if config.get("diarization_enabled", False) and not task.cancelled:
+        try:
+            from . import diarization as _diar
+
+            if _diar.is_available():
+                log("Diarising speakers...", log_cb)
+                num_speakers = int(config.get("diarization_num_speakers", -1))
+                threshold = float(config.get("diarization_cluster_threshold", 0.5))
+                diar_segments = _diar.diarize(
+                    task.file_path,
+                    num_speakers=num_speakers,
+                    cluster_threshold=threshold,
+                )
+                _diar.assign_speakers_to_segments(segments_data, diar_segments)
+                speakers = sorted({s.speaker for s in diar_segments})
+                log(f"Diarisation: {len(speakers)} speaker(s) — {', '.join(speakers)}",
+                    log_cb)
+            else:
+                log(f"Diarisation skipped: {_diar.availability_reason()}", log_cb)
+        except Exception as e:  # noqa: BLE001
+            log(f"Diarisation failed (continuing without speakers): {e}", log_cb)
 
     written = _write_outputs(base, segments_data, task.file_path)
     log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",

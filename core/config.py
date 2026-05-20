@@ -46,6 +46,10 @@ DEFAULT_CONFIG = {
     # Phase 3a — yt-dlp killer features
     "auto_transcribe_after_download": False,
     "sponsorblock_categories": [],
+    # v0.7.1 — diarization (off by default; opt-in via Transcribe tab)
+    "diarization_enabled": False,
+    "diarization_num_speakers": -1,         # -1 = auto-cluster
+    "diarization_cluster_threshold": 0.5,
 }
 
 

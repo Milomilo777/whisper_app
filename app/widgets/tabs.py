@@ -78,6 +78,35 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         variable=app.word_timestamps_var,
         command=app._save_transcribe_prefs,
     ).pack(side="left", padx=(20, 0))
+
+    # Speaker diarization toggle (sherpa-onnx, on-device). Disabled
+    # when the ONNX models or the sherpa-onnx Python package aren't
+    # present; the label adapts so the user understands why.
+    try:
+        from core import diarization as _diar  # type: ignore[import-not-found]
+        _diar_available = _diar.is_available()
+        _diar_reason = _diar.availability_reason() if not _diar_available else ""
+    except Exception:  # noqa: BLE001
+        _diar_available = False
+        _diar_reason = "sherpa-onnx not present"
+    app.diarization_var = tk.BooleanVar(
+        value=bool(_diar_available) and bool(app.app_config.get("diarization_enabled", False))
+    )
+    diar_label = (
+        "Identify speakers (diarization)"
+        if _diar_available
+        else f"Identify speakers (unavailable: {_diar_reason})"
+    )
+    diar_check = ttk.Checkbutton(
+        options,
+        text=diar_label,
+        variable=app.diarization_var,
+        command=app._save_transcribe_prefs,
+    )
+    if not _diar_available:
+        diar_check.state(["disabled"])
+    diar_check.pack(side="left", padx=(20, 0))
+
     ttk.Button(options, text="Advanced...", command=app.open_advanced_dialog).pack(
         side="left", padx=(20, 0)
     )

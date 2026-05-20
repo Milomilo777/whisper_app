@@ -199,6 +199,28 @@ def test_srt_writer_uses_comma_decimal():
     assert "00:00:00.500" not in body
 
 
+def test_srt_writer_prepends_speaker_when_present():
+    body = srt.write([
+        {"start": 0.0, "end": 1.0, "text": "alpha", "speaker": "Speaker 00"},
+        {"start": 1.0, "end": 2.0, "text": "beta"},  # no speaker
+    ])
+    assert "Speaker 00: alpha" in body
+    # The unlabeled segment stays clean — no stray "Speaker" prefix.
+    lines = body.splitlines()
+    beta_line = next(ln for ln in lines if ln == "beta")
+    assert beta_line == "beta"
+
+
+def test_json_writer_includes_speaker_when_present():
+    body = json_writer.write([
+        {"start": 0.0, "end": 1.0, "text": "alpha", "speaker": "Speaker 00"},
+        {"start": 1.0, "end": 2.0, "text": "beta"},
+    ])
+    payload = json.loads(body)
+    assert payload[0]["speaker"] == "Speaker 00"
+    assert "speaker" not in payload[1]
+
+
 # --- Markdown writer ------------------------------------------------------
 
 

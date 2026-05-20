@@ -442,12 +442,66 @@ Take the app from "produces subtitle files" to "produces good subtitle files tha
 
 These are the items that take the project beyond "best-in-class for our niche" into "ambitious."
 
-### 5.1 Speaker diarization (pyannote.audio / WhisperX)
+### 5.1 Speaker diarization — SHIPPED v0.7.0 (Session 13)
 
-- **Source:** WhisperX, Whisper-WebUI, Buzz
-- **Effort:** L
-- **Why:** AUDIT D11. Meeting / podcast / interview use cases.
-- **Implementation:** add WhisperX as an optional dep. Checkbox "Identify speakers." Output adds `SPEAKER_00`, `SPEAKER_01` to SRT.
+- **Status:** ✓ Done. `core/diarization.py` wraps sherpa-onnx
+  pyannote-segmentation-3.0 + 3D-Speaker CAMPlus EN embedding.
+  Toggle on the Transcribe tab; SRT / JSON / MD / DOCX all carry
+  speaker labels when present. No HuggingFace token required.
+  ONNX models live in `bin/diarization/` and ship with each
+  installer.
+
+### 5.1b System-wide dictation hotkey (deferred — needs own session)
+
+- **Source:** Superwhisper, Wispr Flow, MacWhisper (live), Handy,
+  VoiceTypr.
+- **Effort:** XL. Genuinely large — a full session of its own.
+- **Why:** The hottest growth category in 2025/2026 Whisper apps.
+  Defines a separate product mode ("dictate anywhere") that
+  doesn't fit on the existing Transcribe tab.
+- **Why not now:** v0.7.0 already lands four priorities in one
+  session (writers, CI, diarization, viewer). Adding a fifth XL
+  item would compromise quality on all five. This is the right
+  feature to start v0.8 with.
+- **Design sketch for the next session:**
+  - **Global hotkey listener** — `pynput` or `keyboard` (both
+    pip-installable, no admin needed on most Windows setups). One
+    background thread, daemon. Hotkey defaults to `Ctrl+Win+Space`.
+  - **Audio capture** — `sounddevice` reading 16 kHz mono from the
+    default input device into a circular buffer. Stop on second
+    press or after 30 s of silence.
+  - **Real-time inference** — `distil-large-v3` or `tiny.en` so
+    a 5 s clip transcribes in <1 s. Use `faster_whisper.transcribe`
+    on the buffer when the user releases the hotkey, not streaming.
+    LocalAgreement-n streaming is a future v0.9 step.
+  - **Text injection** — `pyautogui.typewrite` or, better,
+    `SendInput` via `ctypes` to drop the transcribed text into
+    whatever window had focus when the hotkey fired. Honour the
+    OS keyboard layout.
+  - **System tray icon** — `pystray` + `PIL.Image` for a 32x32
+    glyph that shows recording state (red dot when capturing).
+  - **Permissions** — Windows microphone privacy prompt needs to
+    be navigated; document the one-time consent dialog.
+  - **Settings** — hotkey customiser dialog, "Run on Windows
+    startup" toggle (via the Run registry key under HKCU).
+- **Acceptance criteria for the next session:**
+  - Press hotkey anywhere → red tray icon → speak → press hotkey →
+    text appears in the focused window in <2 s.
+  - Hotkey rebinding works without restart.
+  - No crash if hotkey conflicts with another app's hotkey
+    (graceful fallback to a different combo).
+  - Real-machine test: drop text into Notepad, Slack, Chrome
+    address bar, and a VSCode buffer.
+- **Estimated effort:** 5-7 hours of focused work (XL bucket).
+
+### 5.1c Original 5.1 reference (pyannote / WhisperX)
+
+- The shipped Session-13 implementation chose sherpa-onnx over
+  pyannote.audio specifically to avoid the HuggingFace token
+  requirement that pyannote-audio enforces on its diarization
+  pipelines. WhisperX would have been the other option but it
+  drags in PyTorch (~ 700 MB) for marginal accuracy gains on this
+  app's use cases.
 
 ### 5.2 Vocal separation (Demucs / UVR)
 

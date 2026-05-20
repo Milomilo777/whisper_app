@@ -19,6 +19,18 @@ python-docx>=1.0
 # Drag-and-drop into the Tk window (loaded lazily — falls back gracefully)
 tkinterdnd2>=0.4.0
 
+# Speaker diarization (sherpa-onnx + pyannote-3.0 ONNX + 3D-Speaker
+# embedding). No HuggingFace token required. Lazy-imported by
+# core.diarization, so the absence of the wheel disables the
+# Diarization toggle in the UI but doesn't crash anything else.
+sherpa-onnx>=1.10
+
+# Embedded media player for the transcript viewer (Tools → Open
+# transcript viewer). Needs VLC installed on the system to render
+# the libvlc.dll backend; the viewer falls back to a "Open in
+# system player" button when libvlc isn't found.
+python-vlc>=3.0
+
 # Optional: dark/light system-theme detection used when theme="system"
 # (sv-ttk falls back to dark if missing). Uncomment if desired.
 # darkdetect>=0.8.0

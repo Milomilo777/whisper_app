@@ -14,6 +14,7 @@ import sv_ttk
 
 from app.dialogs.advanced import AdvancedDialog
 from app.dialogs.model_download import ModelDownloadDialog
+from app.dialogs.transcript_viewer import open_viewer as _open_transcript_viewer
 from app.domain.tasks import TranscriptionTask, VideoDownloadTask
 from app.observability import init_sentry
 from app.services.download_service import DownloadService
@@ -91,6 +92,8 @@ class App(tk.Tk):
     subtitle_status_var: tk.StringVar
     auto_transcribe_var: tk.BooleanVar
     smtv_download_all_parts_var: tk.BooleanVar
+    # Diarization toggle (Transcribe tab)
+    diarization_var: tk.BooleanVar
     format_status_var: tk.StringVar
     download_tree: "ttk.Treeview"
     download_row_map: dict[str, Any]
@@ -241,6 +244,8 @@ class App(tk.Tk):
         )
 
         h = tk.Menu(m, tearoff=0)
+        h.add_command(label="Open transcript viewer...", command=self._open_transcript_viewer_picker)
+        h.add_separator()
         h.add_command(label="Open log folder", command=self.open_log_folder)
         h.add_command(label="Open oTranscribe...", command=self.integrations_service.open_otranscribe)
         a = tk.Menu(m, tearoff=0)
@@ -290,6 +295,25 @@ class App(tk.Tk):
                 break
         menu.add_separator()
         menu.add_command(label="Clear list", command=self._clear_recent)
+
+    def _open_transcript_viewer_picker(self) -> None:
+        """Open the transcript viewer with a file picker."""
+        _open_transcript_viewer(self, None)
+
+    def open_transcript_viewer_for(self, file_path: str) -> None:
+        """Open the viewer for a transcript JSON found next to file_path.
+
+        Used by the Last Result card's "View transcript" button so a
+        user one click away from the just-finished output. If the
+        JSON isn't on disk for any reason, we fall back to the file
+        picker.
+        """
+        base, _ = os.path.splitext(file_path)
+        json_path = base + ".json"
+        if os.path.isfile(json_path):
+            _open_transcript_viewer(self, json_path)
+        else:
+            _open_transcript_viewer(self, None)
 
     def _open_recent(self, path: str) -> None:
         if not os.path.isfile(path):
@@ -425,6 +449,8 @@ class App(tk.Tk):
     def _save_transcribe_prefs(self) -> None:
         self.app_config["vad_enabled"] = bool(self.vad_enabled_var.get())
         self.app_config["word_timestamps"] = bool(self.word_timestamps_var.get())
+        if getattr(self, "diarization_var", None) is not None:
+            self.app_config["diarization_enabled"] = bool(self.diarization_var.get())
         try:
             save_config(self.app_config)
         except Exception:  # noqa: BLE001
@@ -846,10 +872,20 @@ class App(tk.Tk):
                 foreground="#a00",
             ).pack(anchor="w")
 
+        button_row = ttk.Frame(self.last_result_body)
+        button_row.pack(anchor="w", pady=(8, 0))
         ttk.Button(
-            self.last_result_body, text="Open folder",
+            button_row, text="Open folder",
             command=lambda: self._open_folder(folder),
-        ).pack(anchor="w", pady=(8, 0))
+        ).pack(side="left")
+        # "View transcript" launches the in-app viewer with the JSON
+        # next to the source media (or the file picker if no JSON
+        # found). Discoverable single click into the new viewer.
+        if any(p.endswith(".json") for p in existing):
+            ttk.Button(
+                button_row, text="View transcript",
+                command=lambda: self.open_transcript_viewer_for(task.file_path),
+            ).pack(side="left", padx=(8, 0))
 
         self.last_result_body.pack(fill="both", expand=True)
         # Chime + log so the user notices even if they're on another

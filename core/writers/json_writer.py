@@ -1,7 +1,8 @@
 """JSON writer: list of segment dicts, indented for readability.
 
 Preserves ``words`` (with their probabilities) when present so downstream
-karaoke tools can re-render without re-running Whisper.
+karaoke tools can re-render without re-running Whisper. Also preserves
+``speaker`` when the diarisation pipeline tagged the segment.
 """
 from __future__ import annotations
 
@@ -16,6 +17,9 @@ def write(segments: list[dict], audio_path: str = "") -> str:
             "end": float(seg["end"]),
             "text": (seg.get("text") or "").strip(),
         }
+        speaker = seg.get("speaker")
+        if speaker:
+            item["speaker"] = str(speaker)
         words = seg.get("words")
         if words:
             item["words"] = [
