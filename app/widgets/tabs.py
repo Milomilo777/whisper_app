@@ -111,13 +111,69 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         side="left", padx=(20, 0)
     )
 
-    ttk.Separator(parent, orient="horizontal").grid(
-        row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+    # ----- Second row of transcribe options -----
+    # Language picker (override the auto-detect), compute device,
+    # and a one-line hotwords / initial-prompt field. All persist
+    # into config.json via app._save_transcribe_prefs.
+    from app.domain.languages import SUBTITLE_LANGUAGES as _LANGS
+
+    quick_opts = ttk.Frame(parent)
+    quick_opts.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
+
+    ttk.Label(quick_opts, text="Language:").pack(side="left")
+    app.transcribe_lang_var = tk.StringVar(
+        value=str(app.app_config.get("transcribe_language", "Auto"))
     )
-    ttk.Label(parent, text="oTranscribe").grid(row=4, column=0, padx=10, pady=(0, 10), sticky="w")
+    lang_values = ["Auto"] + [name for name, _ in _LANGS]
+    lang_combo = ttk.Combobox(
+        quick_opts,
+        textvariable=app.transcribe_lang_var,
+        values=lang_values,
+        state="readonly",
+        width=14,
+    )
+    lang_combo.pack(side="left", padx=(4, 16))
+    lang_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
+
+    ttk.Label(quick_opts, text="Device:").pack(side="left")
+    app.device_var = tk.StringVar(value=str(app.app_config.get("device", "auto")))
+    dev_combo = ttk.Combobox(
+        quick_opts,
+        textvariable=app.device_var,
+        values=("auto", "cpu", "cuda"),
+        state="readonly",
+        width=8,
+    )
+    dev_combo.pack(side="left", padx=(4, 16))
+    dev_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
+
+    ttk.Label(quick_opts, text="Compute:").pack(side="left")
+    app.compute_type_var = tk.StringVar(
+        value=str(app.app_config.get("compute_type", "int8"))
+    )
+    compute_combo = ttk.Combobox(
+        quick_opts,
+        textvariable=app.compute_type_var,
+        values=("int8", "int8_float16", "float16", "float32"),
+        state="readonly",
+        width=14,
+    )
+    compute_combo.pack(side="left", padx=(4, 16))
+    compute_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
+
+    ttk.Label(quick_opts, text="Hotwords:").pack(side="left")
+    app.hotwords_var = tk.StringVar(value=str(app.app_config.get("hotwords", "")))
+    hw_entry = ttk.Entry(quick_opts, textvariable=app.hotwords_var, width=26)
+    hw_entry.pack(side="left", padx=(4, 0), fill="x", expand=True)
+    hw_entry.bind("<FocusOut>", lambda _e: app._save_transcribe_prefs())
+
+    ttk.Separator(parent, orient="horizontal").grid(
+        row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+    )
+    ttk.Label(parent, text="oTranscribe").grid(row=5, column=0, padx=10, pady=(0, 10), sticky="w")
     ttk.Button(
         parent, text="Import .otr → SRT...", command=app.integrations_service.import_otr_to_srt
-    ).grid(row=4, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
+    ).grid(row=5, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
     parent.columnconfigure(1, weight=1)
 
     # --- Last Result card -------------------------------------------------
@@ -129,14 +185,14 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     # "did anything happen? where's my SRT?" question the previous UI
     # punted to the Queue tab's right-click menu.
     ttk.Separator(parent, orient="horizontal").grid(
-        row=5, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+        row=6, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
     )
 
     app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=8)
     app.last_result_frame.grid(
-        row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=(0, 10)
+        row=7, column=0, columnspan=3, sticky="nsew", padx=10, pady=(0, 10)
     )
-    parent.rowconfigure(6, weight=1)
+    parent.rowconfigure(7, weight=1)
 
     app.last_result_empty_var = tk.StringVar(
         value="No transcription finished yet. Pick a file above and click Transcribe."

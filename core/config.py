@@ -50,6 +50,20 @@ DEFAULT_CONFIG = {
     "diarization_enabled": False,
     "diarization_num_speakers": -1,         # -1 = auto-cluster
     "diarization_cluster_threshold": 0.5,
+    # v0.7.1 — Transcribe tab quick options
+    "transcribe_language": "Auto",   # display name; resolves to code at task build
+    # v0.7.1 — UX persistence + new features
+    "window_geometry": "",
+    "chime_on_complete": True,
+    # v0.7.1 — filename templating; tokens {base}, {ext}, {lang}, {date}, {speaker_count}
+    "output_filename_template": "{base}.{ext}",
+    # v0.7.1 — watched folder (off by default)
+    "watched_folder": "",
+    "watched_folder_enabled": False,
+    # v0.7.1 — backend selection (faster_whisper is the default and bundled
+    # default; whisper_cpp is opt-in via pywhispercpp; future backends slot in
+    # here).
+    "transcribe_backend": "faster_whisper",
 }
 
 

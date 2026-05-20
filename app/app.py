@@ -94,6 +94,11 @@ class App(tk.Tk):
     smtv_download_all_parts_var: tk.BooleanVar
     # Diarization toggle (Transcribe tab)
     diarization_var: tk.BooleanVar
+    # Quick-options row on the Transcribe tab
+    transcribe_lang_var: tk.StringVar
+    device_var: tk.StringVar
+    compute_type_var: tk.StringVar
+    hotwords_var: tk.StringVar
     format_status_var: tk.StringVar
     download_tree: "ttk.Treeview"
     download_row_map: dict[str, Any]
@@ -451,6 +456,14 @@ class App(tk.Tk):
         self.app_config["word_timestamps"] = bool(self.word_timestamps_var.get())
         if getattr(self, "diarization_var", None) is not None:
             self.app_config["diarization_enabled"] = bool(self.diarization_var.get())
+        if getattr(self, "transcribe_lang_var", None) is not None:
+            self.app_config["transcribe_language"] = self.transcribe_lang_var.get()
+        if getattr(self, "device_var", None) is not None:
+            self.app_config["device"] = self.device_var.get()
+        if getattr(self, "compute_type_var", None) is not None:
+            self.app_config["compute_type"] = self.compute_type_var.get()
+        if getattr(self, "hotwords_var", None) is not None:
+            self.app_config["hotwords"] = self.hotwords_var.get().strip()
         try:
             save_config(self.app_config)
         except Exception:  # noqa: BLE001
@@ -563,7 +576,22 @@ class App(tk.Tk):
             if not self.ensure_model_with_modal():
                 self.log("Transcription cancelled: the Whisper model is not ready.")
                 return
-        self.queue.append(TranscriptionTask(self.fv.get()))
+        # Per-task language override. The picker shows "Auto" for the
+        # default Whisper auto-detect; any other value is a language
+        # name that maps to a known code via app.domain.languages.
+        task = TranscriptionTask(self.fv.get())
+        lang_choice = getattr(self, "transcribe_lang_var", None)
+        if lang_choice is not None:
+            choice = lang_choice.get().strip()
+            if choice and choice.lower() != "auto":
+                from app.domain.languages import SUBTITLE_LANGUAGES
+                code = next(
+                    (c for name, c in SUBTITLE_LANGUAGES if name == choice),
+                    "",
+                )
+                if code:
+                    task.language = code
+        self.queue.append(task)
         self.pb["value"] = 0
         self.nb.select(self.t2)
         self.log(f"Queued: {os.path.basename(self.fv.get())}")
