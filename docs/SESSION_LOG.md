@@ -585,6 +585,39 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 12 — 2026-05-20 — Hands-off agent, three-options release v0.7.0
+
+**Coordinator:** Claude Opus 4.7 (1M context) in hands-off mode on `release/v0.7.0-installer-3-options`.
+
+**Goal as briefed:** Rename the branch, add Method C (embeddable Python in Inno Setup), clean up the repo, simplify the README, run clean-machine tests for all three methods, push and tag and `gh release` — never touching master.
+
+**What got done:**
+- Branch renamed from `release/single-file-exe` → `release/v0.7.0-installer-3-options` and pushed; old remote ref deleted. Origin now shows exactly two branches: `master` (untouched) and the new release branch.
+- Method C built from `cpython-3.11.15+20260510-x86_64-pc-windows-msvc-install_only` (python-build-standalone's full distro — python.org's "embeddable" zip ships *without* tkinter, so that path was dead). `build_embed_installer.bat` downloads the tarball, extracts via `%SystemRoot%\System32\tar.exe` (Git's `tar` mis-parses `C:\…` as a remote host), `pip install --target` reads `requirements.txt` into the bundle, copies the source tree, and writes a `sitecustomize.py` that prepends the bundle's `Lib\site-packages\` to `sys.path`. `installer_embed.iss` wraps the tree in LZMA2-ultra and ships `[UninstallDelete]` directives to sweep Python's runtime-generated `__pycache__` on uninstall.
+- Method A and Method B output filenames renamed to v0.7.0 forms: `WhisperProject-v0.7.0-Portable.exe` and `WhisperProject-v0.7.0-Setup-Compact.exe`. The onefile spec was also renamed from `whisper_project.spec` to `whisper_project_onefile.spec` to disambiguate from the onedir variant.
+- Dual-launcher support added to the smoke harness — `tests/smoke/conftest.py` gained a `gui_script` fixture; `test_exe_real_e2e.py` builds either `[exe, "--worker"]` or `[pythonw, gui.py, "--worker"]` depending on whether `$WHISPER_SMOKE_GUI` is set. The size-check test now also skips when a sibling `bin/` directory is present (onedir layout).
+- Clean-machine tests: Method A copied to `C:\Temp\test_A`, B and C installed via `/SILENT` to `C:\Temp\test_B` and `C:\Temp\test_C`. All three transcribed the same real video and produced byte-identical SRTs (860 B with `-->` arrows). Unit suite stayed at 162 passed.
+- Repo cleanup: 11 historical docs moved into `docs/history/` (9 phase plans/briefs + 2 Session 10 writeups), `docs/history/README.md` index added, `WhisperProjectDebug.spec` (older debug spec) archived there too with `git add -f`. `.gitignore` updated for the renamed onefile spec and the new `embed_build/` output.
+- README rewritten 190 → 60 lines, scoped to install / usage / architecture / docs map. BUILD.md rewritten end-to-end for the three pipelines. INSTALL.md (English and Persian sections) gained the three-method install table and dropped the v0.6.0 ZIP instructions. CHANGELOG carried Unreleased to a dated v0.7.0 block. RELEASE_NOTES_v0.7.0.md added.
+
+**Decisions worth remembering:**
+- python-build-standalone over python.org embeddable. The embeddable zip excludes `tkinter` and the Tcl/Tk runtime; restoring them piece-by-piece is fragile, and Astral's `install_only` tarball includes everything plus pip. The trade is a slightly larger bundle (663 MB embed tree → 153 MB installer) for a much simpler build.
+- `%SystemRoot%\System32\tar.exe` not Git's `tar`. Inside a Git-Bash shell, `tar` resolves to MinGW's tarball-extractor which treats anything before `:` as an SSH-style remote host. The Windows-native bsdtar handles `C:\` paths correctly.
+- `[UninstallDelete]` for Python installers is mandatory. Inno Setup only deletes files it recorded during install; `*.pyc` written at runtime survive an otherwise-clean uninstall and leave a half-empty install dir behind.
+- The smoke harness should detect onedir layout heuristically. A sibling `bin/` directory next to the exe means we're looking at Method B's thin launcher; the 150–400 MB size check applies only to Method A.
+- Dual-launcher via env var keeps the smoke suite to one file. Method C's worker is `pythonw.exe gui.py`, but it speaks the same JSON stdio protocol as the frozen exe, so a single `_build_worker_argv()` helper covers both.
+
+**Things explored and explicitly rejected:**
+- *Patching python.org's embeddable Python to add tkinter by copying from a full Python install.* Fragile — depends on having the matching Python 3.11.x installed somewhere and brittle to PSF point releases. python-build-standalone is the maintained version of this exact workflow.
+- *Single `installer.iss` with two variants.* Inno Setup's per-build conditional logic is harder to reason about than two files. Each method having its own `.iss` keeps the build pipelines independent and the diff at release time obvious.
+- *Forcing a smaller Method C via `pip install --no-deps` and curating transitive deps.* Real saving would be marginal (~ 50 MB) at the cost of fragility — silently missing a transitive dep doesn't show up until first transcription. Not worth it.
+- *Touching `master`.* Per the prompt, all work stays on the release branch. The tag will be created against the branch HEAD (not against master) and `gh release create --target release/v0.7.0-installer-3-options` ensures GitHub does the same.
+
+**Pending user actions:**
+- None — this session pushed the branch, tagged HEAD, and published the release.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:
