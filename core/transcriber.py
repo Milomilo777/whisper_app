@@ -43,6 +43,14 @@ PIPELINE: Any = None  # BatchedInferencePipeline wrapper when device == "cuda"
 MODEL_READY = False
 MODEL_ERROR: str | None = None
 
+# Pluggable backend instance for non-default engines (e.g. whisper.cpp).
+# The default faster_whisper path keeps using MODEL/PIPELINE globals so
+# every existing test that monkeypatches transcriber.config keeps
+# working. Backends other than faster_whisper are routed via
+# _ALT_BACKEND when ``config["transcribe_backend"]`` is set.
+_ALT_BACKEND: Any = None
+_ALT_BACKEND_NAME: str = ""
+
 
 def log(msg: str, cb: Callable[[str], None] | None = None) -> None:
     if cb:
@@ -96,9 +104,51 @@ def _wrap_for_batched(model: Any) -> Any:
 
 
 def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
-    global MODEL, PIPELINE, MODEL_READY, MODEL_ERROR
+    """Load the model for the configured backend.
+
+    For the default faster_whisper backend, this populates the legacy
+    module-level ``MODEL`` / ``PIPELINE`` globals so the rest of the
+    code (and the unit tests) keep working. For non-default backends
+    it loads via the backend interface and flips ``MODEL_READY`` so
+    the transcribe loop's "wait until ready" check passes.
+    """
+    global MODEL, PIPELINE, MODEL_READY, MODEL_ERROR, _ALT_BACKEND, _ALT_BACKEND_NAME
+
+    backend_name = (
+        str(config.get("transcribe_backend") or "faster_whisper").strip().lower()
+    )
     MODEL_READY = False
     MODEL_ERROR = None
+
+    if backend_name and backend_name != "faster_whisper":
+        try:
+            from .backends import get_backend
+            backend = get_backend(backend_name)
+        except Exception as e:  # noqa: BLE001
+            MODEL_ERROR = f"Backend {backend_name} not available: {e}"
+            if status_cb:
+                status_cb(MODEL_ERROR)
+            return False
+        ok = False
+        try:
+            ok = backend.load(status_cb)
+        except Exception as e:  # noqa: BLE001
+            MODEL_ERROR = f"{backend_name} load failed: {e}"
+            if status_cb:
+                status_cb(MODEL_ERROR)
+            return False
+        if not ok:
+            MODEL_ERROR = backend.get_error() or f"{backend_name} load returned False"
+            if status_cb:
+                status_cb(MODEL_ERROR)
+            return False
+        _ALT_BACKEND = backend
+        _ALT_BACKEND_NAME = backend_name
+        MODEL_READY = True
+        if status_cb:
+            status_cb("Model loaded")
+        return True
+
     model_path = Path(config["model_path"])
 
     if not model_path.exists():
@@ -371,12 +421,104 @@ def _write_outputs(
     return written
 
 
+def _get_alt_backend(name: str) -> Any:
+    """Lazy-construct (and load) the alt backend for ``name``.
+
+    Worker processes only need one backend per run, so we cache the
+    instance here. The Advanced dialog's "Download model..." button is
+    expected to have populated the model file before the user picks
+    the matching backend in config.
+    """
+    global _ALT_BACKEND, _ALT_BACKEND_NAME
+    if _ALT_BACKEND is not None and _ALT_BACKEND_NAME == name:
+        return _ALT_BACKEND
+    from .backends import get_backend
+    backend = get_backend(name)
+    if not backend.load():
+        err = backend.get_error() or f"failed to load {name} backend"
+        raise RuntimeError(err)
+    _ALT_BACKEND = backend
+    _ALT_BACKEND_NAME = name
+    return backend
+
+
+def _run_post_pipeline(
+    task: TranscriptionTask,
+    segments_data: list[dict[str, Any]],
+    detected_lang: str,
+    log_cb: Callable[[str], None] | None,
+) -> int:
+    """Diarisation + alignment + speaker_count for the writer.
+
+    Returns the number of distinct speakers detected (0 if
+    diarisation is disabled / unavailable / failed). Mutates
+    ``segments_data`` in place with speaker labels.
+    """
+    speaker_count = 0
+    if config.get("diarization_enabled", False) and not task.cancelled:
+        try:
+            from . import diarization as _diar
+
+            if _diar.is_available():
+                log("Diarising speakers...", log_cb)
+                num_speakers = int(config.get("diarization_num_speakers", -1))
+                threshold = float(config.get("diarization_cluster_threshold", 0.5))
+                diar_segments = _diar.diarize(
+                    task.file_path,
+                    num_speakers=num_speakers,
+                    cluster_threshold=threshold,
+                )
+                _diar.assign_speakers_to_segments(segments_data, diar_segments)
+                speakers = sorted({s.speaker for s in diar_segments})
+                speaker_count = len(speakers)
+                log(f"Diarisation: {len(speakers)} speaker(s) — {', '.join(speakers)}",
+                    log_cb)
+            else:
+                log(f"Diarisation skipped: {_diar.availability_reason()}", log_cb)
+        except Exception as e:  # noqa: BLE001
+            log(f"Diarisation failed (continuing without speakers): {e}", log_cb)
+
+    # Word-level alignment refinement via stable-ts (opt-in)
+    if config.get("alignment", "none") == "stable_ts":
+        try:
+            from . import alignment as _align
+            if _align.is_available():
+                log("Refining word timestamps via stable-ts...", log_cb)
+                _align.refine_word_timestamps_in_place(
+                    task.file_path,
+                    segments_data,
+                    language=detected_lang or None,
+                )
+                log("Word alignment refined.", log_cb)
+            else:
+                log(f"Alignment skipped: {_align.availability_reason()}", log_cb)
+        except Exception as e:  # noqa: BLE001
+            log(f"Alignment failed (continuing without refinement): {e}", log_cb)
+
+    return speaker_count
+
+
 def transcribe(
     task: TranscriptionTask,
     progress_cb: Callable[[int], None] | None = None,
     log_cb: Callable[[str], None] | None = None,
     language_cb: Callable[[str, float], None] | None = None,
 ) -> None:
+    # Backend dispatch — when the user has chosen a non-default
+    # engine via config["transcribe_backend"], delegate to a backend
+    # implementation. The original faster_whisper code below remains
+    # the default path so the existing unit + smoke tests keep
+    # working without monkeypatch churn.
+    runtime_cfg = load_config()
+    backend_name = (
+        str(runtime_cfg.get("transcribe_backend") or "faster_whisper").strip().lower()
+    )
+    if backend_name and backend_name != "faster_whisper":
+        _transcribe_via_alt_backend(
+            backend_name, task, progress_cb, log_cb, language_cb
+        )
+        return
+
     global MODEL
     while not MODEL_READY:
         if MODEL_ERROR:
@@ -389,7 +531,6 @@ def transcribe(
     # Keys read directly off the module-level ``config`` (vad,
     # word_timestamps, batch_size, …) still respect the
     # established mutation pattern that tests rely on.
-    runtime_cfg = load_config()
     config["diarization_enabled"] = bool(
         runtime_cfg.get("diarization_enabled", config.get("diarization_enabled", False))
     )
@@ -401,6 +542,9 @@ def transcribe(
             "diarization_cluster_threshold",
             config.get("diarization_cluster_threshold", 0.5),
         )
+    )
+    config["alignment"] = str(
+        runtime_cfg.get("alignment", config.get("alignment", "none"))
     )
 
     duration = get_duration(task.file_path)
@@ -461,37 +605,10 @@ def transcribe(
 
         segments_data.append(_segment_to_dict(seg, want_words))
 
-    # Speaker diarization (opt-in). Runs after the transcription
-    # pass on the same audio; uses sherpa-onnx with bundled ONNX
-    # models. Each transcript segment then carries a "speaker"
-    # field, which the writers (SRT/MD/DOCX) surface as a "Speaker
-    # N:" prefix. Failure here logs and continues — diarization is
-    # a nice-to-have, not a hard requirement.
-    speaker_count = 0
-    if config.get("diarization_enabled", False) and not task.cancelled:
-        try:
-            from . import diarization as _diar
-
-            if _diar.is_available():
-                log("Diarising speakers...", log_cb)
-                num_speakers = int(config.get("diarization_num_speakers", -1))
-                threshold = float(config.get("diarization_cluster_threshold", 0.5))
-                diar_segments = _diar.diarize(
-                    task.file_path,
-                    num_speakers=num_speakers,
-                    cluster_threshold=threshold,
-                )
-                _diar.assign_speakers_to_segments(segments_data, diar_segments)
-                speakers = sorted({s.speaker for s in diar_segments})
-                speaker_count = len(speakers)
-                log(f"Diarisation: {len(speakers)} speaker(s) — {', '.join(speakers)}",
-                    log_cb)
-            else:
-                log(f"Diarisation skipped: {_diar.availability_reason()}", log_cb)
-        except Exception as e:  # noqa: BLE001
-            log(f"Diarisation failed (continuing without speakers): {e}", log_cb)
-
+    # Speaker diarization (opt-in) + word-level alignment (opt-in).
     detected_lang = str(getattr(info, "language", "") or "")
+    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb)
+
     written = _write_outputs(
         base,
         segments_data,
@@ -505,5 +622,71 @@ def transcribe(
     if progress_cb:
         progress_cb(100)
 
+    elapsed = time.time() - start
+    log(f"Done in {elapsed:.2f}s", log_cb)
+
+
+def _transcribe_via_alt_backend(
+    backend_name: str,
+    task: TranscriptionTask,
+    progress_cb: Callable[[int], None] | None,
+    log_cb: Callable[[str], None] | None,
+    language_cb: Callable[[str, float], None] | None,
+) -> None:
+    """Drive a non-default backend through the same writers + diarisation."""
+    backend = _get_alt_backend(backend_name)
+    duration = get_duration(task.file_path)
+    start = time.time()
+    log(f"Processing ({backend_name}): {task.file_path}", log_cb)
+
+    want_words = bool(config.get("word_timestamps", False))
+    vad_params = _vad_parameters()
+
+    segments_data, lang_info = backend.transcribe_to_segments(
+        task.file_path,
+        language=getattr(task, "language", None) or None,
+        want_words=want_words,
+        vad_parameters=vad_params,
+        initial_prompt=config.get("initial_prompt") or None,
+        hotwords=config.get("hotwords") or None,
+        batch_size=int(config.get("batch_size", 16)),
+        progress_cb=progress_cb,
+        log_cb=log_cb,
+        cancelled=lambda: bool(task.cancelled),
+        paused=lambda: bool(task.paused),
+        duration=duration,
+    )
+
+    if lang_info.language:
+        if language_cb:
+            try:
+                language_cb(lang_info.language, lang_info.probability)
+            except Exception:  # noqa: BLE001
+                pass
+        if hasattr(task, "detected_language"):
+            task.detected_language = lang_info.language
+            task.language_probability = lang_info.probability
+
+    if task.cancelled:
+        log("Task cancelled", log_cb)
+        return
+
+    base = os.path.splitext(task.file_path)[0]
+    detected_lang = lang_info.language
+    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb)
+    written = _write_outputs(
+        base,
+        segments_data,
+        task.file_path,
+        lang=detected_lang,
+        speaker_count=speaker_count,
+    )
+    log(
+        f"Wrote {len(written)} output file(s): "
+        f"{', '.join(os.path.basename(p) for p in written)}",
+        log_cb,
+    )
+    if progress_cb:
+        progress_cb(100)
     elapsed = time.time() - start
     log(f"Done in {elapsed:.2f}s", log_cb)
