@@ -301,6 +301,64 @@ class App(tk.Tk):
         menu.add_separator()
         menu.add_command(label="Clear list", command=self._clear_recent)
 
+    def _burn_subs_for(self, task: TranscriptionTask) -> None:
+        """Burn the SRT next to the task's source media into a new MP4.
+
+        Runs ffmpeg in a daemon thread so the UI stays responsive
+        on long videos. On completion, surfaces a log line + chimes
+        + opens the output folder. Failure logs via messagebox.
+        """
+        import threading
+        from core import burn_subs
+
+        base, _ = os.path.splitext(task.file_path)
+        srt_path = base + ".srt"
+        if not os.path.isfile(srt_path):
+            messagebox.showwarning(
+                "No SRT found",
+                f"Expected SRT not found next to source:\n{srt_path}",
+                parent=self,
+            )
+            return
+        # Suggest "<base>-subbed.mp4" so the source is never clobbered.
+        suggested = base + "-subbed.mp4"
+        out_path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save burned-in video as...",
+            initialfile=os.path.basename(suggested),
+            defaultextension=".mp4",
+            filetypes=[("MP4 video", "*.mp4"), ("All files", "*.*")],
+        )
+        if not out_path:
+            return
+
+        self.log(f"Burning subtitles into {os.path.basename(out_path)}...")
+
+        def worker() -> None:
+            try:
+                burn_subs.burn(task.file_path, srt_path, out_path)
+                # Tk methods touched from a thread → post via after()
+                self.after(0, lambda: self._burn_subs_done(out_path))
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                self.after(0, lambda: self._burn_subs_failed(msg))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _burn_subs_done(self, out_path: str) -> None:
+        self.log(f"✓ Burned subtitles → {out_path}")
+        if getattr(self, "chime_on_complete_var", None) is not None:
+            try:
+                if self.chime_on_complete_var.get():
+                    self.bell()
+            except Exception:  # noqa: BLE001
+                pass
+        self._open_folder(os.path.dirname(out_path) or ".")
+
+    def _burn_subs_failed(self, msg: str) -> None:
+        self.log(f"Burn-subs failed: {msg}")
+        messagebox.showerror("Burn subtitles failed", msg, parent=self)
+
     def _open_transcript_viewer_picker(self) -> None:
         """Open the transcript viewer with a file picker."""
         _open_transcript_viewer(self, None)
@@ -652,6 +710,14 @@ class App(tk.Tk):
                 m.add_command(
                     label="Export → oTranscribe (.otr)",
                     command=lambda: self.integrations_service.export_task_to_otr(task),
+                )
+                m.add_command(
+                    label="Burn subtitles into video...",
+                    command=lambda: self._burn_subs_for(task),
+                )
+                m.add_command(
+                    label="View transcript",
+                    command=lambda: self.open_transcript_viewer_for(task.file_path),
                 )
                 m.add_command(
                     label="Open output folder",
