@@ -140,6 +140,16 @@ gh release upload v0.7.0 dist/*.exe dist_installer/*.exe --clobber
 gh release edit v0.7.0 --notes-file docs/RELEASE_NOTES_v0.7.0.md
 ```
 
+### Alternative release strategy (deferred)
+
+We currently ship a NEW tag + NEW GitHub release per version bump
+(v0.7.0 stays, v0.7.1 is a fresh release). A future session may
+prefer the GitHub-only force-move strategy: keep a single moving
+tag and force-update the same GitHub release on every refresh —
+simpler asset URLs, cleaner Releases page, but loses version
+history. Not done yet; record the trade-off here so the next
+session has the choice in front of them.
+
 ## Forbidden actions (still hold from earlier prompts)
 
   - Don't merge to master.
