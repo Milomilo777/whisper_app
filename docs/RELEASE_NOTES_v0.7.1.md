@@ -157,6 +157,140 @@ degradation, UNC-path non-blocking probe, watcher availability
 + start errors, crash-resume mark/dedup/filter, HiDPI scaling
 math.
 
+## Deep-audit pass (round 2) — with opt-in deps installed
+
+After the first audit + fix cycle, the user requested a second
+deep-audit pass with `pywhispercpp`, `stable-ts`, `sentry-sdk`,
+`pystray`, `watchdog`, `darkdetect` actually installed in the
+audit environment so the shards could exercise the opt-in code
+paths the previous audit had to skip. 8 parallel shards surfaced
+**11 blockers + 22 serious issues** — all fixed.
+
+### Blocker fixes
+
+- **HistoryDB cross-thread silent failure** — `core/history.py`'s
+  single shared connection was created without
+  `check_same_thread=False`. Every cross-thread insert
+  (transcription + download services dispatch from worker
+  threads) raised `sqlite3.ProgrammingError` which the callers'
+  broad `except Exception` swallowed. The history table was
+  effectively empty for the entire app's lifetime. Fix: open
+  with `check_same_thread=False` + a module-level write lock
+  that serialises commits across threads.
+- **FolderWatcher.start() self-deadlock** — held a non-reentrant
+  `threading.Lock` then called `self.stop()` which tried to
+  acquire the same lock. `RLock` is the one-line fix.
+- **Watched-folder cross-thread `after()`** — watchdog's worker
+  thread called `self.after(0, ...)` directly on the Tk root;
+  Python 3.14 raises `RuntimeError("main thread is not in main
+  loop")`. Replaced with a `queue.Queue` drained on the Tk
+  main thread by `_drain_watched_paths`.
+- **Drag-and-drop silently never registered** —
+  `TkinterDnD._require(self)` only loads the Tcl extension; the
+  `drop_target_register` method only exists on
+  `TkinterDnD.DnDWrapper`. We were calling it on a plain
+  `tk.Tk` instance, which raised AttributeError caught by the
+  broad except, so drag-and-drop was dead in production. Fix:
+  graft `DnDWrapper` into the App's class so the instance gains
+  the methods.
+- **Parallel-worker `.part` collision** — two workers
+  transcribing the same source file race-wrote to identical
+  `.part` paths and Windows `PermissionError`'d. Unique
+  per-PID + per-thread suffix on the `.part` filename eliminates
+  the collision.
+- **`stop_worker` stdin hang** — `stdin.write` to a worker
+  mid-transcribe (worker only reads stdin between tasks)
+  blocked the Tk main thread when the pipe filled. The write
+  now runs on a daemon thread so the UI never hangs.
+- **Writers crash on numeric speaker label** — `(raw or '').strip()`
+  used to crash on an int with `AttributeError`. New
+  `core/writers/base.speaker_prefix()` defensively str-casts;
+  all 5 affected writers use it.
+- **stable-ts `align()` wrong shape** — the module was passing a
+  dict list to `stable_whisper.align()` which expects a
+  WhisperResult. Whole module rewritten to build a
+  `WhisperResult` from segments_data then call
+  `model.align(audio, result)`. Handles `align` returning None
+  (a real stable-ts code path for unrelatable clips).
+- **stable-ts not bundled in the portable** — `hiddenimports`
+  listed `core.alignment` but not the actual `stable_whisper`
+  module. Both PyInstaller specs now `collect_all` on
+  `stable_whisper`, `whisper`, and `tiktoken`. Portable EXE
+  grew from 262 MB → 447 MB (torch is the bulk) but alignment
+  now actually runs inside the bundled exe.
+- **pywhispercpp not bundled in the portable** —
+  `collect_dynamic_libs('pywhispercpp')` returned `[]` because
+  the native `_pywhispercpp.pyd` ships as a TOP-LEVEL module,
+  not inside the pywhispercpp package. `collect_all` on both
+  names gathers everything. Verified end-to-end: the rebuilt
+  portable EXE successfully transcribes with the whisper_cpp
+  backend against a real SMTV clip.
+
+### Serious fixes
+
+- `load_config` catches `UnicodeDecodeError` (cp1252 saves)
+  and coerces wrong-type values back to defaults so
+  `parallel_workers="many"` doesn't crash downstream.
+- `save_config` module-level lock serialises concurrent saves
+  so two threads racing `os.replace` don't `PermissionError`
+  on Windows.
+- Disk-full mid-batch: previously-written formats are rolled
+  back so the user never ends up with a mix of fresh + stale
+  outputs.
+- DOCX writer: control-char sanitiser strips XML-illegal bytes
+  before handing to python-docx (otherwise a NUL byte in
+  segment text crashed the whole docx build).
+- SRT + VTT: literal `-->` in segment text is replaced with a
+  unicode arrow so downstream parsers don't see a phantom
+  timecode line.
+- JSON writer: `_safe_float` clamps NaN/Infinity to 0.0 and
+  `allow_nan=False` enforces strict JSON for browsers / Go /
+  Rust consumers.
+- MD writer: escapes markdown control characters from the
+  title so a weird basename doesn't render as a link / inject
+  HTML.
+- Tray controller: `thread.join(timeout=2.0)` before stop()
+  returns so an in-flight menu-callback bounce doesn't fire on
+  a destroyed Tcl interpreter.
+- SMTV scraper: handle the new `max` video-quality label,
+  reserved Windows device names (CON/PRN/AUX/NUL/COM/LPT),
+  and `ConnectionResetError` that previously escaped past the
+  `URLError` clause.
+- Diarization: `ffmpeg` `FileNotFoundError` wrapped as
+  `DiarizationUnavailable` to match the documented contract.
+- Worker JSON protocol: max 1 MB line bound rejects DOS attempts
+  instead of OOM-ing on a single huge command.
+- Crash-resume modal: singular/plural grammar fix
+  (was/were + transcription/transcriptions + it/them).
+- Alignment: failures now WARN-log instead of silently
+  swallowing, so a user enabling stable-ts knows when the
+  refinement didn't actually happen.
+
+### Tests + verification
+
+- Hermetic unit suite: 259 → **275 passing** (16 new tests
+  covering the audit-2 fixed paths).
+- Pyright basic-mode: 0 errors, 0 warnings on `app/` + `core/`.
+- Comprehensive CLI smoke against the rebuilt portable on
+  a real SMTV clip: **5 / 5 PASS**, including
+  `whisper_cpp_in_portable` (verifying the bundled
+  pywhispercpp + native lib runs end-to-end).
+
+### Artefact size growth
+
+The bundled stable-ts + torch + tiktoken pushes the portable
+exe past the original 400 MB upper bound:
+
+| Method | v0.7.1 (before audit-2) | v0.7.1 (after audit-2) |
+|---|---:|---:|
+| Portable | 262 MB | **447 MB** |
+| Setup-Compact | 197 MB | (rebuilt — see release page) |
+| Setup-Standard | 349 MB | (rebuilt — see release page) |
+
+The size cost buys actual whisper_cpp + stable_ts
+functionality in the bundled exes — previously both features
+silently fell back to skipping on every install.
+
 ## Known limitations
 
 - **SmartScreen warning.** None of the three exes are code-signed.
