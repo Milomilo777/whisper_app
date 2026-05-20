@@ -511,15 +511,25 @@ def transcribe(
     # working without monkeypatch churn.
     runtime_cfg = load_config()
     # Per-folder overrides: a .whisperproject.json next to (or above)
-    # the source file gets merged on top of the global config for
-    # the duration of this task.
+    # the source file is applied to the module-level config for the
+    # duration of this task. We layer the overrides on top of
+    # `config` (not the freshly-loaded runtime_cfg) so a test or
+    # caller that has monkeypatched `config` still wins where the
+    # override doesn't speak.
     try:
-        from .config import merge_project_overrides
-        runtime_cfg = merge_project_overrides(runtime_cfg, task.file_path)
+        from .config import load_project_overrides
+        project_overrides = load_project_overrides(task.file_path)
+        for k, v in project_overrides.items():
+            if isinstance(v, dict) and isinstance(config.get(k), dict):
+                config[k].update(v)
+            else:
+                config[k] = v
     except Exception:  # noqa: BLE001
         pass
     backend_name = (
-        str(runtime_cfg.get("transcribe_backend") or "faster_whisper").strip().lower()
+        str(config.get("transcribe_backend")
+            or runtime_cfg.get("transcribe_backend")
+            or "faster_whisper").strip().lower()
     )
     if backend_name and backend_name != "faster_whisper":
         _transcribe_via_alt_backend(
@@ -534,36 +544,29 @@ def transcribe(
         time.sleep(0.5)
 
     # The long-lived worker process reads config once at module
-    # import. Re-read the *runtime-mutable* keys (diarization,
-    # output_formats, ...) so UI toggles + per-folder
-    # .whisperproject.json overrides take effect without a restart.
-    # Keys read directly off the module-level ``config`` (vad,
-    # word_timestamps, batch_size, …) still respect the
-    # established mutation pattern that tests rely on.
+    # import. Re-read the *runtime-mutable* keys (diarization, ...)
+    # so UI toggles take effect without a restart, but only fall
+    # back to runtime_cfg when the in-memory `config` doesn't carry
+    # the key (or carries a falsy default). Per-folder
+    # .whisperproject.json overrides have already been merged into
+    # `config` above, so they win for any key they speak.
     config["diarization_enabled"] = bool(
-        runtime_cfg.get("diarization_enabled", config.get("diarization_enabled", False))
+        config.get("diarization_enabled",
+                   runtime_cfg.get("diarization_enabled", False))
     )
     config["diarization_num_speakers"] = int(
-        runtime_cfg.get("diarization_num_speakers", config.get("diarization_num_speakers", -1))
+        config.get("diarization_num_speakers",
+                   runtime_cfg.get("diarization_num_speakers", -1))
     )
     config["diarization_cluster_threshold"] = float(
-        runtime_cfg.get(
+        config.get(
             "diarization_cluster_threshold",
-            config.get("diarization_cluster_threshold", 0.5),
+            runtime_cfg.get("diarization_cluster_threshold", 0.5),
         )
     )
     config["alignment"] = str(
-        runtime_cfg.get("alignment", config.get("alignment", "none"))
+        config.get("alignment", runtime_cfg.get("alignment", "none"))
     )
-    # The remaining "writer / inference" keys also flow from
-    # runtime_cfg so per-folder overrides win.
-    for k in (
-        "output_formats", "output_filename_template", "word_timestamps",
-        "vad_enabled", "vad_min_silence_ms", "vad_threshold",
-        "vad_speech_pad_ms", "batch_size", "initial_prompt", "hotwords",
-    ):
-        if k in runtime_cfg:
-            config[k] = runtime_cfg[k]
 
     duration = get_duration(task.file_path)
     start = time.time()
