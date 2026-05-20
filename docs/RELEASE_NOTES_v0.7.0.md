@@ -57,6 +57,48 @@ for transcription after that.
   English news clip) transcribed end-to-end on all three install
   flavours, producing byte-identical SRT (860 B) and JSON (1117 B).
 
+## Post-release audit (2026-05-20, refresh)
+
+After the initial v0.7.0 cut, a deep audit pass over the entire
+codebase shipped these corrections under the same tag:
+
+- **Atomic SRT/JSON writes.** Each transcription writer now goes
+  through `<path>.part` → `os.replace`, so a process killed
+  mid-write can no longer leave the user with a half-written
+  subtitle file. (`core/transcriber.py::_write_outputs`)
+- **Type-level cleanup of the App class.** The 23 attributes the
+  tab builders assign post-construction (`fv`, `pb`, every
+  `*_var`, every `*_combo`, `tree`, `download_tree`, `_smtv_*`,
+  `history`, `txt`, …) are now forward-declared on the class.
+  Pyright went from 135 errors to 0 across `app/` and `core/`.
+- **Format-service state reset.** Switching from an SMTV URL to a
+  non-SMTV URL now clears `app._smtv_episode` and hides the
+  "Download all parts" checkbox during the new lookup, closing a
+  small UI race.
+- **Graceful worker shutdown.** `TranscriptionService.stop_worker`
+  now waits up to 2 s after writing the `shutdown` command before
+  falling through to `terminate()`, so the worker's final stdout
+  events aren't truncated.
+- **Defensive `emit()` in the worker.** If a future caller passes
+  a non-serialisable payload, the JSON-stdio protocol still emits
+  something (with a `_emit_warning` marker) instead of silently
+  swallowing the event.
+- **Project metadata fix.** `pyproject.toml` version was 0.3.0 even
+  though the project shipped 0.6.x then 0.7.0; now bumped.
+
+Plus two new regression tests under
+`tests/core/test_transcriber_helpers.py` pin the atomic-write
+contract. Unit suite went from 162 → 164 passed. All three
+deliverables were rebuilt and clean-machine-tested end-to-end:
+
+| Method | Smoke | Notes |
+|---|---|---|
+| Portable | 3 passed | transcribed real video, byte-identical SRT |
+| Setup-Compact | 2 passed, 1 skipped | size check N/A for onedir |
+| Setup-Standard | 2 passed, 1 skipped | size check N/A for embeddable Python |
+
+Source-of-truth commit for this refresh: `5f7c141`.
+
 ## Known limitations
 
 - **SmartScreen warning.** None of the three exes are code-signed.
