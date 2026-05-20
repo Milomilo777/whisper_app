@@ -47,32 +47,40 @@ jobs:
           # step is self-documenting.
           pip install pytest pytest-cov pyright responses
 
-      # tkinter ships with the standard Python install on Windows
-      # but Ubuntu's apt python3 doesn't carry it by default;
-      # install python3-tk only when needed.
-      - name: Install tkinter on Ubuntu
+      # Ubuntu apt-python3 doesn't ship tkinter by default; the
+      # Tk-touching unit tests (after-callback cancellation, the
+      # transcript viewer) need both tkinter and a virtual display
+      # (xvfb-run). Windows runners have the full stack already.
+      - name: Install tkinter + xvfb on Ubuntu
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y python3-tk
+          sudo apt-get install -y python3-tk xvfb
 
       - name: Pyright (static type-check)
         run: python -m pyright app core
         continue-on-error: false
 
-      - name: Pytest (unit suite, no smoke)
+      - name: Pytest (unit suite, no smoke) — Windows
+        if: runner.os == 'Windows'
         env:
           # Make sure the live SMTV smokes skip — CI is offline-only
           # from our test harness's point of view.
           WHISPER_OFFLINE_TESTS: "1"
         run: python -m pytest tests/ --ignore=tests/smoke -v
 
+      - name: Pytest (unit suite, no smoke) — Linux via xvfb
+        if: runner.os == 'Linux'
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: xvfb-run -a python -m pytest tests/ --ignore=tests/smoke -v
+
       - name: Coverage report
         if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         env:
           WHISPER_OFFLINE_TESTS: "1"
         run: |
-          python -m pytest tests/ --ignore=tests/smoke --cov=app --cov=core --cov-report=term --cov-report=xml
+          xvfb-run -a python -m pytest tests/ --ignore=tests/smoke --cov=app --cov=core --cov-report=term --cov-report=xml
       - name: Upload coverage artifact
         if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
