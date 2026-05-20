@@ -15,38 +15,45 @@ This guide is for someone who doesn't know Python or programming and just wants 
 
 ---
 
-## Install in 3 steps
+## Install — pick one of three methods
 
-### Step 1 — Download the pre-built release
+v0.7.0 ships three independent installers. Pick the one that fits.
 
-From the project's Releases page, download the latest version:
+| Method | File | Size | What it is |
+|---|---|---|---|
+| **Portable** | `WhisperProject-v0.7.0-Portable.exe` | 190 MB | A single file. Double-click and it runs. Nothing is installed; no shortcut, no Start Menu entry. Best for USB sticks or one-off use. |
+| **Compact** | `WhisperProject-v0.7.0-Setup-Compact.exe` | 137 MB | An installer that unpacks the app to Program Files, adds a Start Menu shortcut and an Add/Remove Programs entry, and runs noticeably faster on startup. Best for everyday Windows users. |
+| **Standard** | `WhisperProject-v0.7.0-Setup-Standard.exe` | 153 MB | Same shape as Compact but ships a full Python interpreter on disk so the entire source tree is browsable after install. Best for users who want transparency for debugging. |
 
-🔗 **https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest**
+All three transcribe a real video end-to-end on a clean Windows 10/11 x64 machine.
 
-Grab the file named `WhisperProject-v0.6.0-windows-x64.zip` (about 192 MB compressed).
+🔗 Download:
+**https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest**
 
-### Step 2 — Extract and choose a location
+### If you picked Portable
 
-Extract the ZIP into any folder, **preferably not on the Desktop**. Good examples:
-- `C:\Apps\WhisperProject\`
-- `D:\Programs\WhisperProject\`
+Move `WhisperProject-v0.7.0-Portable.exe` anywhere convenient
+(`C:\Apps\`, your Desktop, a USB stick). Double-click to launch.
+The first launch unpacks to a temporary folder under `%TEMP%`
+(takes about 5–10 seconds). Subsequent launches feel about the
+same — every launch re-unpacks.
 
-After extraction you should see this structure:
-```
-WhisperProject\
-├── WhisperProject.exe       ← run this
-├── bin\                     ← ffmpeg / ffprobe / yt-dlp
-├── faster_whisper\          ← VAD model asset
-├── ctranslate2\             ← inference engine
-├── (many DLLs)
-└── _internal\               ← (optional, depends on the build layout)
-```
+### If you picked Compact or Standard
 
-⚠️ **Do not copy `WhisperProject.exe` on its own** — it won't work without the DLLs and folders next to it.
+Double-click the `…-Setup-….exe` file. The installer:
 
-### Step 3 — First run
+1. Asks for admin rights (Yes).
+2. Confirms an install location (`C:\Program Files\WhisperProject\`
+   by default — change it if you like).
+3. Optionally creates a desktop icon (checkbox on the wizard).
+4. Installs. Compact takes ~20 s; Standard takes ~45 s.
 
-Double-click `WhisperProject.exe`.
+After install: launch from the Start Menu under **Whisper Project**,
+or from the desktop icon if you ticked the box. Uninstall from
+**Settings → Apps → Whisper Project → Uninstall** or from the
+folder's `unins000.exe`.
+
+### First launch — common to all three methods
 
 #### ⚠️ SmartScreen warning
 Windows may show:
@@ -186,38 +193,42 @@ More detail: [docs/BUILD.md](BUILD.md)
 
 ---
 
-## نصب در ۳ مرحله
+## نصب — یکی از سه روش را انتخاب کنید
 
-### مرحله ۱ — دانلود نسخه آماده
+نسخه ۰.۷.۰ سه installer جداگانه دارد. یکی را که با نیاز شما هماهنگ است انتخاب کنید.
 
-از پیج Releases مخزن، آخرین نسخه را دانلود کنید:
+| روش | فایل | اندازه | چه چیزی است |
+|---|---|---|---|
+| **Portable** | `WhisperProject-v0.7.0-Portable.exe` | ۱۹۰ مگابایت | یک فایل تنها. دوبار کلیک کنید تا اجرا شود. هیچ نصبی ندارد، نه shortcut نه Start Menu. مناسب برای USB یا استفاده موقت. |
+| **Compact** | `WhisperProject-v0.7.0-Setup-Compact.exe` | ۱۳۷ مگابایت | installer که اپ را در Program Files باز می‌کند، یک shortcut در Start Menu و یک ورودی در Add/Remove Programs می‌سازد و start-up سریع‌تری دارد. مناسب کاربر معمولی ویندوز. |
+| **Standard** | `WhisperProject-v0.7.0-Setup-Standard.exe` | ۱۵۳ مگابایت | شبیه Compact است اما یک Python interpreter کامل روی disk می‌گذارد، پس کل source tree بعد از نصب قابل مرور است. مناسب کاربرانی که شفافیت برای debug می‌خواهند. |
 
-🔗 **https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest**
+هر سه روش یک ویدئوی واقعی را روی یک ماشین ویندوز ۱۰/۱۱ تمیز end-to-end transcribe می‌کنند.
 
-فایلی به نام `WhisperProject-v0.6.0-windows-x64.zip` (تقریباً 192 MB فشرده) دانلود کنید.
+🔗 دانلود:
+**https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest**
 
-### مرحله ۲ — Extract و انتخاب محل
+### اگر Portable را انتخاب کردید
 
-ZIP را Extract کنید در یک پوشه دلخواه، **ترجیحاً نه روی Desktop**. مثال‌های خوب:
-- `C:\Apps\WhisperProject\`
-- `D:\Programs\WhisperProject\`
+فایل `WhisperProject-v0.7.0-Portable.exe` را هر جا که می‌خواهید بگذارید
+(`C:\Apps\`، Desktop، یا USB). دوبار کلیک کنید. اولین اجرا حدود ۵ تا ۱۰
+ثانیه طول می‌کشد چون فایل خودش را در یک پوشه‌ی موقت زیر `%TEMP%` باز
+می‌کند. هر بار اجرا همین زمان را می‌گیرد.
 
-پس از Extract، باید این ساختار را داشته باشید:
-```
-WhisperProject\
-├── WhisperProject.exe       ← این را اجرا می‌کنید
-├── bin\                     ← ffmpeg / ffprobe / yt-dlp
-├── faster_whisper\          ← مدل VAD
-├── ctranslate2\             ← engine اصلی
-├── (تعداد زیادی DLL)
-└── _internal\               ← (اختیاری بسته به نسخه)
-```
+### اگر Compact یا Standard را انتخاب کردید
 
-⚠️ **خود `WhisperProject.exe` را تنها کپی نکنید** — بدون DLLها و پوشه‌ها کار نمی‌کند.
+روی فایل `…-Setup-….exe` دوبار کلیک کنید. Installer:
 
-### مرحله ۳ — اولین اجرا
+۱. اجازه‌ی admin می‌خواهد (Yes بزنید).
+۲. محل نصب را تأیید می‌کند (پیش‌فرض: `C:\Program Files\WhisperProject\`).
+۳. اختیاری: یک desktop icon می‌سازد.
+۴. نصب می‌کند. Compact حدود ۲۰ ثانیه، Standard حدود ۴۵ ثانیه.
 
-روی `WhisperProject.exe` دوبار کلیک کنید.
+پس از نصب: از Start Menu زیر **Whisper Project** یا از دسکتاپ اجرا کنید.
+حذف از **Settings → Apps → Whisper Project → Uninstall** یا از فایل
+`unins000.exe` در پوشه‌ی نصب.
+
+### اولین اجرا — برای هر سه روش یکسان
 
 #### ⚠️ هشدار SmartScreen
 ویندوز ممکن است پیامی به این شکل نمایش دهد:

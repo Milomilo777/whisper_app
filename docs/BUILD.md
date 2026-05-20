@@ -1,137 +1,162 @@
 # Build
 
-How to produce a Windows binary from source.
+How to produce Windows binaries from source. v0.7.0 ships three
+independent installation methods; each has its own build pipeline.
 
 ## TL;DR
 
 ```cmd
-build.bat clean
+:: Method A — Portable single-file exe (~190 MB)
+pyinstaller --noconfirm --clean whisper_project_onefile.spec
+:: Output: dist\WhisperProject-v0.7.0-Portable.exe
+
+:: Method B — Compact installer (~137 MB)
+pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
+:: Output: dist_installer\WhisperProject-v0.7.0-Setup-Compact.exe
+
+:: Method C — Standard installer with embeddable Python (~153 MB)
+build_embed_installer.bat
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
+:: Output: dist_installer\WhisperProject-v0.7.0-Setup-Standard.exe
 ```
 
-Output lands at `dist\WhisperProject\WhisperProject.exe`.
+## Prerequisites
 
-## Modes
+* Python 3.10+ on PATH (used to invoke PyInstaller and pip).
+* `pip install pyinstaller` in the working environment.
+* `bin\ffmpeg.exe`, `bin\ffprobe.exe`, `bin\yt-dlp.exe` checked into
+  the repo's `bin\` folder — Method A and B bundle them via the
+  spec's `('bin', 'bin')` data entry; Method C copies them with
+  `xcopy`.
+* Inno Setup 6 for Methods B and C. Install via `winget install
+  JRSoftware.InnoSetup`. It lands at
+  `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`.
+* Method C also needs `tar.exe` from `%SystemRoot%\System32\` (the
+  Windows-native bsdtar, not Git's tar — Git's tar tries to treat
+  the `C:\` path as a remote host).
 
-`build.bat` accepts one optional argument:
-
-| Mode    | What it does                                                                                                  |
-|---------|----------------------------------------------------------------------------------------------------------------|
-| (none)  | Run PyInstaller, then verify required files are in `dist\`.                                                    |
-| `clean` | Wipe `build\` and `dist\` first, then full build + verify.                                                     |
-| `verify`| Skip PyInstaller. Just check that `dist\` has the exe, `bin\ffmpeg.exe`, `bin\ffprobe.exe`, `bin\yt-dlp.exe`. |
-| `smoke` | After verify (and build, unless paired with `verify`), launch the exe for 5 s and confirm it stays alive.    |
-
-## Exit codes
-
-| Code | Meaning                                                                                          |
-|------|---------------------------------------------------------------------------------------------------|
-| 0    | Success.                                                                                          |
-| 1    | PyInstaller failed.                                                                               |
-| 2    | Post-build verification failed — at least one required file (`exe` or one of the three binaries) is missing from `dist\`. |
-| 3    | Smoke launch failed — the exe died within 5 seconds (only possible with `build.bat smoke`).      |
-
-## What `build.bat` actually does
-
-1. (`clean` only) deletes `build\` and `dist\`.
-2. (unless `verify`) runs `pyinstaller --noconfirm whisper_project.spec`.
-3. If `dist\bin\` is missing — historically PyInstaller's `datas=` could
-   silently drop directories — **falls back to a manual `xcopy` of the
-   repo's `bin\` into `dist\bin\`.** As of Session 7's spec fix
-   (`contents_directory='.'` on the `EXE()` call), this path is dead on
-   a clean build; the spec emits the right layout natively. The fallback
-   stays in place as a belt-and-suspenders defense.
-4. Verifies `dist\WhisperProject\WhisperProject.exe`,
-   `dist\WhisperProject\bin\ffmpeg.exe`,
-   `dist\WhisperProject\bin\ffprobe.exe`,
-   `dist\WhisperProject\bin\yt-dlp.exe` all exist. Any missing → exit 2.
-5. (`smoke` only) starts the exe, waits 5 s, checks `tasklist`, kills it.
-
-### Critical packaging detail: `collect_data_files('faster_whisper')`
-
-Session 8 found that `build.bat smoke`'s "exe stays alive for 5 s" check
-is **necessary but not sufficient**. The exe started fine but crashed
-the worker the moment a transcription kicked off, because the spec did
-not bundle `faster_whisper/assets/silero_vad_v6.onnx` and `faster-whisper`
-loads it by file path when VAD is enabled (the default).
-
-The fix lives at the top of `whisper_project.spec`:
-
-```python
-from PyInstaller.utils.hooks import collect_data_files
-faster_whisper_datas = collect_data_files('faster_whisper')
-```
-
-…spread into `Analysis(datas=[..., *faster_whisper_datas])`.
-
-If you ever add a new heavy dependency that loads data files by path
-(common offenders: ML packages with bundled model weights, tokenizer
-vocab JSONs, language-detection N-gram tables), repeat the pattern.
-
-### Real packaging-bug test (CI-skipped, locally enforced)
-
-`tests/smoke/test_exe_real_e2e.py` spawns `WhisperProject.exe --worker`,
-sends a real `transcribe` command via stdin, and asserts an SRT lands on
-disk. It is the only test that catches packaging regressions like the
-silero VAD miss. Run it before releasing:
-
-```
-python -m pytest tests/smoke/ -v -s
-```
-
-On a clean machine without the model or test video, the suite skips
-cleanly instead of failing.
-
-## Why `config.json` is NOT in `dist\`
-
-Phase 1.2 moved the user's config to
-`%LOCALAPPDATA%\WhisperProject\config.json`. On first launch
-`load_config()` builds a fresh one from `DEFAULT_CONFIG`. There is no
-need to ship a copy next to the exe.
-
-If you need a *portable* build (where the user's preferences travel with
-the exe folder), add a new `portable` mode to `build.bat` that:
-
-1. Sets an env var `WHISPER_PORTABLE=1` for the spec file.
-2. Patches `core/config.py` at startup to use a path next to the exe.
-3. Drops a starter `config.json` into `dist\WhisperProject\` after the
-   verify step.
-
-That's a future enhancement; the default mode is the right one for
-distributing to users on their own machines.
-
-## What's in `dist\WhisperProject\` after a successful build
-
-```
-dist\WhisperProject\
-├── WhisperProject.exe         <- main entry; also doubles as worker via --worker
-├── _internal\                  <- PyInstaller runtime
-│   ├── ...                     <- frozen Python + packages
-│   └── ...
-└── bin\
-    ├── ffmpeg.exe
-    ├── ffprobe.exe
-    └── yt-dlp.exe
-```
-
-## Known PyInstaller hook quirks
-
-- **`sv-ttk`** ships its theme files separately. PyInstaller usually
-  picks them up via the built-in hook. If the launched exe falls back to
-  the default Tk look, add the package's `sv_ttk\sv_ttk` directory to
-  `datas` in `whisper_project.spec`.
-- **`faster-whisper`** drags in `ctranslate2`. The CT2 wheel has CUDA
-  binaries that PyInstaller will bundle whether you use them or not.
-  Total `dist\` size will be ~250–500 MB depending on the wheel.
-- **`huggingface_hub`** has a pure-Python fallback for `hf_xet` that
-  gets noisy in logs but doesn't break anything.
-- **antivirus**: `--onedir` (what we use) has a much lower
-  false-positive rate than `--onefile`. Stay one-dir.
-
-## Re-running the spec file by hand
+## Method A — Portable
 
 ```cmd
-pyinstaller --noconfirm whisper_project.spec
+pyinstaller --noconfirm --clean whisper_project_onefile.spec
 ```
 
-This is what `build.bat` does internally. Useful when you want to debug
-PyInstaller flags without re-running the verification logic.
+Builds a single self-extracting executable. At launch, PyInstaller
+unpacks the bundle to `%TEMP%\_MEI<random>\` (~5 s on a typical
+machine) and runs the app from there. `core.paths.resource_base()`
+points to that temp dir at runtime.
+
+Output: `dist\WhisperProject-v0.7.0-Portable.exe` (~190 MB).
+
+## Method B — Compact installer
+
+Two steps. First produce the onedir tree:
+
+```cmd
+pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
+```
+
+This drops a fully-extracted PyInstaller bundle under
+`dist_onedir\WhisperProject\` with the exe and its sibling DLLs
+flat at the top (the spec sets `contents_directory='.'`).
+
+Then wrap it in an Inno Setup installer:
+
+```cmd
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
+```
+
+The installer uses LZMA2 ultra compression, packs the ~478 MB
+onedir tree to ~137 MB, ships per-user / per-machine shortcuts, and
+gives users a real Add/Remove Programs entry.
+
+Output: `dist_installer\WhisperProject-v0.7.0-Setup-Compact.exe`
+(~137 MB).
+
+## Method C — Standard installer with embeddable Python
+
+```cmd
+build_embed_installer.bat
+```
+
+The batch script:
+
+1. Downloads
+   `cpython-3.11.15+20260510-x86_64-pc-windows-msvc-install_only.tar.gz`
+   from
+   [python-build-standalone](https://github.com/astral-sh/python-build-standalone).
+   This is a full CPython install with `tkinter` and the Tcl/Tk
+   runtime — python.org's "embeddable" zip is stripped of tkinter,
+   so we cannot use it directly.
+2. Extracts it with the Windows-native `tar.exe`.
+3. Verifies tkinter is importable.
+4. `pip install --target` reads `requirements.txt` into the
+   embed-build's `Lib\site-packages\`.
+5. Copies `app\`, `core\`, `bin\`, and `gui.py` into the embed tree.
+6. Writes a `sitecustomize.py` that prepends the bundle's
+   `Lib\site-packages\` to `sys.path` whenever the embedded
+   interpreter starts.
+7. Runs a sanity import (`faster_whisper`, `ctranslate2`, `sv_ttk`,
+   `platformdirs`, `tkinter`) to confirm the bundle is complete.
+
+Then wrap the tree in an Inno Setup installer:
+
+```cmd
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
+```
+
+Output: `dist_installer\WhisperProject-v0.7.0-Setup-Standard.exe`
+(~153 MB).
+
+Method C's shortcuts launch `pythonw.exe gui.py` rather than a
+frozen exe, so the entire Python source tree lives on disk after
+install — friendlier for debugging or local patching at the cost
+of a slightly larger installed footprint.
+
+## Sanity check after any build
+
+```cmd
+python -m pytest tests\ --ignore=tests\smoke
+```
+
+Expected: 162 passed.
+
+For the compiled artefacts, run the smoke E2E against each:
+
+```cmd
+:: Method A
+set WHISPER_SMOKE_EXE=dist\WhisperProject-v0.7.0-Portable.exe
+python -m pytest tests\smoke\test_exe_real_e2e.py
+
+:: Method B (after silent install to C:\Temp\test_B)
+set WHISPER_SMOKE_EXE=C:\Temp\test_B\WhisperProject.exe
+python -m pytest tests\smoke\test_exe_real_e2e.py
+
+:: Method C (after silent install to C:\Temp\test_C)
+set WHISPER_SMOKE_EXE=C:\Temp\test_C\python\pythonw.exe
+set WHISPER_SMOKE_GUI=C:\Temp\test_C\gui.py
+python -m pytest tests\smoke\test_exe_real_e2e.py
+```
+
+Each must report `test_exe_worker_transcribes_real_video PASSED`
+(plus a skipped size check on Methods B and C — see the test for
+why).
+
+## Files involved
+
+| File | Role |
+|---|---|
+| `whisper_project_onefile.spec` | Method A — embedded `EXE()` (no `COLLECT`) |
+| `whisper_project_onedir.spec` | Method B — `EXE() + COLLECT()` for the onedir tree |
+| `installer.iss` | Method B — wraps `dist_onedir\` into Setup-Compact |
+| `build_embed_installer.bat` | Method C — builds `embed_build\` |
+| `installer_embed.iss` | Method C — wraps `embed_build\` into Setup-Standard |
+| `requirements.txt` | runtime deps installed into Method C's embed tree |
+| `bin\` | bundled `ffmpeg.exe`, `ffprobe.exe`, `yt-dlp.exe` (all methods) |
+
+## Build outputs are gitignored
+
+`dist/`, `dist_onedir/`, `dist_installer/`, `embed_build/`,
+`build/`, and `build_logs/` are all in `.gitignore`. Commit only
+specs, batch scripts, and `.iss` files.
