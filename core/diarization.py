@@ -113,6 +113,14 @@ def _prepare_audio_16k_mono(audio_path: str) -> tuple[Any, int]:
         ) from e
     except subprocess.TimeoutExpired as e:
         raise DiarizationUnavailable("ffmpeg timed out while decoding audio") from e
+    except (FileNotFoundError, OSError) as e:
+        # ffmpeg.exe missing from bin/ tree — subprocess.run raises
+        # FileNotFoundError BEFORE check= can fire. The docstring
+        # promises DiarizationUnavailable; the old code let the
+        # OS error escape and crashed the worker.
+        raise DiarizationUnavailable(
+            f"ffmpeg binary not available: {e}"
+        ) from e
     samples = np.frombuffer(result.stdout, dtype=np.float32)
     return samples, 16000
 

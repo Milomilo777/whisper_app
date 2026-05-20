@@ -6,10 +6,16 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 import platformdirs
+
+# Module-level lock serialises concurrent save_config calls — on
+# Windows os.replace fails with PermissionError when another thread
+# is also mid-replace on the same path; the lock collapses the race.
+_SAVE_LOCK = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -194,7 +200,11 @@ def load_config() -> dict[str, Any]:
     except FileNotFoundError:
         logger.warning("config.json not found at %s; using defaults", path)
         return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as e:
+        # UnicodeDecodeError is a ValueError that escapes the OSError
+        # branch (e.g. cp1252 bytes saved by an external editor); the
+        # original try/except missed it and crashed launch. ValueError
+        # also catches any other JSON parser-internal raises.
         logger.error("Failed to read config.json (%s); using defaults", e)
         try:
             os.replace(path, path + ".corrupt")
@@ -207,29 +217,62 @@ def load_config() -> dict[str, Any]:
         logger.error("config.json is not a JSON object; using defaults")
         return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
 
-    return _apply_runtime_fallbacks(_merge_with_defaults(loaded))
+    merged = _merge_with_defaults(loaded)
+    # Coerce / drop wrong-type values for keys that ship a default —
+    # e.g. parallel_workers="many" survives the merge and downstream
+    # int() crashes later. Drop the bad value (restore default).
+    for k, default in DEFAULT_CONFIG.items():
+        if k in merged and merged[k] is not None and not isinstance(
+            merged[k], type(default)
+        ):
+            # Special-case: bool defaults accept int (Python's bool is int).
+            if isinstance(default, bool) and isinstance(merged[k], int):
+                merged[k] = bool(merged[k])
+                continue
+            # Special-case: int defaults accept float (lossy but harmless).
+            if isinstance(default, (int, float)) and isinstance(
+                merged[k], (int, float)
+            ):
+                try:
+                    merged[k] = type(default)(merged[k])
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            logger.warning(
+                "config key %r has wrong type %s (expected %s); "
+                "reverting to default %r",
+                k, type(merged[k]).__name__, type(default).__name__, default,
+            )
+            merged[k] = json.loads(json.dumps(default))
+    return _apply_runtime_fallbacks(merged)
 
 
 def save_config(config: dict[str, Any]) -> None:
-    path = config_path()
-    directory = os.path.dirname(path) or "."
-    Path(directory).mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=".config-", suffix=".tmp", dir=directory
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
-    except Exception:
+    # Serialise concurrent saves through _SAVE_LOCK — without this,
+    # two threads racing to os.replace the same destination throw
+    # PermissionError on Windows (NTFS rename semantics differ from
+    # POSIX). Even though only one UI thread normally writes, the
+    # Advanced dialog + tray + debounced auto-save can overlap.
+    with _SAVE_LOCK:
+        path = config_path()
+        directory = os.path.dirname(path) or "."
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".config-", suffix=".tmp", dir=directory
+        )
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 # Per-folder project overrides --------------------------------------------------

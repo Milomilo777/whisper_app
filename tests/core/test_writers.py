@@ -22,10 +22,13 @@ from core.writers import (
     vtt,
 )
 from core.writers.base import (
+    escape_cue_separator,
     fmt_lrc_time,
     fmt_srt_time,
     fmt_vtt_time,
     normalize_text,
+    sanitize_for_xml,
+    speaker_prefix,
 )
 
 
@@ -341,3 +344,85 @@ def test_is_binary_table():
 
 def test_binary_writers_registry_contains_docx_and_pdf():
     assert set(BINARY_WRITERS.keys()) == {"docx", "pdf"}
+
+
+# ---------- Audit-driven safety nets ----------------------------------------
+
+
+def test_speaker_prefix_handles_numeric_label():
+    """A hand-edited JSON might carry a numeric speaker label — the
+    writers used to crash with `int.strip() AttributeError`."""
+    assert speaker_prefix({"speaker": 123}) == "123: "
+    assert speaker_prefix({"speaker": None}) == ""
+    assert speaker_prefix({"speaker": ""}) == ""
+    assert speaker_prefix({"speaker": "  Alice  "}) == "Alice: "
+    assert speaker_prefix({}) == ""
+
+
+def test_sanitize_for_xml_strips_control_chars():
+    """python-docx rejects XML-illegal control chars with a
+    ValueError — sanitize_for_xml removes them so the DOCX writer
+    can ship transcripts that contain weird tokens."""
+    raw = "ok\x00\x07\x1bok"
+    assert sanitize_for_xml(raw) == "okok"
+    # Tab / newline / cr are XML-valid whitespace and must survive.
+    assert sanitize_for_xml("a\tb\nc\rd") == "a\tb\nc\rd"
+
+
+def test_escape_cue_separator_replaces_arrow_in_text():
+    """Literal '-->' in segment text breaks SRT/VTT parsers that
+    interpret it as a timecode line; we replace it with a unicode
+    arrow that reads the same."""
+    assert escape_cue_separator("foo --> bar") == "foo → bar"
+    assert escape_cue_separator(None) == ""  # type: ignore[arg-type]
+
+
+def test_srt_writer_speaker_int_does_not_crash():
+    """Regression: writer used to crash on numeric speaker."""
+    segs = [{"start": 0.0, "end": 1.0, "text": "hi", "speaker": 7}]
+    out = srt.write(segs)
+    assert "7: hi" in out
+
+
+def test_md_writer_speaker_int_does_not_crash():
+    segs = [{"start": 0.0, "end": 1.0, "text": "hi", "speaker": 42}]
+    out = md.write(segs)
+    assert "_42:_" in out
+
+
+def test_docx_writer_strips_control_chars_from_text():
+    """A NUL byte in segment text used to crash python-docx with
+    `ValueError: All strings must be XML compatible`."""
+    segs = [{"start": 0.0, "end": 1.0, "text": "hello\x00world"}]
+    payload = docx_writer.write_bytes(segs, "x.wav")
+    assert payload[:4] == b"PK\x03\x04"  # valid docx
+
+
+def test_srt_writer_escapes_literal_arrow_in_text():
+    """A segment whose text contains '-->' must not produce a
+    parser-confusing SRT cue."""
+    segs = [{"start": 0.0, "end": 1.0, "text": "code: x --> y"}]
+    out = srt.write(segs)
+    # Only one timecode line should contain the arrow (the cue one).
+    arrow_lines = [ln for ln in out.splitlines() if "-->" in ln]
+    assert len(arrow_lines) == 1
+
+
+def test_json_writer_drops_nan_and_inf():
+    """Strict JSON parsers reject NaN/Infinity; we clamp to safe defaults."""
+    segs = [{"start": float("nan"), "end": float("inf"), "text": "hi"}]
+    out = json_writer.write(segs)
+    parsed = json.loads(out)
+    assert parsed[0]["start"] == 0.0
+    assert parsed[0]["end"] == 0.0
+
+
+def test_json_writer_preserves_numeric_speaker_label():
+    segs = [{"start": 0.0, "end": 1.0, "text": "hi", "speaker": 7}]
+    parsed = json.loads(json_writer.write(segs))
+    assert parsed[0]["speaker"] == "7"
+
+
+def test_srt_fmt_clamps_nan_to_zero():
+    assert fmt_srt_time(float("nan")) == "00:00:00,000"
+    assert fmt_srt_time(float("inf")) == "00:00:00,000"

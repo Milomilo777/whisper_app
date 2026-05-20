@@ -114,26 +114,37 @@ class TranscriptionService:
     def stop_worker(self, worker: dict[str, Any]) -> None:
         process = worker.get("process")
         if process and process.poll() is None:
+            # stdin.write() can block when the worker is mid-transcribe
+            # (worker.py only reads stdin between tasks). On Windows
+            # pipe buffers are ~64 KB; a full pipe stalls the write and
+            # freezes the Tk main thread until the worker resumes
+            # reading. Move the write to a daemon thread so the UI
+            # never hangs — if the worker exits cleanly within 2 s
+            # we'll see process.wait return, otherwise fall through
+            # to terminate().
+            shutdown_msg = json.dumps({"action": "shutdown"}) + "\n"
+
+            def _async_shutdown() -> None:
+                try:
+                    if process.stdin:
+                        process.stdin.write(shutdown_msg)
+                        process.stdin.flush()
+                except Exception:  # noqa: BLE001
+                    pass
+            threading.Thread(target=_async_shutdown, daemon=True).start()
+
             try:
-                if process.stdin:
-                    process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
-                    process.stdin.flush()
-                    # Give the worker a short window to write any
-                    # final events and exit cleanly. Without this the
-                    # subsequent terminate() races the worker's
-                    # response on stdout and we lose the last batch
-                    # of events. 2 s is generous enough for the
-                    # worker's main loop to drain stdin and exit;
-                    # if it's stuck (model unloading, etc.), we fall
-                    # through to terminate() below.
-                    try:
-                        process.wait(timeout=2.0)
-                        return
-                    except subprocess.TimeoutExpired:
-                        pass
+                # Wait for the worker to exit on its own. If it's
+                # stuck mid-transcribe and never drains stdin, we
+                # terminate() below — no UI freeze either way.
+                process.wait(timeout=2.0)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                process.terminate()
             except Exception:  # noqa: BLE001
                 pass
-            process.terminate()
 
     def stop_all(self) -> None:
         for w in self.active_workers():

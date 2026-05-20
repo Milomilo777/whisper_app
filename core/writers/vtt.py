@@ -6,17 +6,22 @@ by browsers when shown via ``<track>``.
 """
 from __future__ import annotations
 
-from .base import fmt_vtt_time, normalize_text
+from .base import (
+    escape_cue_separator,
+    fmt_vtt_time,
+    normalize_text,
+    speaker_prefix,
+)
 
 
 def _karaoke_payload(seg: dict) -> str:
     words = seg.get("words") or []
     if not words:
-        return normalize_text(seg.get("text", ""))
+        return escape_cue_separator(normalize_text(seg.get("text", "")))
     parts: list[str] = []
     for w in words:
         ts = fmt_vtt_time(float(w.get("start", seg["start"])))
-        token = (w.get("word") or "").strip()
+        token = escape_cue_separator((w.get("word") or "").strip())
         if not token:
             continue
         if parts:
@@ -29,6 +34,7 @@ def write(segments: list[dict], audio_path: str = "") -> str:
     out: list[str] = ["WEBVTT", ""]
     for seg in segments:
         out.append(f"{fmt_vtt_time(float(seg['start']))} --> {fmt_vtt_time(float(seg['end']))}")
-        out.append(_karaoke_payload(seg))
+        payload = _karaoke_payload(seg)
+        out.append(speaker_prefix(seg) + payload)
         out.append("")
     return "\n".join(out)

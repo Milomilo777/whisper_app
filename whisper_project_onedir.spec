@@ -15,31 +15,68 @@
 # what onedir frozen layout requires — no source changes needed.
 # pyright: reportMissingImports=false
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+)
 
 # Same Silero VAD packaging note as whisper_project.spec: faster_whisper
 # loads silero_vad_v6.onnx by file path at runtime, so PyInstaller's
 # module collection alone is not enough.
 faster_whisper_datas = collect_data_files('faster_whisper')
 
-# pywhispercpp ships a native whisper.cpp shared library beside its
-# Python wheel — same packaging note as the onefile spec.
+# pywhispercpp ships its native whisper.cpp .pyd as a TOP-LEVEL module
+# `_pywhispercpp` at site-packages root. collect_dynamic_libs returns
+# [] for that layout — use collect_all on both names to gather the
+# module + binary + datas.
+whisper_cpp_datas = []
+whisper_cpp_binaries = []
+whisper_cpp_hidden = []
+for _name in ('pywhispercpp', '_pywhispercpp'):
+    try:
+        d, b, h = collect_all(_name)
+        whisper_cpp_datas.extend(d)
+        whisper_cpp_binaries.extend(b)
+        whisper_cpp_hidden.extend(h)
+    except Exception:
+        pass
 try:
-    whisper_cpp_libs = collect_dynamic_libs('pywhispercpp')
+    whisper_cpp_binaries.extend(collect_dynamic_libs('pywhispercpp'))
 except Exception:
-    whisper_cpp_libs = []
+    pass
+
+# stable-ts (alignment) — bring its data files + transitive whisper +
+# tiktoken so the bundled exe can actually run alignment when the
+# user enables it.
+alignment_datas = []
+alignment_binaries = []
+alignment_hidden = []
+for _name in ('stable_whisper', 'whisper', 'tiktoken'):
+    try:
+        d, b, h = collect_all(_name)
+        alignment_datas.extend(d)
+        alignment_binaries.extend(b)
+        alignment_hidden.extend(h)
+    except Exception:
+        pass
 
 a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[
-        *whisper_cpp_libs,
+        *whisper_cpp_binaries,
+        *alignment_binaries,
     ],
     datas=[
         ('bin', 'bin'),
         *faster_whisper_datas,
+        *whisper_cpp_datas,
+        *alignment_datas,
     ],
     hiddenimports=[
+        *whisper_cpp_hidden,
+        *alignment_hidden,
         'app',
         'app.app',
         'app.dialogs',
@@ -67,6 +104,13 @@ a = Analysis(
         'core.backends.base',
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
+        # Opt-in backends (see onefile spec comment).
+        'pywhispercpp',
+        'pywhispercpp.model',
+        '_pywhispercpp',
+        'stable_whisper',
+        'whisper',
+        'tiktoken',
         'core.burn_subs',
         'core.config',
         'core.diarization',

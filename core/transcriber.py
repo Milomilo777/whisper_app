@@ -434,7 +434,17 @@ def _write_outputs(
                 os.makedirs(out_dir, exist_ok=True)
             except OSError:
                 pass
-        part_path = path + ".part"
+        # Unique .part suffix per pid + thread so two parallel
+        # workers transcribing the SAME source file don't race-write
+        # to the same .part path (Windows treats the second open as
+        # PermissionError because the first writer still holds the
+        # handle). os.replace onto the final path remains atomic;
+        # the last writer wins for the final file, which matches the
+        # POSIX "last writer wins" semantic that callers already
+        # expect for redundant parallel transcriptions.
+        part_path = (
+            f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+        )
         try:
             if is_binary(fmt_name):
                 payload_b = get_binary_writer(fmt_name)(segments_data, audio_path)
@@ -450,6 +460,15 @@ def _write_outputs(
                 os.unlink(part_path)
             except OSError:
                 pass
+            # Clean up any files we already wrote on the way to this
+            # failure — disk-full mid-batch used to leave the user
+            # with a mix of fresh + stale files. Roll those back so
+            # the final state matches the pre-call state.
+            for prior in written:
+                try:
+                    os.unlink(prior)
+                except OSError:
+                    pass
             raise
         written.append(path)
     return written
@@ -534,22 +553,39 @@ def _run_post_pipeline(
         except Exception as e:  # noqa: BLE001
             log(f"Diarisation failed (continuing without speakers): {e}", log_cb)
 
-    # Word-level alignment refinement via stable-ts (opt-in)
+    # Word-level alignment refinement via stable-ts (opt-in).
     if config.get("alignment", "none") == "stable_ts":
         try:
             from . import alignment as _align
             if _align.is_available():
                 log("Refining word timestamps via stable-ts...", log_cb)
-                _align.refine_word_timestamps_in_place(
+                ok = _align.refine_word_timestamps_in_place(
                     task.file_path,
                     segments_data,
                     language=detected_lang or None,
                 )
-                log("Word alignment refined.", log_cb)
+                if ok:
+                    log("Word alignment refined.", log_cb)
+                else:
+                    # Surfaced as a WARN-style line — alignment was
+                    # requested but produced no refinement (most
+                    # commonly a tokenizer / language mismatch). The
+                    # user sees this in the console; previous code
+                    # silently swallowed the skip.
+                    log(
+                        "WARN: Word alignment requested but stable-ts "
+                        "returned no refined words. Keeping original "
+                        "word timestamps.",
+                        log_cb,
+                    )
             else:
-                log(f"Alignment skipped: {_align.availability_reason()}", log_cb)
+                log(
+                    f"WARN: Alignment skipped — {_align.availability_reason()}. "
+                    "Install stable-ts to enable.",
+                    log_cb,
+                )
         except Exception as e:  # noqa: BLE001
-            log(f"Alignment failed (continuing without refinement): {e}", log_cb)
+            log(f"WARN: Alignment failed (continuing without refinement): {e}", log_cb)
 
     return speaker_count
 

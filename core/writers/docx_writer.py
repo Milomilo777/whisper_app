@@ -24,7 +24,7 @@ import io
 import os
 from typing import Any
 
-from .base import fmt_srt_time, normalize_text
+from .base import fmt_srt_time, normalize_text, sanitize_for_xml
 
 
 def _fmt_doc_time(seconds: float) -> str:
@@ -49,7 +49,9 @@ def write_bytes(segments: list[dict], audio_path: str = "") -> bytes:
     docx = _require_docx()
 
     document = docx.Document()
-    title = os.path.basename(audio_path) if audio_path else "Transcript"
+    title = sanitize_for_xml(
+        os.path.basename(audio_path) if audio_path else "Transcript"
+    )
     document.add_heading(title, level=1)
 
     nonempty = [s for s in segments if normalize_text(s.get("text", ""))]
@@ -63,8 +65,17 @@ def write_bytes(segments: list[dict], audio_path: str = "") -> bytes:
 
     for seg in nonempty:
         ts = _fmt_doc_time(float(seg.get("start", 0.0)))
-        speaker = (seg.get("speaker") or "").strip()
-        text = normalize_text(seg.get("text", ""))
+        # Coerce speaker to str (a hand-edited JSON could put a
+        # number here) and run it through sanitize_for_xml so a
+        # control character in the label doesn't crash python-docx
+        # with the XML-illegal-character ValueError.
+        raw_speaker = seg.get("speaker")
+        speaker = (
+            sanitize_for_xml(str(raw_speaker).strip())
+            if raw_speaker not in (None, "")
+            else ""
+        )
+        text = sanitize_for_xml(normalize_text(seg.get("text", "")))
 
         para = document.add_paragraph()
         # [HH:MM:SS]

@@ -143,6 +143,17 @@ class TrayController:
             self._icon.stop()
         except Exception:  # noqa: BLE001
             pass
+        # Wait briefly for the daemon thread to exit so any in-flight
+        # menu-callback bounce to Tk completes BEFORE on_exit's
+        # destroy(). Without this join, a tray click that landed
+        # right as the user clicked exit could fire its
+        # ``self.app.after(0, ...)`` on a destroyed Tcl interpreter.
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            try:
+                thread.join(timeout=2.0)
+            except Exception:  # noqa: BLE001
+                pass
         self._icon = None
         self._thread = None
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -61,8 +62,21 @@ class HistoryDB:
     def __init__(self, path: str | Path | None = None) -> None:
         self.path: Path = Path(path) if path else default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
+        # check_same_thread=False — the transcription / download
+        # services dispatch from worker threads, not the Tk main
+        # thread. Without this flag every cross-thread insert
+        # raises sqlite3.ProgrammingError (silently swallowed by
+        # the callers' broad `except Exception`), so the entire
+        # history is empty in real usage.
+        self._conn = sqlite3.connect(
+            str(self.path), check_same_thread=False
+        )
         self._conn.row_factory = sqlite3.Row
+        # Module-level write lock — SQLite serialises writes
+        # internally but the Python connection object is not
+        # thread-safe for concurrent write attempts; the lock
+        # gives us deterministic queue + commit semantics.
+        self._write_lock = threading.Lock()
         with self._conn:
             self._conn.executescript(SCHEMA)
 
@@ -80,8 +94,12 @@ class HistoryDB:
 
     @contextmanager
     def _txn(self):
+        # Serialise all writes through _write_lock so concurrent
+        # worker-thread inserts (transcription + download services
+        # both fire from background threads) never trample each
+        # other's commit boundaries.
         try:
-            with self._conn:
+            with self._write_lock, self._conn:
                 yield self._conn
         except sqlite3.Error as e:
             logger.error("history.db transaction failed: %s", e)

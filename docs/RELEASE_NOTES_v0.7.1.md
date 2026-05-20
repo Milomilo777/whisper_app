@@ -86,9 +86,76 @@ Twelve high-impact additions land in one tagged release:
 
 ## Test coverage
 
-Hermetic unit suite: **237 passing** (was 191 at start of session).
-Smoke suite: 3 passes against the freshly built portable exe with
-a real 60 s news clip. Pyright clean on `app/` + `core/`.
+Hermetic unit suite: **259 passing** after the deep-audit pass
+(was 191 at start of session, 237 after first round of v0.7.1
+work, 259 after the audit fixes added 22 more tests). Smoke suite:
+3 passes against the freshly built portable exe with a real 60 s
+news clip + the SMTV-clip CLI feature smoke. Pyright clean on
+`app/` + `core/`.
+
+## Deep-audit pass (post-Session-14)
+
+After the initial v0.7.1 cut, a 7-shard parallel audit ran over
+every Session-14 zone. The audits surfaced 2 blockers, 12 serious
+issues, and ~20 minor nits — all fixed before this release:
+
+  * **Transcript viewer**: race between the `_update_position`
+    tick and `_on_close` that scheduled callbacks on a destroyed
+    Tcl interpreter (BLOCKER) — fixed with an explicit `_closing`
+    flag + TclError guards on re-arm. Find/replace lambda guards
+    backreferences (`\1`, `\g<…>`) from being interpreted as
+    regex syntax. Karaoke `_update_karaoke` rewritten with
+    `bisect_right` (O(log N) per 250-ms tick) + active highlight
+    cleared in segment gaps. `_populate_listbox` re-applies the
+    active row tag after edit ops. `_rename_speaker` and find-
+    replace reject whitespace-only inputs.
+  * **System tray**: tray-runner crash (BLOCKER) now nulls
+    `self._icon` AND posts a `setattr(app, "tray", None)` to the
+    Tk thread so the app stops dispatching to a dead controller.
+    File → Exit + Ctrl+Q always exit (new `_force_exit()` bypasses
+    the minimise-to-tray redirect; the X button still honours it).
+  * **Watched folder**: per-path dedup with `after_cancel` so
+    Windows on_created + on_modified bursts no longer
+    double-enqueue the same file. App-wide `_closing` flag
+    short-circuits watcher callbacks during teardown.
+  * **Backend dispatch**: runtime-config refresh keys
+    (diarization/alignment) now run BEFORE the
+    faster_whisper/whisper_cpp branch so both backends honour UI
+    toggles. `_get_alt_backend` holds an `_ALT_BACKEND_LOCK`
+    during the cache step. `worker.py` emits `get_model_error()`
+    in the `startup_error` payload so backend-load failures
+    surface to the parent UI.
+  * **Filename templating**: catches a broader exception set
+    (KeyError, TypeError, AttributeError); positional `{0}`
+    correctly falls back to the legacy `{base}.{ext}` layout;
+    path-traversal templates (`../etc/passwd.{ext}`) are rejected
+    after render.
+  * **Per-folder overrides**: recursive deep-merge replaces the
+    one-level `dict.update`, so `{"model": {"sub": {"deeper": 1}}}`
+    keeps every sibling key under `model.sub` intact.
+    `UnicodeDecodeError` is caught explicitly so a project file
+    saved in cp1252 degrades silently.
+  * **CLI mode**: `--formats` and `--diarization` now take effect
+    on the FIRST CLI run (previously the in-memory `config`
+    snapshot from module import time shadowed the on-disk save).
+    CLI mode now writes a `history.db` row so CLI usage shows up
+    in Statistics + Recent files alongside GUI runs.
+  * **Build pipeline**: `pyproject.toml [project].dependencies`
+    grew the Session-13+14 runtime deps so `pip install
+    whisper-project` yields a runnable install (previously the
+    PyPI installer was non-functional). Both PyInstaller specs
+    pick up `collect_dynamic_libs('pywhispercpp')` so the bundled
+    whisper.cpp native lib travels with the exe. `[UninstallDelete]`
+    blocks now sweep `__pycache__`, `gui.py`, `sitecustomize.py`
+    so clean uninstalls really clean.
+
+22 new tests cover the fixed paths: find/replace backreference
+safety, whitespace-needle reject, speaker rename empty-input
+reject, filler punctuation tidy, template positional/traversal/
+zero-speaker, deep-merge >1-level, UnicodeDecodeError graceful
+degradation, UNC-path non-blocking probe, watcher availability
++ start errors, crash-resume mark/dedup/filter, HiDPI scaling
+math.
 
 ## Known limitations
 

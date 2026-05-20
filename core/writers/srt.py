@@ -7,16 +7,22 @@ viewers like VLC render it cleanly.
 """
 from __future__ import annotations
 
-from .base import fmt_srt_time, normalize_text
+from .base import (
+    escape_cue_separator,
+    fmt_srt_time,
+    normalize_text,
+    speaker_prefix,
+)
 
 
 def write(segments: list[dict], audio_path: str = "") -> str:
     out: list[str] = []
     for i, seg in enumerate(segments, 1):
-        text = normalize_text(seg.get("text", ""))
-        speaker = (seg.get("speaker") or "").strip()
-        if speaker:
-            text = f"{speaker}: {text}"
+        # escape_cue_separator: literal "-->" in the payload would
+        # collide with SRT's own time-code separator and confuse
+        # downstream parsers.
+        text = escape_cue_separator(normalize_text(seg.get("text", "")))
+        text = speaker_prefix(seg) + text
         out.append(f"{i}")
         out.append(f"{fmt_srt_time(float(seg['start']))} --> {fmt_srt_time(float(seg['end']))}")
         out.append(text)

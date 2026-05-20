@@ -234,8 +234,15 @@ class App(tk.Tk):
         # each path only schedules ONE stability-check ladder.
         self._closing = False
         self._watched_after_ids: dict[str, str] = {}
+        # Thread-safe queue drained on the Tk main thread by
+        # _drain_watched_paths. watchdog fires callbacks from a
+        # background thread; on Python 3.14 calling self.after()
+        # from a non-main thread raises RuntimeError. Routing
+        # through this queue lets us bounce safely.
+        self._watched_path_queue: Queue = Queue()
         self._install_tray()
         self._restart_watched_folder()
+        self.after(250, self._drain_watched_paths)
 
         # Auto-resume after crash: history.mark_interrupted() above
         # flipped rows from running → interrupted. If any of those
@@ -1180,15 +1187,17 @@ class App(tk.Tk):
             return
 
         def _on_new_file(path: str) -> None:
-            # watchdog calls back from its own thread — bounce to Tk.
-            # Skip when the app is mid-shutdown to avoid scheduling
-            # callbacks on a destroyed Tcl interpreter.
+            # watchdog calls back from its own thread — DON'T touch Tk
+            # from here. Calling self.after() off-thread raises
+            # RuntimeError on Python 3.14 (and is undefined behaviour
+            # on earlier 3.x). Instead push the path into a
+            # thread-safe queue that the Tk main loop drains via
+            # _drain_watched_paths.
             if self._closing:
                 return
             try:
-                self.after(0, lambda p=path: self._enqueue_watched_file(p))
+                self._watched_path_queue.put_nowait(path)
             except Exception:  # noqa: BLE001
-                # after() can raise once destroy() has started.
                 pass
 
         try:
@@ -1199,6 +1208,30 @@ class App(tk.Tk):
             return
         self._folder_watcher = watcher
         self.log(f"Watching folder for new media: {folder}")
+
+    def _drain_watched_paths(self) -> None:
+        """Drain the cross-thread queue of watched-folder paths.
+
+        Runs on the Tk main thread (scheduled via after()). watchdog
+        callbacks push into ``_watched_path_queue`` from their worker
+        thread; this method dequeues + hands each path to
+        ``_enqueue_watched_file`` (which is now safe because we're
+        on the Tk thread). Re-arms itself every 250 ms while the
+        app is alive.
+        """
+        if self._closing:
+            return
+        try:
+            while True:
+                path = self._watched_path_queue.get_nowait()
+                self._enqueue_watched_file(path)
+        except Exception:  # noqa: BLE001 — Empty + anything else, just stop draining
+            pass
+        if not self._closing:
+            try:
+                self.after(250, self._drain_watched_paths)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _enqueue_watched_file(self, path: str) -> None:
         """Auto-enqueue a media file dropped into the watched folder.
@@ -1299,11 +1332,15 @@ class App(tk.Tk):
                 seen.add(p)
                 unique.append(r)
         n = len(unique)
+        # Pluralise verb + noun together so the message reads
+        # correctly for both n=1 and n>1.
+        noun = "transcription" if n == 1 else "transcriptions"
+        verb = "was" if n == 1 else "were"
+        pronoun = "it" if n == 1 else "them"
         if not messagebox.askyesno(
             "Resume interrupted transcriptions?",
-            f"We found {n} transcription"
-            f"{'' if n == 1 else 's'} that were interrupted by a "
-            "previous crash. Resume them now?",
+            f"We found {n} {noun} that {verb} interrupted by a "
+            f"previous crash. Resume {pronoun} now?",
             parent=self,
         ):
             return
@@ -1336,16 +1373,38 @@ class App(tk.Tk):
             logger.info("Could not apply HiDPI scaling: %s", e)
 
     def _install_drag_drop(self) -> None:
-        """Wire tkinterdnd2 if available, no-op otherwise."""
+        """Wire tkinterdnd2 if available, no-op otherwise.
+
+        ``TkinterDnD._require(self)`` loads the Tcl ``tkdnd`` package
+        into the interpreter but DOES NOT add the
+        ``drop_target_register`` / ``dnd_bind`` methods to a plain
+        ``tk.Tk`` instance — those live on ``TkinterDnD.DnDWrapper``.
+        Mix the wrapper into our App's class so the methods become
+        bound. Without this graft, drag-and-drop silently never
+        registered in v0.7.1.
+        """
         try:
             from tkinterdnd2 import DND_FILES, TkinterDnD  # type: ignore[import-not-found]
         except ImportError:
             logger.info("tkinterdnd2 not present; drag-and-drop disabled")
             return
-        # tkinterdnd2 monkey-patches the Tk root with drop_target_register;
-        # we have to apply that to ourselves.
         try:
             TkinterDnD._require(self)
+            # Graft DnDWrapper's methods onto our class so this
+            # instance gains drop_target_register / dnd_bind.
+            wrapper = getattr(TkinterDnD, "DnDWrapper", None)
+            if wrapper is not None and wrapper not in self.__class__.__mro__:
+                self.__class__ = type(
+                    self.__class__.__name__,
+                    (self.__class__, wrapper),
+                    {},
+                )
+            if not hasattr(self, "drop_target_register"):
+                logger.warning(
+                    "tkinterdnd2 imported but drop_target_register "
+                    "is still missing; drag-and-drop disabled"
+                )
+                return
             self.drop_target_register(DND_FILES)  # type: ignore[attr-defined]
             self.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore[attr-defined]
             logger.info("Drag-and-drop enabled (tkinterdnd2)")

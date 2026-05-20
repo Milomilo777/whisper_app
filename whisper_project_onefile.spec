@@ -15,7 +15,11 @@
 # own _MEIPASS at start, which is the unavoidable cost of onefile.
 # pyright: reportMissingImports=false
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_data_files,
+    collect_dynamic_libs,
+)
 
 # faster_whisper ships a Silero VAD model under faster_whisper/assets/.
 # It is loaded by file path at runtime (not via importlib.resources), so
@@ -25,28 +29,61 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 # every time VAD is enabled (which is the default).
 faster_whisper_datas = collect_data_files('faster_whisper')
 
-# pywhispercpp ships a native whisper.cpp shared library beside its
-# Python wheel. PyInstaller's default scan misses non-Python binaries,
-# so users who switch to the whisper_cpp backend get an ImportError on
-# launch. collect_dynamic_libs picks up the bundled DLL/SO. The call
-# silently returns [] when pywhispercpp isn't installed in the build
-# environment, so the spec stays valid even on slim CI builders.
+# pywhispercpp ships its native whisper.cpp .pyd as a TOP-LEVEL module
+# `_pywhispercpp` at site-packages root, NOT inside the pywhispercpp
+# package directory. collect_dynamic_libs('pywhispercpp') returns [] in
+# that layout. Use collect_all on both names to gather every relevant
+# artefact (module + binary + datas).
+whisper_cpp_datas = []
+whisper_cpp_binaries = []
+whisper_cpp_hidden = []
+for _name in ('pywhispercpp', '_pywhispercpp'):
+    try:
+        d, b, h = collect_all(_name)
+        whisper_cpp_datas.extend(d)
+        whisper_cpp_binaries.extend(b)
+        whisper_cpp_hidden.extend(h)
+    except Exception:
+        pass
+# Fallback: also try collect_dynamic_libs for forward-compat with future
+# pywhispercpp packaging that may move the .pyd inside the package.
 try:
-    whisper_cpp_libs = collect_dynamic_libs('pywhispercpp')
+    whisper_cpp_binaries.extend(collect_dynamic_libs('pywhispercpp'))
 except Exception:
-    whisper_cpp_libs = []
+    pass
+
+# stable-ts (alignment) needs its own data files (whisper tokenizer
+# assets) AND transitively pulls torch / tiktoken. Same collect_all
+# pattern, all wrapped in try/except so a slim CI builder without
+# the opt-in deps doesn't break the spec.
+alignment_datas = []
+alignment_binaries = []
+alignment_hidden = []
+for _name in ('stable_whisper', 'whisper', 'tiktoken'):
+    try:
+        d, b, h = collect_all(_name)
+        alignment_datas.extend(d)
+        alignment_binaries.extend(b)
+        alignment_hidden.extend(h)
+    except Exception:
+        pass
 
 a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[
-        *whisper_cpp_libs,
+        *whisper_cpp_binaries,
+        *alignment_binaries,
     ],
     datas=[
         ('bin', 'bin'),
         *faster_whisper_datas,
+        *whisper_cpp_datas,
+        *alignment_datas,
     ],
     hiddenimports=[
+        *whisper_cpp_hidden,
+        *alignment_hidden,
         'app',
         'app.app',
         'app.dialogs',
@@ -74,6 +111,17 @@ a = Analysis(
         'core.backends.base',
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
+        # Opt-in backends — explicit submodule names so a user
+        # who flips the config gets a working backend rather than
+        # a silent ImportError. The collect_all calls above pick
+        # up the rest of the package; these lines ensure the
+        # specific module the dispatcher imports is present.
+        'pywhispercpp',
+        'pywhispercpp.model',
+        '_pywhispercpp',
+        'stable_whisper',
+        'whisper',
+        'tiktoken',
         'core.burn_subs',
         'core.config',
         'core.diarization',

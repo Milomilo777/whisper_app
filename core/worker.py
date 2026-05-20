@@ -70,7 +70,22 @@ def main() -> int:
 
     emit("ready")
 
+    # Reasonable max line size — a single JSON command should be
+    # under a few KB. Anything past 1 MB is either a runaway parent
+    # or an attempt to OOM the worker; reject loudly instead of
+    # buffering up megabytes of garbage.
+    MAX_COMMAND_BYTES = 1 << 20  # 1 MB
+
     for line in sys.stdin:
+        if len(line) > MAX_COMMAND_BYTES:
+            emit(
+                "error",
+                message=(
+                    f"command exceeds max length ({len(line)} > "
+                    f"{MAX_COMMAND_BYTES} bytes); dropped"
+                ),
+            )
+            continue
         line = line.strip()
         if not line:
             continue

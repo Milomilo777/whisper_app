@@ -88,7 +88,14 @@ def write_bytes(segments: list[dict], audio_path: str = "") -> bytes:
 
     for seg in nonempty:
         ts = _fmt_pdf_time(float(seg.get("start", 0.0)))
-        speaker = (seg.get("speaker") or "").strip()
+        # Defensive str-cast: a hand-edited JSON could put a number
+        # here, and (None or "").strip() worked but `123.strip()` did
+        # not — used to crash with AttributeError on int.
+        raw_speaker = seg.get("speaker")
+        speaker = (
+            str(raw_speaker).strip()
+            if raw_speaker not in (None, "") else ""
+        )
         text = xml_escape(normalize_text(seg.get("text", "")))
         if speaker:
             line = f"<b>[{ts}] {xml_escape(speaker)}:</b> {text}"

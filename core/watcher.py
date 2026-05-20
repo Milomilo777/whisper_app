@@ -51,7 +51,10 @@ class FolderWatcher:
         self.folder = folder
         self.on_new_file = on_new_file
         self._observer: Any = None
-        self._lock = threading.Lock()
+        # RLock — start() calls self.stop() inside its critical section
+        # to tear down a prior observer. With a plain Lock that re-acquire
+        # deadlocks; RLock lets the same thread re-enter.
+        self._lock = threading.RLock()
 
     def start(self) -> None:
         if not is_available():

@@ -50,3 +50,18 @@ def test_folder_watcher_start_raises_without_watchdog(monkeypatch, tmp_path):
     fw = w.FolderWatcher(str(tmp_path), lambda _p: None)
     with pytest.raises(RuntimeError, match="watchdog"):
         fw.start()
+
+
+def test_folder_watcher_lock_is_reentrant(tmp_path):
+    """Regression: FolderWatcher.start() acquires self._lock and
+    then calls self.stop() which acquires it again. With a plain
+    threading.Lock this deadlocks forever; RLock fixes it.
+    """
+    from core import watcher as w
+    fw = w.FolderWatcher(str(tmp_path), lambda _p: None)
+    # The lock attribute must support re-entry from the same thread.
+    assert fw._lock.acquire(blocking=False)
+    # Acquire again from the same thread — must succeed (RLock semantic).
+    assert fw._lock.acquire(blocking=False)
+    fw._lock.release()
+    fw._lock.release()

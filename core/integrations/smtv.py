@@ -183,13 +183,26 @@ def best_url_for_mode(episode: SmtvEpisode, mode: str) -> str:
         raise SmtvError(f"no audio track for episode {episode.vid}")
 
     if mode == "video-best":
-        for want in ("1080p", "720p", "396p"):
+        # ``max`` is SMTV's recent label for the original-quality
+        # video file (sometimes 4K). Pick it first when present so
+        # we don't fall back to a lower resolution.
+        for want in ("max", "1080p", "720p", "396p"):
             for f in episode.files:
                 if f.quality == want:
                     return f.download_url
+        # Last-resort: any quality string ending in 'p' (covers future
+        # additions like 480p / 2160p without code changes).
+        for f in episode.files:
+            if f.quality and f.quality.endswith("p"):
+                return f.download_url
         raise SmtvError(f"no video file for episode {episode.vid}")
 
-    quality_map = {"video-1080": "1080p", "video-720": "720p", "video-396": "396p"}
+    quality_map = {
+        "video-max": "max",
+        "video-1080": "1080p",
+        "video-720": "720p",
+        "video-396": "396p",
+    }
     if mode in quality_map:
         want = quality_map[mode]
         for f in episode.files:
@@ -243,6 +256,12 @@ def _http_get(url: str, *, timeout: float) -> str:
         raise SmtvError(f"network error fetching {url}: {e.reason}") from e
     except TimeoutError as e:
         raise SmtvError(f"timeout fetching {url} after {timeout}s") from e
+    except (ConnectionResetError, OSError) as e:
+        # The docstring promises callers only need one except clause.
+        # ConnectionResetError / generic OSError used to escape past
+        # the URLError branch (the audit triggered them by killing
+        # the socket mid-handshake).
+        raise SmtvError(f"network error fetching {url}: {e}") from e
 
 
 def _extract_videofiles(html_text: str) -> list[SmtvFile]:
@@ -398,12 +417,28 @@ def _basename_from_cdn_url(url: str) -> str | None:
     return os.path.basename(files[0])
 
 
+_WINDOWS_RESERVED_NAMES = frozenset({
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+})
+
+
 def _sanitise_filename(name: str) -> str:
     cleaned = _UNSAFE_FILENAME_CHARS.sub("_", name).strip().strip(".")
     cleaned = re.sub(r"\s+", " ", cleaned)
     if len(cleaned) > 180:
         cleaned = cleaned[:180].rstrip()
-    return cleaned or "smtv_episode"
+    if not cleaned:
+        return "smtv_episode"
+    # Windows reserves CON / PRN / AUX / NUL / COM1-9 / LPT1-9 as
+    # device names — writing a file with that stem fails with OSError.
+    # Treat the stem (everything before the first dot) and prefix '_'
+    # when it collides.
+    stem = cleaned.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        cleaned = "_" + cleaned
+    return cleaned
 
 
 class _TextStripper(HTMLParser):
