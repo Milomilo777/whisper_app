@@ -97,8 +97,8 @@
 |---|---|---|---|---|
 | **System tray icon + minimise-to-tray** | 🔴 absent | Superwhisper, Wispr Flow, Handy, VoiceTypr | S | Especially valuable once we add live-dictation. |
 | **Windows toast notification on completion** | 🟡 system bell only (after the v0.7.0 UX refresh) | MacWhisper (NSUserNotification), Buzz | S | `win10toast`-style native toast on top of the bell would survive a minimised window. |
-| **Internationalised UI** | 🔴 English-only labels | MacWhisper (multiple), Buzz | M | Particularly painful for our actual primary user (Persian speaker) and the Persian SMTV content path. |
-| **RTL layout support** | 🔴 absent | Most modern Qt/Electron apps | M | Persian / Arabic / Hebrew users see misaligned UI. |
+| **Internationalised UI** | 🟢 English-only **by design** | MacWhisper (multiple), Buzz | — | Scope choice: this app targets English-speaking users. Multi-language UI is explicitly out of scope. The SMTV scraper accepts non-English URLs but the UI labels stay English. |
+| **RTL layout support** | 🟢 not applicable (English-only) | Most modern Qt/Electron apps | — | Out of scope by the same scope choice above. |
 | **Dark / light theme** | 🟢 yes (sv-ttk) | 🟢 most | — | Done. |
 | **High-DPI scaling** | 🟡 implicit Tk default | MacWhisper, modern Qt apps | S | Tk needs `tk scaling` set explicitly for 150%+ Windows displays. |
 | **Resizable / dockable result panel** | 🟡 fixed in our Last Result card | Descript, Buzz | S | Power users want to make the transcript pane huge. |
@@ -179,7 +179,7 @@ The five things keeping us behind the leaders, in priority order:
 2. **In-app transcript viewer with click-to-jump playback.** Even if we never build a full editor, just showing the SRT inside the app — with a play button — closes a huge confidence gap. Effort: M. Impact: 8/10.
 3. **DOCX + Markdown export.** Cheap to ship, journalists love it. Effort: S. Impact: 6/10.
 4. **System-wide dictation hotkey.** Defines the entire Superwhisper / Wispr Flow category that's growing fastest in 2025/2026. Effort: XL. Impact: 9/10.
-5. **CI on GitHub Actions** with our own tests gated on PRs + a code-signed release. Without these, every release is "trust me, I ran the smoke locally" — fine for a one-person project, fragile for anyone else who tries to ship a hot-fix. Effort: M (CI) + M (signing pipeline). Impact: 7/10 to maintainers, 5/10 to users.
+5. **CI on GitHub Actions** with our own tests gated on PRs. Without this, every release is "trust me, I ran the smoke locally" — fine for a one-person project, fragile for anyone else who tries to ship a hot-fix. Effort: M. Impact: 7/10 to maintainers. (Code-signing is deferred — current scope decision.)
 
 Everything else in this document is real and reasonable to address over time, but the five above are the ones that change how users describe the product.
 
