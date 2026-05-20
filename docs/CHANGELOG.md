@@ -4,6 +4,13 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-05-20
+
+Version bump packaging the Session-14 hands-off polish push, listed
+in detail below under the original 0.7.0 history. Same source as the
+final 0.7.0 build; rebranded so the three installer EXEs reflect the
+new feature surface (backends, viewer enhancements, tray, …).
+
 ## [0.7.0] — 2026-05-20
 
 ### Added — Session 14 (hands-off polish from `HANDOFF_NEXT_SESSION.md`)

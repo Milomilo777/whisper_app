@@ -101,7 +101,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='WhisperProject-v0.7.0-Portable',
+    name='WhisperProject-v0.7.1-Portable',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -92,7 +92,7 @@ def _app_version() -> str:
     except Exception:  # noqa: BLE001
         pass
     # Fall back to the hard-coded About-dialog string.
-    return "0.7.0"
+    return "0.7.1"
 
 
 def init_sentry() -> bool:

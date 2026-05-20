@@ -444,7 +444,7 @@ class App(tk.Tk):
         Toplevel centers on the app window (Session 9 audit fix).
         """
         body = (
-            "Whisper Project v0.7.0\n\n"
+            "Whisper Project v0.7.1\n\n"
             "Offline transcription + video downloader for Windows.\n"
             "Built on faster-whisper and yt-dlp.\n\n"
             "https://github.com/Milomilo777/whisper_project_direct_download_v2"

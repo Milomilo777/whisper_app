@@ -11,11 +11,11 @@
 
 [Setup]
 AppName=Whisper Project
-AppVersion=0.7.0
+AppVersion=0.7.1
 AppPublisher=Whisper Project
 DefaultDirName={autopf}\WhisperProject
 DefaultGroupName=Whisper Project
-OutputBaseFilename=WhisperProject-v0.7.0-Setup-Standard
+OutputBaseFilename=WhisperProject-v0.7.1-Setup-Standard
 OutputDir=dist_installer
 Compression=lzma2/ultra
 SolidCompression=yes
