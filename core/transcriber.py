@@ -32,7 +32,7 @@ from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
 from .paths import bundled_binary
 from .task import TranscriptionTask
-from .writers import get_writer, supported_formats
+from .writers import get_binary_writer, get_writer, is_binary, supported_formats
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +268,10 @@ def _write_outputs(
     previous (intact) version of the file or nothing, never a half-
     written SRT that some downstream tool will reject. The .part file
     is cleaned up on the raise path.
+
+    Text formats go through ``open(..., "w", encoding="utf-8")``;
+    binary formats (``docx``) go through ``open(..., "wb")`` with
+    bytes payload from ``get_binary_writer``.
     """
     formats = formats or list(config.get("output_formats") or ["srt", "json"])
     written: list[str] = []
@@ -278,10 +282,15 @@ def _write_outputs(
         ext = "json" if fmt_name == "json" else fmt_name
         path = f"{base}.{ext}"
         part_path = path + ".part"
-        body = get_writer(fmt_name)(segments_data, audio_path)
         try:
-            with open(part_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(body)
+            if is_binary(fmt_name):
+                payload_b = get_binary_writer(fmt_name)(segments_data, audio_path)
+                with open(part_path, "wb") as fb:
+                    fb.write(payload_b)
+            else:
+                payload_s = get_writer(fmt_name)(segments_data, audio_path)
+                with open(part_path, "w", encoding="utf-8", newline="\n") as fs:
+                    fs.write(payload_s)
             os.replace(part_path, path)
         except Exception:
             try:

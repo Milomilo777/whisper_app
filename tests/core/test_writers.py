@@ -6,10 +6,15 @@ import json
 import pytest
 
 from core.writers import (
+    BINARY_WRITERS,
     WRITERS,
+    docx_writer,
+    get_binary_writer,
     get_writer,
+    is_binary,
     json_writer,
     lrc,
+    md,
     srt,
     supported_formats,
     tsv,
@@ -158,7 +163,7 @@ def test_lrc_writer_no_title_when_path_empty(segments):
 
 def test_get_writer_returns_callable_for_each_format():
     for name in supported_formats():
-        fn = get_writer(name)
+        fn = get_binary_writer(name) if is_binary(name) else get_writer(name)
         assert callable(fn)
 
 
@@ -174,17 +179,112 @@ def test_get_writer_raises_for_unknown_format():
 
 def test_supported_formats_includes_canonical_set():
     formats = supported_formats()
-    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc"):
+    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "docx"):
         assert required in formats
 
 
 def test_writers_handle_empty_segment_list():
     for name in supported_formats():
-        body = get_writer(name)([])
-        assert isinstance(body, str)
+        if is_binary(name):
+            payload = get_binary_writer(name)([], "")
+            assert isinstance(payload, (bytes, bytearray))
+        else:
+            body = get_writer(name)([], "")
+            assert isinstance(body, str)
 
 
 def test_srt_writer_uses_comma_decimal():
     body = srt.write([{"start": 0.5, "end": 1.0, "text": "x"}])
     assert "00:00:00,500" in body
     assert "00:00:00.500" not in body
+
+
+# --- Markdown writer ------------------------------------------------------
+
+
+def test_md_writer_has_heading_and_timestamps(segments):
+    body = md.write(segments, "interview.mp3")
+    assert body.startswith("# interview.mp3")
+    assert "**00:00:00**" in body
+    assert "**00:00:01**" in body  # second segment starts at 1.5s
+    assert "Hello world" in body
+    assert "Second line" in body
+
+
+def test_md_writer_includes_speaker_label_when_present():
+    body = md.write([
+        {"start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 1"},
+        {"start": 1.0, "end": 2.0, "text": "yo", "speaker": "Speaker 2"},
+    ], "x.wav")
+    assert "_Speaker 1:_" in body
+    assert "_Speaker 2:_" in body
+
+
+def test_md_writer_omits_speaker_when_absent():
+    body = md.write([{"start": 0.0, "end": 1.0, "text": "hi"}], "x.wav")
+    assert "_" not in body.replace("\n", "")  # no italic markers
+
+
+def test_md_writer_skips_empty_segments():
+    body = md.write([
+        {"start": 0.0, "end": 1.0, "text": "  "},
+        {"start": 1.0, "end": 2.0, "text": "real"},
+    ], "x.wav")
+    assert body.count("**") == 2  # only one segment timestamp -> one pair of **
+
+
+# --- DOCX writer ----------------------------------------------------------
+
+
+def test_docx_writer_returns_zip_bytes(segments):
+    payload = docx_writer.write_bytes(segments, "meeting.mp4")
+    assert isinstance(payload, bytes)
+    # DOCX is a ZIP archive; magic bytes are "PK\x03\x04".
+    assert payload[:4] == b"PK\x03\x04", payload[:8]
+    # Should be substantially larger than the smallest possible zip
+    # (the docx skeleton itself runs ~ 20 KB minimum).
+    assert len(payload) > 5_000
+
+
+def test_docx_writer_embeds_segment_text_and_speaker(segments, tmp_path):
+    # Round-trip through python-docx: read the zip back and confirm
+    # the segment text + speaker actually landed in document.xml.
+    import zipfile
+
+    enriched = [
+        {"start": 0.0, "end": 1.0, "text": "hello", "speaker": "Alice"},
+        {"start": 1.0, "end": 2.0, "text": "world", "speaker": "Bob"},
+    ]
+    payload = docx_writer.write_bytes(enriched, "x.wav")
+    docx_path = tmp_path / "out.docx"
+    docx_path.write_bytes(payload)
+
+    with zipfile.ZipFile(docx_path) as zf:
+        with zf.open("word/document.xml") as f:
+            document_xml = f.read().decode("utf-8")
+
+    assert "hello" in document_xml
+    assert "world" in document_xml
+    assert "Alice" in document_xml
+    assert "Bob" in document_xml
+    # Heading should carry the audio basename
+    assert "x.wav" in document_xml
+    # Timestamps appear in [HH:MM:SS] form
+    assert "[00:00:00]" in document_xml
+    assert "[00:00:01]" in document_xml
+
+
+def test_docx_writer_handles_empty_segments_gracefully():
+    payload = docx_writer.write_bytes([], "")
+    assert payload[:4] == b"PK\x03\x04"
+
+
+def test_is_binary_table():
+    assert is_binary("docx") is True
+    assert is_binary("DOCX") is True  # case-insensitive
+    for name in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md"):
+        assert is_binary(name) is False
+
+
+def test_binary_writers_registry_only_contains_docx():
+    assert set(BINARY_WRITERS.keys()) == {"docx"}

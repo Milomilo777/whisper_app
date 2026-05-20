@@ -162,3 +162,44 @@ def test_write_outputs_cleans_up_part_on_failure(transcriber, tmp_path, monkeypa
     import os
     assert not os.path.exists(base + ".srt")
     assert not os.path.exists(base + ".srt.part")
+
+
+def test_write_outputs_binary_docx_path(transcriber, tmp_path, monkeypatch):
+    """``docx`` is binary: _write_outputs must open the .part file in
+    "wb" mode, write the python-docx zip bytes, and rename atomically.
+    Verify the zip magic bytes survive and no .part file remains."""
+    monkeypatch.setattr(transcriber, "config", {"output_formats": ["docx"]})
+    seg = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    base = str(tmp_path / "binout")
+    written = transcriber._write_outputs(base, seg, str(tmp_path / "binout.mp4"))
+
+    import os
+    assert len(written) == 1
+    docx_path = written[0]
+    assert docx_path.endswith(".docx")
+    with open(docx_path, "rb") as f:
+        head = f.read(4)
+    assert head == b"PK\x03\x04", f"docx is not a valid zip: head={head!r}"
+    leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+    assert leftovers == []
+
+
+def test_write_outputs_mixed_text_and_binary(transcriber, tmp_path, monkeypatch):
+    """SRT + DOCX together: text writer goes through utf-8 write,
+    binary writer through wb. Both files exist with the right
+    magic / shape, neither leaves a .part behind."""
+    monkeypatch.setattr(transcriber, "config", {"output_formats": ["srt", "docx", "md"]})
+    seg = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    base = str(tmp_path / "mixed")
+    written = transcriber._write_outputs(base, seg, str(tmp_path / "mixed.mp4"))
+
+    import os
+    by_ext = {os.path.splitext(p)[1]: p for p in written}
+    assert sorted(by_ext.keys()) == [".docx", ".md", ".srt"]
+    for p in written:
+        assert os.path.isfile(p) and os.path.getsize(p) > 0
+    # Quick magic checks
+    with open(by_ext[".docx"], "rb") as f:
+        assert f.read(4) == b"PK\x03\x04"
+    leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+    assert leftovers == []

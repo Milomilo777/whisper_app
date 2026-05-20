@@ -13,6 +13,12 @@ sv-ttk>=2.6.0
 # OS-correct config / cache / log paths (Phase 1.2)
 platformdirs>=4.0.0
 
+# DOCX export (core.writers.docx_writer)
+python-docx>=1.0
+
+# Drag-and-drop into the Tk window (loaded lazily — falls back gracefully)
+tkinterdnd2>=0.4.0
+
 # Optional: dark/light system-theme detection used when theme="system"
 # (sv-ttk falls back to dark if missing). Uncomment if desired.
 # darkdetect>=0.8.0
