@@ -6,6 +6,19 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [0.7.0] — 2026-05-20
 
+### Added — Session 13 (gap-closing push)
+
+- **Speaker diarization** via `sherpa-onnx` (no HuggingFace token). Toggle on the Transcribe tab. SRT / JSON / MD / DOCX writers all carry the speaker label. ONNX models live in `bin/diarization/` and ship with each installer.
+- **In-app transcript viewer** (`Help → Open transcript viewer…`, plus "View transcript" button on the Last Result card). Segment table with type-as-you-search filter, double-click to seek, embedded `python-vlc` playback when libvlc is installed (falls back gracefully).
+- **DOCX export** via `python-docx`. New binary-write path in `_write_outputs` with atomic `.part → os.replace` semantics preserved.
+- **Markdown export** — stdlib only. Heading + per-segment timestamps + optional `_Speaker N:_` italics.
+- **Drag-and-drop** (one or many files, or a URL) onto the window. Powered by `tkinterdnd2`; the App stays usable when the dep is missing.
+- **Recent files submenu** populated from `history.db` (last 10 unique files). `File → Recent files`.
+- **Window geometry persistence** — saves on exit, restores on next launch.
+- **Multi-file Browse…** — selecting several files in the dialog enqueues them all.
+- **Keyboard shortcuts** — `Ctrl+O` Browse, `Ctrl+Enter` Transcribe, `Esc` Cancel running, `Ctrl+Q` Exit.
+- **GitHub Actions CI** (`.github/workflows/ci.yml`). Pyright + the unit suite on every push and PR. Matrix: Windows + Ubuntu, Python 3.11 + 3.12. Ubuntu wraps the pytest invocation in `xvfb-run`.
+
 ### Added
 
 - **Session 12** — Three independent installation methods, all shipped from a single branch (`release/v0.7.0-installer-3-options`) on a single tag (`v0.7.0`):

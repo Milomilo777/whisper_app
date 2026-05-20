@@ -618,6 +618,113 @@ Plus `docs/PHASE_1_ACCEPTANCE.md` with ten grep-able tests, all sample tests ver
 
 ---
 
+## Session 13 — 2026-05-20 — Hands-off agent, four-of-five priority closure
+
+**Coordinator:** Claude Opus 4.7 (1M context) on
+`release/v0.7.0-installer-3-options`.
+
+**Goal as briefed:** ship the five priorities from
+`GAPS_AGAINST_PEERS_2026.md` at the highest possible quality, with
+real testing at the end (not just smoke). User clarified the app
+targets English speakers (Persian framing was a mistake from the
+start). Code-signing deferred. CI: do it all. UI: rewrite to a
+new framework if it helps — my call.
+
+**Three layers of reflection on the UI rewrite question:**
+
+1. Tk has real limitations (no native media widget, no
+   drag-and-drop without an add-on, no rich text styling) — but a
+   half-finished Qt/Tauri rewrite in one session would be worse
+   than the current Tk.
+2. The user's concrete pain point is *output ambiguity*, not Tk's
+   visual style. The UX refresh in Session 12 (Last Result card,
+   status icons, double-click row) already closed the worst of
+   that. What's left is the missing capabilities — speaker
+   identification, in-app playback, more export formats — none
+   of which need a framework rewrite.
+3. The right pragmatic call: stay in Tk, add `tkinterdnd2` for
+   drag-and-drop, `python-vlc` for embedded playback, `sherpa-onnx`
+   for diarization. Keep the existing widget tree; add new dialogs
+   for the viewer. This is what landed.
+
+**What got done (priorities from GAPS_AGAINST_PEERS_2026.md):**
+
+| # | Gap | Status | Where |
+|---|---|---|---|
+| 1 | Speaker diarization | ✓ shipped | sherpa-onnx + 35 MB ONNX models in `bin/diarization/`. No HF token. |
+| 2 | In-app transcript viewer + click-to-seek | ✓ shipped | `app/dialogs/transcript_viewer.py`. python-vlc for playback, fallback to system player. |
+| 3 | DOCX + Markdown export | ✓ shipped | `core/writers/docx_writer.py` + `core/writers/md.py`. Binary write path in `_write_outputs`. |
+| 4 | System-wide dictation hotkey | ⏸ deferred | XL effort; full design recorded in `docs/ROADMAP.md` §5.1b. |
+| 5 | GitHub Actions CI | ✓ shipped | `.github/workflows/ci.yml`. Matrix: Win+Ubuntu × py3.11+3.12. `xvfb-run` on Ubuntu for the Tk tests. |
+
+Plus the UX adds: drag-and-drop, recent files, geometry
+persistence, multi-file Browse, four keyboard shortcuts.
+
+**Real-tested end-to-end (not just smoke):**
+
+All three rebuilt deliverables (Portable, Setup-Compact,
+Setup-Standard) transcribed the 60 s reference English video with
+diarization + DOCX + MD + JSON + SRT enabled. Each produced:
+
+  - `…srt` with `Speaker 00: text...` prefix
+  - `…md` with `**00:00:00** _Speaker 00:_ text...`
+  - `…docx` valid python-docx zip (PK\x03\x04 magic, 35-37 KB)
+  - `…json` with `"speaker"` field on every segment
+
+Three speakers detected on the 60 s clip; assignment stable
+across all three method bundles.
+
+Unit suite: 164 → 197 passing.
+
+**Decisions worth remembering:**
+
+- **sherpa-onnx over pyannote-audio.** Pyannote requires a HF
+  token + license acceptance. WhisperX drags in 700 MB of PyTorch.
+  sherpa-onnx reuses the onnxruntime we already ship for Silero
+  VAD; the two diarization models together are 35 MB.
+- **python-vlc as optional dep.** The Python binding is ~80 KB;
+  libvlc.dll lives in the user's VLC install. The viewer
+  detects FileNotFoundError at import time (libvlc missing) and
+  falls back to the system-player launcher. CI was the canonical
+  "no VLC" environment — confirmed the fallback works there.
+- **Config reload only on diarization keys.** The worker process
+  reads `config` once at module import. To make the diarization
+  toggle take effect without restarting the worker, the
+  transcriber refreshes only the diarization-specific keys on
+  each `transcribe()` call. Other keys (VAD, word_timestamps,
+  batch_size) still respect the established mutation pattern
+  that the existing e2e tests rely on.
+- **App is English-only by design.** The Persian INSTALL section
+  was a mis-scoped early choice; removed. The GAPS doc's i18n /
+  RTL rows flipped from "🔴 missing" to "🟢 out of scope". The
+  SMTV scraper still accepts non-English content URLs; that's a
+  per-URL capability, not a UI claim.
+- **CI on Ubuntu needs xvfb.** Tk tests touch a real display.
+  `python3-tk + xvfb` apt packages + `xvfb-run -a` wrapper on
+  the pytest invocation. Windows runners need neither.
+
+**Things explored and explicitly rejected:**
+
+- *Rewriting the UI in PyQt6 or via Tauri/webview.* A half-
+  finished rewrite in one session would be worse than the
+  current Tk + add-ons. Documented the reasoning in this entry
+  so a future session that does pursue a rewrite has the trail.
+- *Pyannote-audio for diarization.* HF token requirement +
+  PyTorch dependency. sherpa-onnx is the better fit for an
+  English-only desktop app shipping as a single installer.
+- *WhisperX for word-level alignment.* Same PyTorch concern.
+  `stable-ts` is a lighter alternative for the same effect;
+  documented in ROADMAP for a future session if word-level
+  alignment becomes the next blocker.
+- *Code-signing pipeline.* User explicitly deferred; the
+  SmartScreen friction stays for now.
+
+**Pending user actions:**
+
+- None. Push to origin, tag move, release-asset refresh all done.
+
+---
+
 ## How future sessions are logged
 
 Each session ends with an append to this file. The structure:

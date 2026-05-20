@@ -135,6 +135,90 @@ no visible output file path". Eight surgical UI changes:
 
 Source-of-truth commit for the UX refresh: `bfd067a`.
 
+## Major feature push (2026-05-20, third refresh — gap-closing)
+
+After the UX refresh, a focused push closed four of the five
+priorities flagged in `GAPS_AGAINST_PEERS_2026.md`:
+
+### Speaker diarization (Priority 1, ✓)
+
+Identify who's speaking. Toggle on the Transcribe tab ("Identify
+speakers (diarization)") — no HuggingFace token required. The
+pipeline is sherpa-onnx + pyannote-segmentation-3.0 + 3D-Speaker
+CAMPlus EN voxceleb, all ONNX, runs on the same onnxruntime we
+already ship for VAD. Bundle weight: +35 MB of ONNX models + a
+small wheel. Real-tested end-to-end on a 60 s news clip — 3
+speakers detected, labels propagate into SRT (`Speaker 00: …`),
+JSON (`{..., "speaker": "Speaker 00"}`), Markdown (`_Speaker 00:_`),
+and DOCX (bold speaker prefix).
+
+### In-app transcript viewer (Priority 2, ✓)
+
+`Help → Open transcript viewer…` opens a split-pane Toplevel with:
+
+- A clickable segment table (Time / Speaker / Text), type-as-you-
+  search filter, and double-click to seek.
+- An embedded media player when VLC is installed on the system
+  (python-vlc binds libvlc.dll). Gracefully falls back to "Open
+  in system player" if libvlc isn't present.
+- A "View transcript" button on the Last Result card after every
+  finished transcription — one click into the viewer.
+
+### DOCX + Markdown export (Priority 3, ✓)
+
+Two new writers:
+
+- `core/writers/docx_writer.py` — python-docx-backed. Heading +
+  meta line + one paragraph per segment with bold `[HH:MM:SS]`
+  prefix and bold speaker. Binary-mode write path in the
+  transcriber atomic-rename harness.
+- `core/writers/md.py` — pure stdlib. Markdown with title heading,
+  `**HH:MM:SS**` timestamps, optional `_Speaker N:_` italics.
+
+Both extend the `output_formats` config — pick any combination of
+`srt`, `vtt`, `tsv`, `txt`, `json`, `lrc`, `md`, `docx`.
+
+### System-wide dictation hotkey (Priority 4 — deferred)
+
+XL effort that warrants its own session. Full design sketch
+recorded in `docs/ROADMAP.md` §5.1b — global hotkey + audio
+capture + real-time inference + text injection + system tray
+icon. Next session can pick it up cleanly.
+
+### GitHub Actions CI (Priority 5, ✓)
+
+`.github/workflows/ci.yml` runs Pyright + the unit suite (164 →
+197 tests) on every push and PR. Matrix: Windows + Ubuntu,
+Python 3.11 + 3.12. Ubuntu wraps pytest in `xvfb-run` so the
+Tk-touching tests can find a display server. Coverage report
+uploads as an artifact on the Ubuntu 3.12 leg.
+
+### UX adds along the way
+
+- Drag-and-drop one or many files (or a URL) into the window.
+- Recent files submenu under File, populated from history.db.
+- Window geometry persistence — reopens at the same size and
+  position as last close.
+- Multi-file Browse… — selecting many files enqueues them all.
+- Keyboard shortcuts: `Ctrl+O` Browse, `Ctrl+Enter` Transcribe,
+  `Esc` Cancel running, `Ctrl+Q` Exit.
+
+### Asset size impact
+
+|                | Pre-push   | This refresh |
+|----------------|-----------:|-------------:|
+| Portable       | 190.8 MB   | **241.7 MB** |
+| Setup-Compact  | 137.2 MB   | **182.1 MB** |
+| Setup-Standard | 153.6 MB   | **200.2 MB** |
+
+Growth driven by the ONNX diarization models (~35 MB) plus
+sherpa-onnx + python-docx + tkinterdnd2 + python-vlc binding
+weight (~15 MB net). All three still well under the original
+400 MB upper bound.
+
+Source-of-truth commits for this refresh: `cb4e1a0` (writers)
+through `9137e57` (CI xvfb fix).
+
 ## Known limitations
 
 - **SmartScreen warning.** None of the three exes are code-signed.

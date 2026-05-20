@@ -21,15 +21,26 @@ Three options, pick one:
 
 ## Usage
 
-- **Transcribe** — pick an audio/video file, click Transcribe;
-  `.srt` and `.json` land next to it.
+- **Transcribe** — drag-and-drop one or many files (or click Browse).
+  Optionally turn on **Voice Activity Detection**, **Word timestamps**,
+  or **Identify speakers (diarization)**. Click Transcribe; the chosen
+  outputs land next to your input. Eight formats supported:
+  `srt`, `vtt`, `tsv`, `txt`, `json`, `lrc`, `md`, `docx`.
+- **Last Result card** — every finished transcription pops a card
+  with each output file (size + one-click Open) plus an
+  **Open folder** button and a **View transcript** button that
+  launches the in-app viewer (split-pane, click-to-seek, embedded
+  VLC playback when available).
 - **Download Videos** — paste a YouTube / yt-dlp-supported URL **or
   any Supreme Master TV episode link**; pick a format; the file
   saves to your chosen folder. Optionally auto-transcribe after the
   download finishes.
 - **Transcription Queue** — live status of pending and running jobs;
   right-click for cancel, re-run, export to oTranscribe, or open
-  output folder.
+  output folder. Double-click a finished row to open its folder.
+
+Keyboard shortcuts: `Ctrl+O` Browse, `Ctrl+Enter` Transcribe, `Esc`
+Cancel running, `Ctrl+Q` Exit.
 
 First launch downloads the ~3 GB Whisper model from a CDN mirror. No
 network needed for transcription after that.
