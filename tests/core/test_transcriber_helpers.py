@@ -118,3 +118,47 @@ def test_load_existing_model_missing_path_sets_error(transcriber, monkeypatch, t
     assert ok is False
     assert any("missing" in s.lower() for s in statuses)
     assert transcriber.get_model_error()
+
+
+# ------------------------------------------------------------- atomic write --
+
+
+def test_write_outputs_is_atomic_on_success(transcriber, tmp_path, monkeypatch):
+    """Each output writer runs to <path>.part then os.replace's onto
+    the final name. After a clean run only the final file should
+    exist; no .part leftovers."""
+    monkeypatch.setattr(transcriber, "config", {
+        "output_formats": ["srt", "json"],
+    })
+    seg = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    base = str(tmp_path / "out")
+    written = transcriber._write_outputs(base, seg, str(tmp_path / "out.mp4"))
+
+    import os
+    assert sorted(os.path.basename(p) for p in written) == ["out.json", "out.srt"]
+    for p in written:
+        assert os.path.isfile(p)
+        assert os.path.getsize(p) > 0
+    # No .part files should be left behind.
+    leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".part")]
+    assert leftovers == [], f"leftover .part files: {leftovers}"
+
+
+def test_write_outputs_cleans_up_part_on_failure(transcriber, tmp_path, monkeypatch):
+    """If the writer raises mid-write, the .part file must be unlinked
+    and the final file must not exist or remain at its previous state."""
+    monkeypatch.setattr(transcriber, "config", {"output_formats": ["srt"]})
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("writer exploded")
+
+    # Replace the SRT writer with one that always raises.
+    monkeypatch.setattr(transcriber, "get_writer", lambda _name: _boom)
+
+    base = str(tmp_path / "out")
+    with pytest.raises(RuntimeError, match="writer exploded"):
+        transcriber._write_outputs(base, [], str(tmp_path / "out.mp4"))
+
+    import os
+    assert not os.path.exists(base + ".srt")
+    assert not os.path.exists(base + ".srt.part")

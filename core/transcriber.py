@@ -260,6 +260,15 @@ def _write_outputs(
     audio_path: str,
     formats: list[str] | None = None,
 ) -> list[str]:
+    """Write each requested format atomically.
+
+    Each writer runs to a ``<path>.part`` first, then os.replace's onto
+    the final name. If anything raises mid-write — disk full, encoding
+    crash, the process dying — the user is left with either the
+    previous (intact) version of the file or nothing, never a half-
+    written SRT that some downstream tool will reject. The .part file
+    is cleaned up on the raise path.
+    """
     formats = formats or list(config.get("output_formats") or ["srt", "json"])
     written: list[str] = []
     available = supported_formats()
@@ -268,9 +277,18 @@ def _write_outputs(
             continue
         ext = "json" if fmt_name == "json" else fmt_name
         path = f"{base}.{ext}"
+        part_path = path + ".part"
         body = get_writer(fmt_name)(segments_data, audio_path)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(body)
+        try:
+            with open(part_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            os.replace(part_path, path)
+        except Exception:
+            try:
+                os.unlink(part_path)
+            except OSError:
+                pass
+            raise
         written.append(path)
     return written
 
