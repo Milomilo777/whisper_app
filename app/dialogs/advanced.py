@@ -56,6 +56,27 @@ class AdvancedDialog(tk.Toplevel):
             cat: tk.BooleanVar(value=(cat in existing_sb))
             for cat, _label in _SPONSORBLOCK_CATEGORIES
         }
+        self._filename_template = tk.StringVar(
+            value=str(cfg.get("output_filename_template") or "{base}.{ext}")
+        )
+        self._transcribe_backend = tk.StringVar(
+            value=str(cfg.get("transcribe_backend") or "faster_whisper")
+        )
+        self._alignment = tk.StringVar(
+            value=str(cfg.get("alignment") or "none")
+        )
+        self._telemetry_opt_in = tk.BooleanVar(
+            value=bool(cfg.get("telemetry_opt_in", False))
+        )
+        self._minimise_to_tray = tk.BooleanVar(
+            value=bool(cfg.get("minimise_to_tray", False))
+        )
+        self._watched_folder = tk.StringVar(
+            value=str(cfg.get("watched_folder") or "")
+        )
+        self._watched_folder_enabled = tk.BooleanVar(
+            value=bool(cfg.get("watched_folder_enabled", False))
+        )
 
         self._build()
 
@@ -93,7 +114,73 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Entry(extras, textvariable=self._hotwords, width=42).grid(
             row=2, column=1, sticky="ew", padx=8, pady=4
         )
+        ttk.Label(extras, text="Backend").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        backend_combo = ttk.Combobox(
+            extras,
+            textvariable=self._transcribe_backend,
+            state="readonly",
+            values=("faster_whisper", "whisper_cpp"),
+            width=20,
+        )
+        backend_combo.grid(row=3, column=1, sticky="w", padx=8, pady=4)
+        ttk.Button(
+            extras, text="Download whisper.cpp model...",
+            command=self._download_whisper_cpp_model,
+        ).grid(row=3, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(extras, text="Word alignment").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        ttk.Combobox(
+            extras,
+            textvariable=self._alignment,
+            state="readonly",
+            values=("none", "stable_ts"),
+            width=20,
+        ).grid(row=4, column=1, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            extras,
+            text="stable_ts refines word timestamps via DTW (~10-30% slower).",
+            foreground="#666",
+        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(extras, text="Output filename template").grid(row=5, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(extras, textvariable=self._filename_template, width=42).grid(
+            row=5, column=1, columnspan=2, sticky="ew", padx=8, pady=4
+        )
+        ttk.Label(
+            extras,
+            text="Tokens: {base} {ext} {lang} {date} {speaker_count}",
+            foreground="#666",
+        ).grid(row=6, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         extras.columnconfigure(1, weight=1)
+
+        # Watched folder
+        watch = ttk.LabelFrame(body, text="Watched folder")
+        watch.pack(fill="x", pady=(0, 8))
+        ttk.Checkbutton(
+            watch, text="Auto-transcribe new files dropped here",
+            variable=self._watched_folder_enabled,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ttk.Label(watch, text="Folder").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(watch, textvariable=self._watched_folder, width=42).grid(
+            row=1, column=1, sticky="ew", padx=8, pady=4
+        )
+        ttk.Button(
+            watch, text="Browse...",
+            command=self._browse_watched_folder,
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
+        watch.columnconfigure(1, weight=1)
+
+        # Tray + telemetry
+        misc = ttk.LabelFrame(body, text="App behaviour")
+        misc.pack(fill="x", pady=(0, 8))
+        ttk.Checkbutton(
+            misc, text="Minimise to system tray instead of exit",
+            variable=self._minimise_to_tray,
+        ).pack(anchor="w", padx=8, pady=4)
+        ttk.Checkbutton(
+            misc, text="Send anonymous crash reports + launch counts (opt-in)",
+            variable=self._telemetry_opt_in,
+        ).pack(anchor="w", padx=8, pady=4)
 
         # SponsorBlock + auto-transcribe (Phase 3a)
         download = ttk.LabelFrame(body, text="Downloads (yt-dlp)")
@@ -140,6 +227,20 @@ class AdvancedDialog(tk.Toplevel):
         cfg["hotwords"] = self._hotwords.get().strip()
         cfg["auto_transcribe_after_download"] = bool(self._auto_transcribe.get())
         cfg["sponsorblock_categories"] = [c for c, v in self._sb_vars.items() if v.get()]
+        tpl = (self._filename_template.get() or "").strip() or "{base}.{ext}"
+        cfg["output_filename_template"] = tpl
+        cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
+        cfg["alignment"] = self._alignment.get() or "none"
+        cfg["telemetry_opt_in"] = bool(self._telemetry_opt_in.get())
+        cfg["minimise_to_tray"] = bool(self._minimise_to_tray.get())
+        new_watched = (self._watched_folder.get() or "").strip()
+        new_watched_enabled = bool(self._watched_folder_enabled.get())
+        watched_changed = (
+            cfg.get("watched_folder", "") != new_watched
+            or bool(cfg.get("watched_folder_enabled", False)) != new_watched_enabled
+        )
+        cfg["watched_folder"] = new_watched
+        cfg["watched_folder_enabled"] = new_watched_enabled
         try:
             save_config(cfg)
         except Exception as e:  # noqa: BLE001
@@ -147,7 +248,47 @@ class AdvancedDialog(tk.Toplevel):
         # Sync the on-tab checkboxes to the saved values.
         if hasattr(self.app, "auto_transcribe_var"):
             self.app.auto_transcribe_var.set(cfg["auto_transcribe_after_download"])
+        # Restart the folder watcher when its settings changed.
+        if watched_changed:
+            restart = getattr(self.app, "_restart_watched_folder", None)
+            if callable(restart):
+                try:
+                    restart()
+                except Exception as e:  # noqa: BLE001
+                    self.app.log(f"Watched-folder restart failed: {e}")
         self.destroy()
 
     def _on_close(self) -> None:
         self.destroy()
+
+    def _browse_watched_folder(self) -> None:
+        from tkinter import filedialog
+        folder = filedialog.askdirectory(parent=self, title="Choose a folder to watch")
+        if folder:
+            self._watched_folder.set(folder)
+
+    def _download_whisper_cpp_model(self) -> None:
+        """Kick off the whisper.cpp model download in a daemon thread.
+
+        The model lives under ``user_cache_dir() / "whisper_cpp" /
+        ggml-large-v3-q5_0.bin``. The download is a single HTTPS
+        request to the project's HuggingFace mirror (no auth needed).
+        We surface progress + final status via the App's log() so the
+        user can leave the dialog open while it runs.
+        """
+        import threading
+        try:
+            from core.backends import whisper_cpp as _wc
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"whisper.cpp backend unavailable: {e}")
+            return
+
+        def _worker() -> None:
+            try:
+                self.app.log("Downloading whisper.cpp model (~1.1 GB)…")
+                path = _wc.download_default_model(log=self.app.log)
+                self.app.log(f"whisper.cpp model ready at {path}")
+            except Exception as e:  # noqa: BLE001
+                self.app.log(f"whisper.cpp model download failed: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()

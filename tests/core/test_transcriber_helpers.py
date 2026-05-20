@@ -203,3 +203,102 @@ def test_write_outputs_mixed_text_and_binary(transcriber, tmp_path, monkeypatch)
         assert f.read(4) == b"PK\x03\x04"
     leftovers = [f for f in os.listdir(tmp_path) if f.endswith(".part")]
     assert leftovers == []
+
+
+# ----------------------------------------------------- filename templating --
+
+
+def test_render_filename_template_default_legacy_layout(transcriber, tmp_path):
+    out = transcriber._render_filename_template(
+        "{base}.{ext}",
+        base=str(tmp_path / "file"),
+        ext="srt",
+    )
+    assert out == str(tmp_path / "file") + ".srt"
+
+
+def test_render_filename_template_supports_lang_and_speaker_count(transcriber, tmp_path):
+    base = str(tmp_path / "show")
+    out = transcriber._render_filename_template(
+        "{base}.{lang}.{speaker_count}sp.{ext}",
+        base=base,
+        ext="srt",
+        lang="en",
+        speaker_count=3,
+    )
+    assert out == f"{base}.en.3sp.srt"
+
+
+def test_render_filename_template_injects_iso_date(transcriber, tmp_path):
+    out = transcriber._render_filename_template(
+        "{base}-{date}.{ext}",
+        base=str(tmp_path / "show"),
+        ext="json",
+        date="2026-05-20",
+    )
+    assert out.endswith("-2026-05-20.json")
+
+
+def test_render_filename_template_subdirectory(transcriber):
+    """A template that wraps {base} in a sibling folder must produce a
+    valid path; _write_outputs creates the dir during the actual write."""
+    out = transcriber._render_filename_template(
+        "transcripts/{base}.{ext}",
+        base="myvideo",
+        ext="srt",
+    )
+    assert out == "transcripts/myvideo.srt"
+
+
+def test_render_filename_template_unknown_token_is_preserved(transcriber):
+    out = transcriber._render_filename_template(
+        "{base}.{nope}.{ext}",
+        base="x",
+        ext="srt",
+    )
+    assert out == "x.{nope}.srt"
+
+
+def test_render_filename_template_malformed_falls_back(transcriber):
+    """Unbalanced braces in a config string must not break the write."""
+    out = transcriber._render_filename_template(
+        "{base.{ext}",
+        base="x",
+        ext="srt",
+    )
+    assert out == "x.srt"
+
+
+def test_write_outputs_honours_template_config(transcriber, tmp_path, monkeypatch):
+    """End-to-end: a template with {lang} + {speaker_count} produces
+    the matching final filename, including the new path."""
+    monkeypatch.setattr(transcriber, "config", {
+        "output_formats": ["srt"],
+        "output_filename_template": "{base}.{lang}.{speaker_count}sp.{ext}",
+    })
+    seg = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    base = str(tmp_path / "show")
+    written = transcriber._write_outputs(
+        base, seg, str(tmp_path / "show.mp4"),
+        lang="en", speaker_count=2,
+    )
+    import os
+    assert len(written) == 1
+    assert os.path.basename(written[0]) == "show.en.2sp.srt"
+    assert os.path.isfile(written[0])
+
+
+def test_write_outputs_template_creates_subdirectories(transcriber, tmp_path, monkeypatch):
+    """A template that nests outputs in a sibling folder must create
+    that folder on the fly."""
+    monkeypatch.setattr(transcriber, "config", {
+        "output_formats": ["srt"],
+        "output_filename_template": "{base}/transcripts/{ext}.out",
+    })
+    seg = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+    base = str(tmp_path / "show")
+    written = transcriber._write_outputs(base, seg, str(tmp_path / "show.mp4"))
+    import os
+    assert len(written) == 1
+    assert os.path.isfile(written[0])
+    assert "transcripts" in written[0]

@@ -254,11 +254,61 @@ def _segment_to_dict(seg: Any, want_words: bool) -> dict[str, Any]:
     return payload
 
 
+def _render_filename_template(
+    template: str,
+    *,
+    base: str,
+    ext: str,
+    lang: str = "",
+    speaker_count: int = 0,
+    date: str | None = None,
+) -> str:
+    """Expand the ``output_filename_template`` config string.
+
+    Tokens supported: ``{base}``, ``{ext}``, ``{lang}``, ``{date}``,
+    ``{speaker_count}``. Missing tokens silently render as empty. Any
+    other ``{name}`` token is preserved verbatim so a typo doesn't
+    yield a confusing FileNotFound at write time.
+
+    ``base`` is the input-file stem *with* its directory prefix. That
+    keeps writes next to the source media by default; the user can
+    still pull files into a sibling folder by prefixing with e.g.
+    ``"transcripts/{base}.{ext}"`` — split path is honoured by the
+    later ``os.makedirs(dirname, exist_ok=True)``.
+    """
+    import datetime as _dt
+
+    fields: dict[str, str] = {
+        "base": base,
+        "ext": ext,
+        "lang": (lang or "").strip(),
+        "speaker_count": str(int(speaker_count)) if speaker_count else "",
+        "date": date if date is not None else _dt.date.today().isoformat(),
+    }
+
+    class _Fmt(dict):
+        def __missing__(self, key: str) -> str:
+            # Preserve unknown tokens verbatim so the user can see the
+            # typo rather than getting a silent ENOENT.
+            return "{" + key + "}"
+
+    try:
+        return template.format_map(_Fmt(fields))
+    except (IndexError, ValueError):
+        # Malformed template (unbalanced braces, positional `{0}`). Fall
+        # back to the safe legacy layout so a corrupt config never blocks
+        # a write.
+        return f"{base}.{ext}"
+
+
 def _write_outputs(
     base: str,
     segments_data: list[dict[str, Any]],
     audio_path: str,
     formats: list[str] | None = None,
+    *,
+    lang: str = "",
+    speaker_count: int = 0,
 ) -> list[str]:
     """Write each requested format atomically.
 
@@ -272,15 +322,34 @@ def _write_outputs(
     Text formats go through ``open(..., "w", encoding="utf-8")``;
     binary formats (``docx``) go through ``open(..., "wb")`` with
     bytes payload from ``get_binary_writer``.
+
+    The final path is composed by expanding the
+    ``output_filename_template`` config key (default ``"{base}.{ext}"``).
     """
     formats = formats or list(config.get("output_formats") or ["srt", "json"])
+    template = str(config.get("output_filename_template") or "{base}.{ext}")
     written: list[str] = []
     available = supported_formats()
     for fmt_name in formats:
         if fmt_name not in available:
             continue
         ext = "json" if fmt_name == "json" else fmt_name
-        path = f"{base}.{ext}"
+        path = _render_filename_template(
+            template,
+            base=base,
+            ext=ext,
+            lang=lang,
+            speaker_count=speaker_count,
+        )
+        # Honour template-supplied subdirectories. Defensive: only
+        # makedirs when the dirname is non-empty and differs from the
+        # source folder we're already writing into.
+        out_dir = os.path.dirname(path)
+        if out_dir and not os.path.isdir(out_dir):
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+            except OSError:
+                pass
         part_path = path + ".part"
         try:
             if is_binary(fmt_name):
@@ -398,6 +467,7 @@ def transcribe(
     # field, which the writers (SRT/MD/DOCX) surface as a "Speaker
     # N:" prefix. Failure here logs and continues — diarization is
     # a nice-to-have, not a hard requirement.
+    speaker_count = 0
     if config.get("diarization_enabled", False) and not task.cancelled:
         try:
             from . import diarization as _diar
@@ -413,6 +483,7 @@ def transcribe(
                 )
                 _diar.assign_speakers_to_segments(segments_data, diar_segments)
                 speakers = sorted({s.speaker for s in diar_segments})
+                speaker_count = len(speakers)
                 log(f"Diarisation: {len(speakers)} speaker(s) — {', '.join(speakers)}",
                     log_cb)
             else:
@@ -420,7 +491,14 @@ def transcribe(
         except Exception as e:  # noqa: BLE001
             log(f"Diarisation failed (continuing without speakers): {e}", log_cb)
 
-    written = _write_outputs(base, segments_data, task.file_path)
+    detected_lang = str(getattr(info, "language", "") or "")
+    written = _write_outputs(
+        base,
+        segments_data,
+        task.file_path,
+        lang=detected_lang,
+        speaker_count=speaker_count,
+    )
     log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
         log_cb)
 
