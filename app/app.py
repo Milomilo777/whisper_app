@@ -25,10 +25,12 @@ from app.dialogs.statistics import show_statistics as _show_stats
 from app.widgets.console import build_console
 from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcribe_tab
+from app.widgets.tray import TrayController
 from core.config import load_config, save_config
 from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 from core.paths import bin_dir as _resource_bin_dir
+from core.watcher import FolderWatcher
 
 logger = logging.getLogger(__name__)
 
@@ -125,10 +127,19 @@ class App(tk.Tk):
     chime_on_complete_var: tk.BooleanVar
     # Recent-files submenu rebuilt every time it opens
     _recent_menu: tk.Menu
+    # System tray + watched-folder controllers (created lazily)
+    tray: "TrayController | None"
+    _folder_watcher: "FolderWatcher | None"
+    # When True, on_exit treats Tk close as a true exit even when
+    # minimise_to_tray is on (set by TrayController._exit_app).
+    _exit_from_tray: bool
 
     def __init__(self) -> None:
         super().__init__()
         self.title("Whisper Project")
+        # High-DPI scaling: pick up the system DPI so fonts and
+        # paddings don't shrink to dollhouse size on 150 % displays.
+        self._apply_hidpi_scaling()
         # Restore the user's saved window geometry if any; falls back
         # to a sensible default. _save_window_geometry persists it on
         # the WM_DELETE_WINDOW exit path.
@@ -208,6 +219,20 @@ class App(tk.Tk):
         # requirements.txt but the desktop app stays usable even if
         # the import fails — we just log and skip.
         self._install_drag_drop()
+
+        # System tray + watched folder. Both are best-effort: missing
+        # dependencies (pystray / Pillow / watchdog) silently disable
+        # the feature rather than blocking app startup.
+        self.tray = None
+        self._folder_watcher = None
+        self._exit_from_tray = False
+        self._install_tray()
+        self._restart_watched_folder()
+
+        # Auto-resume after crash: history.mark_interrupted() above
+        # flipped rows from running → interrupted. If any of those
+        # files still exist on disk, offer to re-enqueue them.
+        self.after(700, self._maybe_offer_crash_resume)
 
         self.after(100, self._on_start)
         self.after(300, self.loop)
@@ -439,6 +464,24 @@ class App(tk.Tk):
         save_config(self.app_config)
 
     def on_exit(self) -> None:
+        # Optional minimise-to-tray: when the user has enabled tray
+        # support in the Advanced dialog and the tray icon is running,
+        # the WM_DELETE_WINDOW / File→Exit path hides the window
+        # instead of tearing down. The tray menu's Exit forces a real
+        # exit via `_exit_from_tray = True`.
+        if (
+            not self._exit_from_tray
+            and bool(self.app_config.get("minimise_to_tray", False))
+            and self.tray is not None
+            and self.tray.is_supported()
+        ):
+            try:
+                self.withdraw()
+                self.log("Window minimised to tray. Right-click the tray icon to exit.")
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
         active = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         active_downloads = [
             t for t in self.download_queue if t.status not in ("finished", "cancelled", "error")
@@ -454,6 +497,16 @@ class App(tk.Tk):
         # the same shape. Runs *before* terminating subprocesses so it
         # never sees a broken state.
         self._save_window_geometry()
+        if self._folder_watcher is not None:
+            try:
+                self._folder_watcher.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if self.tray is not None:
+            try:
+                self.tray.stop()
+            except Exception:  # noqa: BLE001
+                pass
         for task in self.download_queue:
             if task.process and task.process.poll() is None:
                 task.process.terminate()
@@ -893,6 +946,12 @@ class App(tk.Tk):
         running_dl = [
             d for d in self.download_queue if d.status == "running"
         ]
+        # Sync the tray icon colour to current activity.
+        if self.tray is not None:
+            try:
+                self.tray.set_active(bool(running or running_dl))
+            except Exception:  # noqa: BLE001
+                pass
         if not running and not running_dl:
             self.title("Whisper Project")
             return
@@ -1013,6 +1072,20 @@ class App(tk.Tk):
                     self.bell()
             except Exception:  # noqa: BLE001
                 pass
+        # Native toast via the tray controller — visible even when the
+        # window is minimised. Falls through silently if pystray /
+        # Pillow aren't installed (tray controller is None) or the
+        # user disabled tray support.
+        if self.tray is not None:
+            body = (
+                f"Wrote {len(existing)} output file"
+                f"{'' if len(existing) == 1 else 's'} for "
+                f"{os.path.basename(task.file_path)}"
+            )
+            try:
+                self.tray.notify("Whisper Project — transcription done", body)
+            except Exception:  # noqa: BLE001
+                pass
         self.log(
             f"Done: {os.path.basename(task.file_path)} → "
             f"{len(existing)} file(s) in {folder}"
@@ -1031,6 +1104,159 @@ class App(tk.Tk):
                 subprocess.run(["xdg-open", path], check=False)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Open failed", str(e), parent=self)
+
+    def _install_tray(self) -> None:
+        """Bring up the system-tray icon if pystray + Pillow are present.
+
+        The icon's right-click menu offers Show/Hide/Exit; the icon
+        colour mirrors active/idle state. Failing imports silently
+        leave ``self.tray = None`` so the rest of the app still
+        boots in environments without tray support.
+        """
+        try:
+            tray = TrayController(self)
+            if not tray.is_supported():
+                logger.info("Tray icon unavailable: pystray or Pillow missing")
+                self.tray = None
+                return
+            tray.start()
+            self.tray = tray
+            logger.info("Tray icon installed")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Tray icon failed to install: %s", e)
+            self.tray = None
+
+    def _restart_watched_folder(self) -> None:
+        """(Re)start the watched-folder watcher from current config.
+
+        The watcher class lives in ``core.watcher``; if the
+        ``watchdog`` Python package isn't installed the call no-ops.
+        Files dropped into the watched folder are auto-enqueued onto
+        the transcription queue via a Tk-safe ``after()`` hop.
+        """
+        # Tear down any previous watcher so we don't leak observer
+        # threads when the user picks a new folder in Advanced.
+        if self._folder_watcher is not None:
+            try:
+                self._folder_watcher.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._folder_watcher = None
+
+        if not bool(self.app_config.get("watched_folder_enabled", False)):
+            return
+        folder = str(self.app_config.get("watched_folder") or "").strip()
+        if not folder or not os.path.isdir(folder):
+            self.log(
+                f"Watched folder ignored — not a directory: {folder!r}"
+            )
+            return
+
+        def _on_new_file(path: str) -> None:
+            # watchdog calls back from its own thread — bounce to Tk.
+            self.after(0, lambda p=path: self._enqueue_watched_file(p))
+
+        try:
+            watcher = FolderWatcher(folder, _on_new_file)
+            watcher.start()
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not start folder watcher: {e}")
+            return
+        self._folder_watcher = watcher
+        self.log(f"Watching folder for new media: {folder}")
+
+    def _enqueue_watched_file(self, path: str) -> None:
+        """Auto-enqueue a media file dropped into the watched folder.
+
+        Mirrors the bookkeeping of App.add(): builds a
+        TranscriptionTask, appends to the queue, refreshes the
+        Treeview. Skips when the file is still being written (size
+        keeps growing for a few seconds after the first detect on
+        Windows).
+        """
+        if not os.path.isfile(path):
+            return
+        try:
+            size1 = os.path.getsize(path)
+        except OSError:
+            return
+        # Stability check — schedule a re-check 1.2 s later. Only the
+        # *second* call (with stable size) actually enqueues.
+        def _check_stable_then_enqueue(prev_size: int) -> None:
+            try:
+                size_now = os.path.getsize(path)
+            except OSError:
+                return
+            if size_now != prev_size:
+                self.after(1200, lambda: _check_stable_then_enqueue(size_now))
+                return
+            task = TranscriptionTask(path)
+            self.queue.append(task)
+            self.refresh()
+            self.log(f"Watched: enqueued {os.path.basename(path)}")
+        self.after(1200, lambda: _check_stable_then_enqueue(size1))
+
+    def _maybe_offer_crash_resume(self) -> None:
+        """If history.db flagged any rows interrupted on launch, offer
+        to re-enqueue the still-existing files."""
+        history = getattr(self, "history", None)
+        if history is None:
+            return
+        try:
+            rows = history.list_transcriptions(limit=200) or []
+        except Exception:  # noqa: BLE001
+            return
+        interrupted = [
+            r for r in rows
+            if r.get("status") == "interrupted"
+            and r.get("file_path")
+            and os.path.isfile(r["file_path"])
+        ]
+        if not interrupted:
+            return
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for r in interrupted:
+            p = r["file_path"]
+            if p not in seen:
+                seen.add(p)
+                unique.append(r)
+        n = len(unique)
+        if not messagebox.askyesno(
+            "Resume interrupted transcriptions?",
+            f"We found {n} transcription"
+            f"{'' if n == 1 else 's'} that were interrupted by a "
+            "previous crash. Resume them now?",
+            parent=self,
+        ):
+            return
+        for r in unique:
+            task = TranscriptionTask(r["file_path"])
+            lang = r.get("language") or ""
+            if lang and hasattr(task, "language"):
+                task.language = lang  # type: ignore[attr-defined]
+            self.queue.append(task)
+        self.refresh()
+        self.log(f"Re-enqueued {n} interrupted transcription(s)")
+
+    def _apply_hidpi_scaling(self) -> None:
+        """Bump Tk's pt→px scaling on high-DPI displays.
+
+        Tk default is 72 dpi (1.0). Most modern Windows machines
+        report 96 dpi (1.33). Computing from ``self.winfo_fpixels``
+        gives the right factor on 125 % / 150 % Windows scaling, so
+        the app's fonts and widget paddings keep their physical
+        size rather than shrinking to the size of a 1 cm icon.
+        """
+        try:
+            dpi = float(self.winfo_fpixels("1i"))
+            if dpi <= 0:
+                return
+            scale = max(1.0, dpi / 72.0)
+            self.tk.call("tk", "scaling", scale)
+            logger.info("Tk scaling set to %.2f (%.0f dpi)", scale, dpi)
+        except Exception as e:  # noqa: BLE001
+            logger.info("Could not apply HiDPI scaling: %s", e)
 
     def _install_drag_drop(self) -> None:
         """Wire tkinterdnd2 if available, no-op otherwise."""
