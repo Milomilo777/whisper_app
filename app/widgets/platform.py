@@ -12,8 +12,12 @@ if TYPE_CHECKING:
 
 def open_folder(folder: str, parent: "tk.Misc | None" = None) -> None:
     if not folder or not os.path.isdir(folder):
-        messagebox.showwarning("Folder missing",
-                               f"Could not open: {folder or '(empty)'}", parent=parent)
+        kwargs = {"parent": parent} if parent is not None else {}
+        messagebox.showwarning(
+            "Folder missing",
+            f"Could not open: {folder or '(empty)'}",
+            **kwargs,  # type: ignore[arg-type]
+        )
         return
     try:
         if os.name == "nt":
@@ -25,4 +29,7 @@ def open_folder(folder: str, parent: "tk.Misc | None" = None) -> None:
             import subprocess
             subprocess.run(["xdg-open", folder], check=False)
     except Exception as e:  # noqa: BLE001
-        messagebox.showerror("Open folder failed", str(e), parent=parent)
+        kwargs = {"parent": parent} if parent is not None else {}
+        messagebox.showerror(
+            "Open folder failed", str(e), **kwargs  # type: ignore[arg-type]
+        )

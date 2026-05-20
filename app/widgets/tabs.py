@@ -75,7 +75,10 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
 
     ttk.Label(parent, textvariable=app.status_var).pack()
     app.tree.bind("<Button-3>", app.menu_row)
-    app.row_map: dict[str, "TranscriptionTask"] = {}
+    # Annotation lives on the App class definition; Python silently
+    # drops attribute-target annotations at runtime, so the previous
+    # `app.row_map: dict[...] = {}` here was a no-op for type-checking.
+    app.row_map = {}
 
 
 def build_download_tab(app: "App", parent: ttk.Frame) -> None:
@@ -216,7 +219,8 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.download_tree.column("time", width=80)
     app.download_tree.pack(fill="both", expand=True)
     app.download_tree.bind("<Button-3>", app.download_menu_row)
-    app.download_row_map: dict[str, "VideoDownloadTask"] = {}
+    # See `app.row_map` above — annotation belongs on the class.
+    app.download_row_map = {}
 
     app.update_download_mode()
     app.update_subtitle_state()

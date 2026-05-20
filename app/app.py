@@ -53,7 +53,56 @@ def _resolve_entry_file() -> str:
 
 
 class App(tk.Tk):
+    """The Tk root.
+
+    Many attributes are populated *after* construction by the tab-
+    builder functions in :mod:`app.widgets.tabs` (``fv``, ``pb``,
+    every ``*_var`` and ``*_combo``, etc.). They live as forward-
+    declared annotations on the class so pyright sees them and so
+    refactoring tools follow them; the actual assignment still
+    happens in the tab builder.
+    """
+
     entry_file: str = _resolve_entry_file()
+
+    # --- forward declarations of attributes assigned after init -----------
+    # Transcribe tab
+    fv: tk.StringVar
+    vad_enabled_var: tk.BooleanVar
+    word_timestamps_var: tk.BooleanVar
+    # Queue tab
+    tree: "ttk.Treeview"
+    pb: "ttk.Progressbar"
+    row_map: dict[str, Any]
+    # Download tab
+    download_url_var: tk.StringVar
+    download_folder_var: tk.StringVar
+    download_mode_var: tk.StringVar
+    download_mode_combo: "ttk.Combobox"
+    audio_format_var: tk.StringVar
+    audio_format_combo: "ttk.Combobox"
+    video_format_var: tk.StringVar
+    video_format_combo: "ttk.Combobox"
+    output_format_var: tk.StringVar
+    output_format_combo: "ttk.Combobox"
+    download_subtitles_var: tk.BooleanVar
+    subtitle_lang_var: tk.StringVar
+    subtitle_lang_combo: "ttk.Combobox"
+    subtitle_status_var: tk.StringVar
+    auto_transcribe_var: tk.BooleanVar
+    smtv_download_all_parts_var: tk.BooleanVar
+    format_status_var: tk.StringVar
+    download_tree: "ttk.Treeview"
+    download_row_map: dict[str, Any]
+    # Set by format_service.lookup_formats / _apply_smtv_formats
+    _smtv_episode: Any | None
+    # Set by tabs.build_download_tab — toggles the series checkbox.
+    # Signature: (visible: bool) -> None
+    _smtv_series_toggle: Any
+    # Console widget (built by app.widgets.console.build_console)
+    txt: "tk.Text"
+    # Optional history DB; None when SQLite init fails
+    history: "HistoryDB | None"
 
     def __init__(self) -> None:
         super().__init__()

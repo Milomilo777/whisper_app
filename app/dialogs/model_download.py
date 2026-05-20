@@ -32,7 +32,7 @@ def fmt_duration(seconds: float | int | None) -> str:
 
 
 class ModelDownloadDialog(tk.Toplevel):
-    def __init__(self, master: tk.Misc) -> None:
+    def __init__(self, master: "tk.Tk | tk.Toplevel") -> None:
         super().__init__(master)
         self.title("Preparing Whisper model")
         self.resizable(False, False)

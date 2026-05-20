@@ -11,6 +11,15 @@ Public entry point: ``app.run()``.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Re-exported lazily by ``__getattr__`` so importing this package
+    # does not pull in tkinter / faster-whisper until ``app.App`` is
+    # actually requested. The TYPE_CHECKING block keeps the name
+    # visible to static analysers and IDE autocomplete.
+    from .app import App as App  # noqa: F401
+
 __all__ = ["run", "App"]
 
 
