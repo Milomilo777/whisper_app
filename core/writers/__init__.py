@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from . import docx_writer, json_writer, lrc, md, srt, tsv, txt, vtt
+from . import docx_writer, json_writer, lrc, md, pdf_writer, srt, tsv, txt, vtt
 
 WriterFn = Callable[[list[dict], str], str]
 BinaryWriterFn = Callable[[list[dict], str], bytes]
@@ -33,6 +33,7 @@ WRITERS: dict[str, WriterFn] = {
 
 BINARY_WRITERS: dict[str, BinaryWriterFn] = {
     "docx": docx_writer.write_bytes,
+    "pdf": pdf_writer.write_bytes,
 }
 
 

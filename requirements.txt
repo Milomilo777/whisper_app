@@ -31,6 +31,17 @@ sherpa-onnx>=1.10
 # system player" button when libvlc isn't found.
 python-vlc>=3.0
 
+# PDF export (core.writers.pdf_writer)
+reportlab>=4.0
+
+# Folder watcher (core.watcher) — auto-transcribe files dropped
+# into a configured watched folder.
+watchdog>=3.0
+
+# System-tray icon (core.tray + minimise-to-tray)
+pystray>=0.19
+Pillow>=10.0
+
 # Optional: dark/light system-theme detection used when theme="system"
 # (sv-ttk falls back to dark if missing). Uncomment if desired.
 # darkdetect>=0.8.0

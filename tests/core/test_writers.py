@@ -179,8 +179,39 @@ def test_get_writer_raises_for_unknown_format():
 
 def test_supported_formats_includes_canonical_set():
     formats = supported_formats()
-    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "docx"):
+    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "docx", "pdf"):
         assert required in formats
+
+
+def test_pdf_writer_returns_pdf_magic(segments):
+    from core.writers import pdf_writer
+    payload = pdf_writer.write_bytes(segments, "interview.mp4")
+    assert isinstance(payload, bytes)
+    # PDF magic is "%PDF-".
+    assert payload[:5] == b"%PDF-", payload[:8]
+    # Body should be more than a few bytes — reportlab's smallest
+    # output is ~ 1 KB even for one paragraph.
+    assert len(payload) > 1000
+
+
+def test_pdf_writer_handles_empty_and_speakers(tmp_path):
+    from core.writers import pdf_writer
+    # Empty segments still produces a valid PDF skeleton.
+    payload = pdf_writer.write_bytes([], "")
+    assert payload[:5] == b"%PDF-"
+
+    enriched = [
+        {"start": 0.0, "end": 1.0, "text": "hi", "speaker": "Speaker 00"},
+        {"start": 1.0, "end": 2.0, "text": "yo"},
+    ]
+    payload2 = pdf_writer.write_bytes(enriched, "x.wav")
+    pdf_path = tmp_path / "x.pdf"
+    pdf_path.write_bytes(payload2)
+    # Spot-check by writing it to disk and reading the raw bytes for
+    # the segment strings. PDF content streams are compressed by
+    # default, so we just verify the file is a PDF and accept that
+    # deep content check belongs in an integration test.
+    assert pdf_path.stat().st_size > 1000
 
 
 def test_writers_handle_empty_segment_list():
@@ -308,5 +339,5 @@ def test_is_binary_table():
         assert is_binary(name) is False
 
 
-def test_binary_writers_registry_only_contains_docx():
-    assert set(BINARY_WRITERS.keys()) == {"docx"}
+def test_binary_writers_registry_contains_docx_and_pdf():
+    assert set(BINARY_WRITERS.keys()) == {"docx", "pdf"}
