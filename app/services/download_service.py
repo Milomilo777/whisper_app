@@ -301,9 +301,15 @@ class DownloadService:
             "output": output,
         }
 
-        smtv_episode = getattr(app, "_smtv_episode", None)
-        is_smtv = isinstance(smtv_episode, smtv_mod.SmtvEpisode) and smtv_mod.is_smtv_url(url)
-        if is_smtv:
+        raw_episode = getattr(app, "_smtv_episode", None)
+        smtv_episode: smtv_mod.SmtvEpisode | None = (
+            raw_episode
+            if isinstance(raw_episode, smtv_mod.SmtvEpisode)
+               and smtv_mod.is_smtv_url(url)
+            else None
+        )
+        is_smtv = smtv_episode is not None
+        if smtv_episode is not None:
             format_info["episode"] = smtv_episode
             format_label = f"SMTV {audio_label if mode == 'Audio' else video_label}"
 
@@ -317,7 +323,7 @@ class DownloadService:
         ]
 
         if (
-            is_smtv
+            smtv_episode is not None
             and getattr(app, "smtv_download_all_parts_var", None) is not None
             and bool(app.smtv_download_all_parts_var.get())
             and smtv_episode.siblings
@@ -361,9 +367,10 @@ class DownloadService:
         app = self.app
         app.download_events.put(("subtitle_status", task, ""))
         # Phase 3a — record start in history.
-        if getattr(app, "history", None):
+        history = getattr(app, "history", None)
+        if history is not None:
             try:
-                task.history_id = app.history.insert_download(
+                task.history_id = history.insert_download(
                     url=task.url, title=task.title, folder=task.folder,
                     format_label=task.format_label,
                 )
@@ -504,9 +511,13 @@ class DownloadService:
             raise RuntimeError("SMTV task missing CDN url")
 
         # Try to recover the parsed episode (preferred path), else
-        # re-fetch on the worker thread.
-        episode = info.get("episode")
-        if not isinstance(episode, smtv_mod.SmtvEpisode):
+        # re-fetch on the worker thread. fetch_episode raises on
+        # failure, so `episode` is always a real SmtvEpisode after
+        # this block.
+        cached = info.get("episode")
+        if isinstance(cached, smtv_mod.SmtvEpisode):
+            episode: smtv_mod.SmtvEpisode = cached
+        else:
             episode = smtv_mod.fetch_episode(task.url, timeout=30.0)
 
         basename = _smtv_basename_from_url(cdn_url) or smtv_mod.filename_for(
@@ -521,7 +532,10 @@ class DownloadService:
 
         try:
             self._stream_smtv_file(task, cdn_url, part_path)
-        except Exception:
+        except Exception:  # noqa: BLE001
+            # Whatever went wrong, the partial file is useless to the
+            # user — clean it up and re-raise so the caller posts the
+            # error event.
             _quiet_unlink(part_path)
             raise
 
@@ -749,9 +763,10 @@ class DownloadService:
                 except Exception as e:  # noqa: BLE001
                     app.log(f"Auto-transcribe wiring failed: {e}")
         # Phase 3a — finalise the history row.
-        if getattr(app, "history", None) and getattr(task, "history_id", 0):
+        history = getattr(app, "history", None)
+        if history is not None and getattr(task, "history_id", 0):
             try:
-                app.history.finish_download(
+                history.finish_download(
                     task.history_id,
                     status=status,
                     output_paths=[saved_path] if saved_path else [],

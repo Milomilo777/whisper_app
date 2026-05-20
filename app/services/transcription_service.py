@@ -95,6 +95,7 @@ class TranscriptionService:
                 line = line.strip()
                 if not line:
                     continue
+                event: dict[str, Any]
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
@@ -117,6 +118,19 @@ class TranscriptionService:
                 if process.stdin:
                     process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
                     process.stdin.flush()
+                    # Give the worker a short window to write any
+                    # final events and exit cleanly. Without this the
+                    # subsequent terminate() races the worker's
+                    # response on stdout and we lose the last batch
+                    # of events. 2 s is generous enough for the
+                    # worker's main loop to drain stdin and exit;
+                    # if it's stuck (model unloading, etc.), we fall
+                    # through to terminate() below.
+                    try:
+                        process.wait(timeout=2.0)
+                        return
+                    except subprocess.TimeoutExpired:
+                        pass
             except Exception:  # noqa: BLE001
                 pass
             process.terminate()
@@ -240,9 +254,10 @@ class TranscriptionService:
             t.start_time = _time.time()
             app.update_overall_progress()
             # Phase 3a — record start in history.
-            if getattr(app, "history", None):
+            history = getattr(app, "history", None)
+            if history is not None:
                 try:
-                    t.history_id = app.history.insert_transcription(
+                    t.history_id = history.insert_transcription(
                         file_path=t.file_path,
                         model=str(app.app_config.get("model", {}).get("name", "")),
                         language=getattr(t, "language", "") or "",
@@ -272,7 +287,8 @@ class TranscriptionService:
             task.progress = 100
         # Phase 3a — finalise the history row.
         app = self.app
-        if getattr(app, "history", None) and getattr(task, "history_id", 0):
+        history = getattr(app, "history", None)
+        if history is not None and getattr(task, "history_id", 0):
             import time as _time
             try:
                 duration = (_time.time() - task.start_time) if task.start_time else 0.0
@@ -281,7 +297,7 @@ class TranscriptionService:
                     f"{base}.{ext}"
                     for ext in (app.app_config.get("output_formats") or ["srt", "json"])
                 ]
-                app.history.finish_transcription(
+                history.finish_transcription(
                     task.history_id,
                     status=task.status,
                     output_paths=paths,

@@ -42,6 +42,19 @@ class FormatService:
         self.app.video_format_combo["values"] = []
         self.app.audio_format_var.set("")
         self.app.video_format_var.set("")
+        # Always drop the previous SMTV episode and hide the series
+        # toggle. _apply_smtv_formats will re-stash and re-show them
+        # if (and only if) the new lookup is an SMTV URL with
+        # siblings; without this reset, a YouTube URL pasted after an
+        # SMTV URL would still trigger the "Download all parts"
+        # checkbox.
+        self.app._smtv_episode = None  # type: ignore[attr-defined]
+        toggle = getattr(self.app, "_smtv_series_toggle", None)
+        if toggle is not None:
+            try:
+                toggle(visible=False)
+            except Exception:  # noqa: BLE001
+                pass
         if not url:
             self.app.format_status_var.set("Enter a URL to load available formats")
             return
