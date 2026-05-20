@@ -115,11 +115,23 @@ class App(tk.Tk):
     queue_empty_label: "ttk.Label"
     # Whether to chime the system bell when a job finishes (View menu)
     chime_on_complete_var: tk.BooleanVar
+    # Recent-files submenu rebuilt every time it opens
+    _recent_menu: tk.Menu
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Transcription helper")
-        self.geometry("900x600")
+        self.title("Whisper Project")
+        # Restore the user's saved window geometry if any; falls back
+        # to a sensible default. _save_window_geometry persists it on
+        # the WM_DELETE_WINDOW exit path.
+        saved_geom = load_config().get("window_geometry") or ""
+        if isinstance(saved_geom, str) and saved_geom.count("x") == 1:
+            try:
+                self.geometry(saved_geom)
+            except Exception:  # noqa: BLE001
+                self.geometry("960x640")
+        else:
+            self.geometry("960x640")
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
         # Per-instance queues (no more module-globals — AUDIT B3 fix).
@@ -171,6 +183,24 @@ class App(tk.Tk):
         self._build_tabs()
         self.txt = build_console(self)
 
+        # Wire global keyboard shortcuts now that the widgets exist:
+        #   Ctrl+O          → Browse for a file to transcribe
+        #   Ctrl+Enter      → Start transcribing whatever is in the
+        #                     file picker
+        #   Esc             → Cancel the currently-running task
+        #   Ctrl+Q          → Quit (same as File → Exit)
+        self.bind("<Control-o>", lambda _e: self.browse())
+        self.bind("<Control-O>", lambda _e: self.browse())
+        self.bind("<Control-Return>", lambda _e: self.add())
+        self.bind("<Escape>", lambda _e: self._cancel_running())
+        self.bind("<Control-q>", lambda _e: self.on_exit())
+        self.bind("<Control-Q>", lambda _e: self.on_exit())
+
+        # Opt-in drag-and-drop on the main window. tkinterdnd2 is in
+        # requirements.txt but the desktop app stays usable even if
+        # the import fails — we just log and skip.
+        self._install_drag_drop()
+
         self.after(100, self._on_start)
         self.after(300, self.loop)
 
@@ -182,9 +212,17 @@ class App(tk.Tk):
     def _build_menu(self) -> None:
         m = tk.Menu(self)
         f = tk.Menu(m, tearoff=0)
+        f.add_command(label="Browse...                          Ctrl+O", command=self.browse)
+        # Recent files submenu — populated from history.db at menu-open
+        # time so it always reflects the latest run. Skips when history
+        # is None (SQLite init failed) and shows a single disabled
+        # "(no recent files)" placeholder.
+        self._recent_menu = tk.Menu(f, tearoff=0, postcommand=self._populate_recent_menu)
+        f.add_cascade(label="Recent files", menu=self._recent_menu)
+        f.add_separator()
         f.add_command(label="Statistics...", command=self.show_statistics)
         f.add_separator()
-        f.add_command(label="Exit", command=self.on_exit)
+        f.add_command(label="Exit                                  Ctrl+Q", command=self.on_exit)
 
         v = tk.Menu(m, tearoff=0)
         for label, value in (("Light", "light"), ("Dark", "dark"), ("System", "system")):
@@ -213,6 +251,70 @@ class App(tk.Tk):
         m.add_cascade(label="Help", menu=h)
         m.add_cascade(label="About", menu=a)
         self.config(menu=m)
+
+    def _populate_recent_menu(self) -> None:
+        """Re-populate the File > Recent files submenu from history.db.
+
+        Called automatically by Tk every time the user opens the
+        submenu (via the ``postcommand`` hook), so the list is always
+        current. We list the last 10 file_paths from the history.db
+        transcriptions table; an "Open file" click sets fv + selects
+        the Transcribe tab without auto-enqueueing.
+        """
+        menu = self._recent_menu
+        menu.delete(0, "end")
+        history = getattr(self, "history", None)
+        rows: list[dict[str, Any]] = []
+        if history is not None:
+            try:
+                rows = history.list_transcriptions(limit=10) or []
+            except Exception:  # noqa: BLE001
+                rows = []
+        if not rows:
+            menu.add_command(label="(no recent files)", state="disabled")
+            return
+        seen: set[str] = set()
+        added = 0
+        for row in rows:
+            path = row.get("file_path") if isinstance(row, dict) else None
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            label = f"{os.path.basename(path)}  —  {os.path.dirname(path)[:48]}"
+            menu.add_command(
+                label=label,
+                command=lambda p=path: self._open_recent(p),
+            )
+            added += 1
+            if added >= 10:
+                break
+        menu.add_separator()
+        menu.add_command(label="Clear list", command=self._clear_recent)
+
+    def _open_recent(self, path: str) -> None:
+        if not os.path.isfile(path):
+            messagebox.showwarning(
+                "File missing",
+                f"That file is no longer at:\n{path}",
+                parent=self,
+            )
+            return
+        self.fv.set(path)
+        self.nb.select(self.t1)
+
+    def _clear_recent(self) -> None:
+        """Best-effort clear — only present in history if the DB exposes it."""
+        history = getattr(self, "history", None)
+        if history is None:
+            return
+        clearer = getattr(history, "clear_recent", None) or getattr(
+            history, "delete_old_transcriptions", None
+        )
+        if callable(clearer):
+            try:
+                clearer()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _save_chime_pref(self) -> None:
         self.app_config["chime_on_complete"] = bool(self.chime_on_complete_var.get())
@@ -261,6 +363,10 @@ class App(tk.Tk):
                 parent=self,
             ):
                 return
+        # Persist window size + position so the next launch reopens at
+        # the same shape. Runs *before* terminating subprocesses so it
+        # never sees a broken state.
+        self._save_window_geometry()
         for task in self.download_queue:
             if task.process and task.process.poll() is None:
                 task.process.terminate()
@@ -336,9 +442,25 @@ class App(tk.Tk):
         return _resource_bin_dir()
 
     def browse(self) -> None:
-        f = filedialog.askopenfilename()
-        if f:
-            self.fv.set(f)
+        """Pick one or more files.
+
+        The dialog supports multi-select; if the user picks several
+        files we enqueue each. Single-file selection still just
+        populates the file-picker entry without auto-enqueueing —
+        keeps the muscle-memory of "Browse → Transcribe" intact.
+        """
+        chosen = filedialog.askopenfilenames(parent=self)
+        if not chosen:
+            return
+        if len(chosen) == 1:
+            self.fv.set(chosen[0])
+            return
+        count = 0
+        for path in chosen:
+            self.fv.set(path)
+            self.add()
+            count += 1
+        self.log(f"Enqueued {count} files via Browse...")
 
     def browse_download_folder(self) -> None:
         folder = filedialog.askdirectory()
@@ -757,6 +879,95 @@ class App(tk.Tk):
                 subprocess.run(["xdg-open", path], check=False)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Open failed", str(e), parent=self)
+
+    def _install_drag_drop(self) -> None:
+        """Wire tkinterdnd2 if available, no-op otherwise."""
+        try:
+            from tkinterdnd2 import DND_FILES, TkinterDnD  # type: ignore[import-not-found]
+        except ImportError:
+            logger.info("tkinterdnd2 not present; drag-and-drop disabled")
+            return
+        # tkinterdnd2 monkey-patches the Tk root with drop_target_register;
+        # we have to apply that to ourselves.
+        try:
+            TkinterDnD._require(self)
+            self.drop_target_register(DND_FILES)  # type: ignore[attr-defined]
+            self.dnd_bind("<<Drop>>", self._on_drop)  # type: ignore[attr-defined]
+            logger.info("Drag-and-drop enabled (tkinterdnd2)")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not initialise drag-and-drop: %s", e)
+
+    def _on_drop(self, event: tk.Event) -> None:
+        """Handle a drag-and-drop onto the window.
+
+        tkinterdnd2 packs all dropped paths into a single string with
+        space-or-brace separation. The simplest robust parser is
+        ``self.tk.splitlist`` — Tcl knows the encoding rules.
+        Behaviour:
+          - one file dropped → populate the Transcribe tab's file
+            field
+          - multiple files   → enqueue each as a Transcription task
+            without further prompts
+          - URL dropped      → if it's a known download URL, paste
+            into the Download tab's URL field
+        """
+        raw = getattr(event, "data", "") or ""
+        try:
+            items = list(self.tk.splitlist(raw))
+        except Exception:  # noqa: BLE001
+            items = [raw]
+        paths: list[str] = []
+        urls: list[str] = []
+        for item in items:
+            s = item.strip()
+            if not s:
+                continue
+            if s.startswith(("http://", "https://")):
+                urls.append(s)
+            elif os.path.isfile(s):
+                paths.append(s)
+
+        if urls and hasattr(self, "download_url_var"):
+            self.download_url_var.set(urls[0])
+            self.nb.select(self.t3)
+            self.log(f"Pasted URL into Download tab: {urls[0]}")
+        if paths:
+            if len(paths) == 1:
+                self.fv.set(paths[0])
+                self.nb.select(self.t1)
+                self.log(f"Picked: {os.path.basename(paths[0])} (drag-and-drop)")
+            else:
+                count = 0
+                for p in paths:
+                    self.fv.set(p)
+                    self.add()
+                    count += 1
+                self.log(f"Enqueued {count} files via drag-and-drop")
+
+    def _cancel_running(self) -> None:
+        """Esc handler — cancel whichever single running task is most relevant."""
+        for t in self.queue:
+            if t.status == "running":
+                self.cancel(t)
+                return
+        for d in self.download_queue:
+            if d.status == "running":
+                self.cancel_download(d)
+                return
+
+    def _save_window_geometry(self) -> None:
+        """Persist the window's current size + position in config.json."""
+        try:
+            geom = self.geometry()
+        except Exception:  # noqa: BLE001
+            return
+        if not geom:
+            return
+        try:
+            self.app_config["window_geometry"] = geom
+            save_config(self.app_config)
+        except Exception:  # noqa: BLE001
+            pass
 
     def queue_row_double_click(self, event: tk.Event) -> None:
         """Double-click on a finished Queue row opens its folder.

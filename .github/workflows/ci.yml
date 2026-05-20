@@ -40,7 +40,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pytest pytest-cov pyright
+          # Dev tools used by the unit suite. `responses` is needed
+          # by tests/core/test_model_manager.py to mock the CDN
+          # download responses; pyproject.toml lists it under the
+          # `dev` extra, install explicitly here so the CI install
+          # step is self-documenting.
+          pip install pytest pytest-cov pyright responses
 
       # tkinter ships with the standard Python install on Windows
       # but Ubuntu's apt python3 doesn't carry it by default;
