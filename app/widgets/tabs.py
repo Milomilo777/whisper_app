@@ -6,6 +6,7 @@ sibling components.
 """
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
@@ -15,6 +16,38 @@ from app.domain.languages import SUBTITLE_LANGUAGES
 if TYPE_CHECKING:
     from app.app import App
     from app.domain.tasks import TranscriptionTask, VideoDownloadTask
+
+
+# --- shared UX helpers -----------------------------------------------------
+
+
+# Glanceable status icons for both Treeviews. Plain Unicode so they
+# render without an embedded image set, and so they survive the
+# packaging mode that ships no icon assets.
+STATUS_ICON = {
+    "waiting":   "⋯ ",
+    "running":   "▶ ",
+    "paused":    "⏸ ",
+    "finished":  "✓ ",
+    "error":     "✗ ",
+    "cancelled": "⊘ ",
+}
+
+
+def _fmt_bytes(n: int) -> str:
+    """Compact filesize formatter for the Last Result card."""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def status_label(status: str) -> str:
+    """Friendly status text for the Treeview's status column."""
+    return STATUS_ICON.get(status, "") + status
 
 
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
@@ -58,26 +91,81 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     ).grid(row=4, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
     parent.columnconfigure(1, weight=1)
 
+    # --- Last Result card -------------------------------------------------
+    # Hidden until the first transcription completes, then populated by
+    # App.show_last_result(task). Lives at the bottom of the Transcribe
+    # tab so a user who just clicked "Transcribe" and switches back here
+    # after the job finishes sees exactly *what* finished and *where*
+    # the outputs went, with one-click "Open" buttons. Closes the
+    # "did anything happen? where's my SRT?" question the previous UI
+    # punted to the Queue tab's right-click menu.
+    ttk.Separator(parent, orient="horizontal").grid(
+        row=5, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+    )
+
+    app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=8)
+    app.last_result_frame.grid(
+        row=6, column=0, columnspan=3, sticky="nsew", padx=10, pady=(0, 10)
+    )
+    parent.rowconfigure(6, weight=1)
+
+    app.last_result_empty_var = tk.StringVar(
+        value="No transcription finished yet. Pick a file above and click Transcribe."
+    )
+    app.last_result_empty_label = ttk.Label(
+        app.last_result_frame,
+        textvariable=app.last_result_empty_var,
+        foreground="#888",
+    )
+    app.last_result_empty_label.pack(anchor="w")
+
+    # Filled by App.show_last_result; kept as members so that method
+    # can clear/repopulate without rebuilding widgets.
+    app.last_result_body = ttk.Frame(app.last_result_frame)
+    app.last_result_title_var = tk.StringVar(value="")
+    app.last_result_files_frame = ttk.Frame(app.last_result_body)
+
 
 def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Button(parent, text="Clear completed", command=app.clear_completed).pack(
         anchor="e", padx=10, pady=6
     )
+
     cols = ("file", "status", "progress", "language", "time")
     app.tree = ttk.Treeview(parent, columns=cols, show="headings")
+    headings = {
+        "file": "File",
+        "status": "Status",
+        "progress": "Progress",
+        "language": "Language",
+        "time": "Elapsed",
+    }
     for c in cols:
-        app.tree.heading(c, text=c)
+        app.tree.heading(c, text=headings[c])
     app.tree.column("language", width=140)
-    app.tree.pack(fill="both", expand=True)
+    app.tree.column("progress", width=80, anchor="center")
+    app.tree.column("time", width=80, anchor="center")
+    app.tree.column("status", width=120)
+    app.tree.pack(fill="both", expand=True, padx=10)
+
+    # Empty-state hint shown on top of the Treeview when there are no
+    # rows yet. App.refresh hides it as soon as a task is enqueued.
+    app.queue_empty_var = tk.StringVar(
+        value="Queue is empty.  Go to the Transcribe tab and pick a file to add one."
+    )
+    app.queue_empty_label = ttk.Label(
+        parent, textvariable=app.queue_empty_var, foreground="#888", anchor="center"
+    )
+    app.queue_empty_label.pack(fill="x", pady=(2, 0))
 
     app.pb = ttk.Progressbar(parent, length=400)
     app.pb.pack(fill="x", padx=10, pady=10)
 
     ttk.Label(parent, textvariable=app.status_var).pack()
     app.tree.bind("<Button-3>", app.menu_row)
-    # Annotation lives on the App class definition; Python silently
-    # drops attribute-target annotations at runtime, so the previous
-    # `app.row_map: dict[...] = {}` here was a no-op for type-checking.
+    # Double-click on a finished row -> open the file's containing
+    # folder. Discoverable shortcut for the right-click menu entry.
+    app.tree.bind("<Double-Button-1>", app.queue_row_double_click)
     app.row_map = {}
 
 

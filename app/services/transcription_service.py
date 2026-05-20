@@ -282,9 +282,19 @@ class TranscriptionService:
         task = worker["task"]
         if not task:
             return
-        if not keep_status and not task.cancelled:
+        newly_finished = (
+            not keep_status and not task.cancelled
+        )
+        if newly_finished:
             task.status = "finished"
             task.progress = 100
+            # Surface the success on the Transcribe tab so the user
+            # sees a real "this is done, here are the files" card
+            # rather than just a Treeview row flipping to "finished".
+            try:
+                self.app.show_last_result(task)
+            except Exception:  # noqa: BLE001
+                pass
         # Phase 3a — finalise the history row.
         app = self.app
         history = getattr(app, "history", None)

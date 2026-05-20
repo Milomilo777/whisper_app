@@ -756,6 +756,31 @@ class DownloadService:
         task.status = status
         if status == "finished":
             task.progress = 100
+            if saved_path:
+                # Friendly completion line — the user actually wants
+                # to know "what file landed, where, how big". Ring
+                # the bell so they notice even if they're in another
+                # window or scrolling the console.
+                try:
+                    size = os.path.getsize(saved_path)
+                    if size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f} KB"
+                    elif size < 1024 * 1024 * 1024:
+                        size_str = f"{size / (1024 * 1024):.1f} MB"
+                    else:
+                        size_str = f"{size / (1024 * 1024 * 1024):.2f} GB"
+                except OSError:
+                    size_str = "?"
+                app.log(
+                    f"✓ Downloaded: {os.path.basename(saved_path)} "
+                    f"({size_str}) → {os.path.dirname(saved_path) or '.'}"
+                )
+                if getattr(app, "chime_on_complete_var", None) is not None:
+                    try:
+                        if app.chime_on_complete_var.get():
+                            app.bell()
+                    except Exception:  # noqa: BLE001
+                        pass
             if app.app_config.get("auto_transcribe_after_download") and saved_path:
                 try:
                     app.enqueue_transcription_from_download(saved_path, task.detected_language)

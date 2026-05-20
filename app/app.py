@@ -103,6 +103,18 @@ class App(tk.Tk):
     txt: "tk.Text"
     # Optional history DB; None when SQLite init fails
     history: "HistoryDB | None"
+    # Last-result card on the Transcribe tab
+    last_result_frame: "ttk.LabelFrame"
+    last_result_empty_var: tk.StringVar
+    last_result_empty_label: "ttk.Label"
+    last_result_body: "ttk.Frame"
+    last_result_title_var: tk.StringVar
+    last_result_files_frame: "ttk.Frame"
+    # Queue-tab empty-state placeholder
+    queue_empty_var: tk.StringVar
+    queue_empty_label: "ttk.Label"
+    # Whether to chime the system bell when a job finishes (View menu)
+    chime_on_complete_var: tk.BooleanVar
 
     def __init__(self) -> None:
         super().__init__()
@@ -173,22 +185,56 @@ class App(tk.Tk):
         f.add_command(label="Statistics...", command=self.show_statistics)
         f.add_separator()
         f.add_command(label="Exit", command=self.on_exit)
+
         v = tk.Menu(m, tearoff=0)
         for label, value in (("Light", "light"), ("Dark", "dark"), ("System", "system")):
             v.add_radiobutton(label=label, value=value, variable=self.theme_var, command=self.apply_theme)
+        v.add_separator()
+        # Audible-cue toggle. Stored in app_config so the user's choice
+        # survives a restart. Default ON — first-time users want to
+        # know when a long job completes.
+        self.chime_on_complete_var = tk.BooleanVar(
+            value=bool(self.app_config.get("chime_on_complete", True))
+        )
+        v.add_checkbutton(
+            label="Chime on completion",
+            variable=self.chime_on_complete_var,
+            command=self._save_chime_pref,
+        )
+
         h = tk.Menu(m, tearoff=0)
         h.add_command(label="Open log folder", command=self.open_log_folder)
         h.add_command(label="Open oTranscribe...", command=self.integrations_service.open_otranscribe)
         a = tk.Menu(m, tearoff=0)
-        a.add_command(
-            label="About",
-            command=lambda: messagebox.showinfo("About", "Whisper", parent=self),
-        )
+        a.add_command(label="About", command=self._show_about)
+
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
         m.add_cascade(label="About", menu=a)
         self.config(menu=m)
+
+    def _save_chime_pref(self) -> None:
+        self.app_config["chime_on_complete"] = bool(self.chime_on_complete_var.get())
+        try:
+            save_config(self.app_config)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _show_about(self) -> None:
+        """A more informative About dialog than the previous one-word "Whisper".
+
+        Shows the project version, the GitHub URL, and a one-line
+        description of what the app does. ``parent=self`` so the
+        Toplevel centers on the app window (Session 9 audit fix).
+        """
+        body = (
+            "Whisper Project v0.7.0\n\n"
+            "Offline transcription + video downloader for Windows.\n"
+            "Built on faster-whisper and yt-dlp.\n\n"
+            "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+        )
+        messagebox.showinfo("About Whisper Project", body, parent=self)
 
     def show_statistics(self) -> None:
         _show_stats(self)
@@ -352,24 +398,27 @@ class App(tk.Tk):
     # Adding tasks ------------------------------------------------------------
     def add(self) -> None:
         if not self.fv.get():
+            self.log("Pick a file first — use the Browse button on the Transcribe tab.")
             return
         if not self.model_ready:
             if self.model_loading:
-                self.log("Request was not queued because the model is still being checked.")
+                self.log("Model is still loading — please wait a moment, then try again.")
                 return
             if not messagebox.askyesno(
-                "Model required",
-                "The Whisper model must be downloaded before requests can be queued. Download it now?",
+                "Whisper model required",
+                "The Whisper model must be downloaded before the first transcription. "
+                "Download it now? (about 3 GB, one time only)",
                 parent=self,
             ):
-                self.log("Request was not queued because the required model is not ready.")
+                self.log("Transcription cancelled: the Whisper model is required.")
                 return
             if not self.ensure_model_with_modal():
-                self.log("Request was not queued because the required model is not ready.")
+                self.log("Transcription cancelled: the Whisper model is not ready.")
                 return
         self.queue.append(TranscriptionTask(self.fv.get()))
         self.pb["value"] = 0
         self.nb.select(self.t2)
+        self.log(f"Queued: {os.path.basename(self.fv.get())}")
         self.refresh()
 
     def enqueue_transcription_from_download(self, file_path: str, language: str) -> None:
@@ -512,6 +561,8 @@ class App(tk.Tk):
         return f"{h:02}:{m:02}:{sec:02}"
 
     def refresh(self) -> None:
+        from app.widgets.tabs import status_label
+
         self.tree.delete(*self.tree.get_children())
         self.row_map = {}
         for t in self.queue:
@@ -523,15 +574,30 @@ class App(tk.Tk):
                 "end",
                 values=(
                     os.path.basename(t.file_path),
-                    t.status,
+                    status_label(t.status),
                     f"{t.progress}%",
                     lang_str,
                     self.fmt_time(t),
                 ),
             )
             self.row_map[item_id] = t
+        # Empty-state hint visibility — show when the queue is empty,
+        # hide once there is at least one task. Kept here (rather than
+        # in tabs.py) because refresh is the choke point for queue
+        # changes, so the placeholder can't drift out of sync.
+        if hasattr(self, "queue_empty_label"):
+            if self.queue:
+                self.queue_empty_label.pack_forget()
+            else:
+                self.queue_empty_label.pack(fill="x", pady=(2, 0))
+        # Reflect work-in-progress in the window title so users with
+        # the app minimised see "Whisper — 34% transcribing foo.mp4"
+        # in their taskbar / Alt-Tab.
+        self._refresh_window_title()
 
     def refresh_download_queue(self) -> None:
+        from app.widgets.tabs import status_label
+
         self.download_tree.delete(*self.download_tree.get_children())
         self.download_row_map = {}
         for task in self.download_queue:
@@ -542,12 +608,169 @@ class App(tk.Tk):
                     task.title,
                     task.url,
                     task.format_label,
-                    task.status,
+                    status_label(task.status),
                     f"{task.progress}%",
                     self.fmt_time(task),
                 ),
             )
             self.download_row_map[item_id] = task
+        self._refresh_window_title()
+
+    # -- UX helpers (Phase v0.7.1 — user-friendly result surfacing) ----------
+
+    def _refresh_window_title(self) -> None:
+        """Update the Tk window title so the taskbar / Alt-Tab reflects state.
+
+        Idle: "Whisper Project".
+        One running task: "Whisper Project — 34% transcribing foo.mp4".
+        Multiple running: "Whisper Project — 2 tasks (avg 41%)".
+        """
+        running = [t for t in self.queue if t.status == "running"]
+        running_dl = [
+            d for d in self.download_queue if d.status == "running"
+        ]
+        if not running and not running_dl:
+            self.title("Whisper Project")
+            return
+        if running and not running_dl and len(running) == 1:
+            t = running[0]
+            self.title(
+                f"Whisper Project — {t.progress}% transcribing "
+                f"{os.path.basename(t.file_path)}"
+            )
+            return
+        if running_dl and not running and len(running_dl) == 1:
+            d = running_dl[0]
+            self.title(
+                f"Whisper Project — {d.progress}% downloading "
+                f"{d.title[:40] if d.title else d.url[:40]}"
+            )
+            return
+        total = len(running) + len(running_dl)
+        all_p = [t.progress for t in running] + [d.progress for d in running_dl]
+        avg = sum(all_p) // len(all_p) if all_p else 0
+        self.title(f"Whisper Project — {total} tasks (avg {avg}%)")
+
+    def show_last_result(self, task: "TranscriptionTask") -> None:
+        """Populate the Transcribe-tab Last Result card.
+
+        Called by TranscriptionService.finish_task when a job
+        completes successfully. Lists every output file that
+        actually exists on disk next to the input, with sizes and
+        one-click "Open" buttons. Also offers a single "Open folder"
+        button as a shortcut.
+        """
+        from app.widgets.tabs import _fmt_bytes
+
+        if not hasattr(self, "last_result_frame"):
+            return
+
+        try:
+            self.last_result_empty_label.pack_forget()
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Wipe any previous result card body and rebuild from scratch
+        # — simpler than diff-updating a handful of widgets.
+        for child in list(self.last_result_body.winfo_children()):
+            child.destroy()
+        try:
+            self.last_result_body.pack_forget()
+        except Exception:  # noqa: BLE001
+            pass
+
+        base, _ = os.path.splitext(task.file_path)
+        folder = os.path.dirname(task.file_path) or "."
+        candidates = [
+            f"{base}.srt",
+            f"{base}.json",
+            f"{base}.vtt",
+            f"{base}.tsv",
+            f"{base}.txt",
+            f"{base}.lrc",
+        ]
+        existing = [p for p in candidates if os.path.isfile(p)]
+
+        ttk.Label(
+            self.last_result_body,
+            text=f"✓ {os.path.basename(task.file_path)}",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(anchor="w")
+        if existing:
+            ttk.Label(
+                self.last_result_body,
+                text=f"Saved {len(existing)} output file"
+                     f"{'' if len(existing) == 1 else 's'} in {folder}",
+                foreground="#666",
+            ).pack(anchor="w", pady=(2, 6))
+
+            files_frame = ttk.Frame(self.last_result_body)
+            files_frame.pack(fill="x")
+            for path in existing:
+                row = ttk.Frame(files_frame)
+                row.pack(fill="x", pady=1)
+                size = _fmt_bytes(os.path.getsize(path))
+                ttk.Label(
+                    row, text=f"• {os.path.basename(path)}  ({size})"
+                ).pack(side="left")
+                ttk.Button(
+                    row, text="Open",
+                    command=lambda p=path: self._open_file(p),
+                ).pack(side="right")
+        else:
+            ttk.Label(
+                self.last_result_body,
+                text="(no output files were found on disk — re-run the task?)",
+                foreground="#a00",
+            ).pack(anchor="w")
+
+        ttk.Button(
+            self.last_result_body, text="Open folder",
+            command=lambda: self._open_folder(folder),
+        ).pack(anchor="w", pady=(8, 0))
+
+        self.last_result_body.pack(fill="both", expand=True)
+        # Chime + log so the user notices even if they're on another
+        # tab. The bell is one short cross-platform beep; suppressed
+        # when the View > Chime on completion toggle is off.
+        if getattr(self, "chime_on_complete_var", None) is not None:
+            try:
+                if self.chime_on_complete_var.get():
+                    self.bell()
+            except Exception:  # noqa: BLE001
+                pass
+        self.log(
+            f"Done: {os.path.basename(task.file_path)} → "
+            f"{len(existing)} file(s) in {folder}"
+        )
+
+    def _open_file(self, path: str) -> None:
+        """Open a single file with the OS default handler."""
+        try:
+            if os.name == "nt":
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.run(["open", path], check=False)
+            else:
+                import subprocess
+                subprocess.run(["xdg-open", path], check=False)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("Open failed", str(e), parent=self)
+
+    def queue_row_double_click(self, event: tk.Event) -> None:
+        """Double-click on a finished Queue row opens its folder.
+
+        For waiting/running/error/cancelled rows the action is a
+        no-op (no useful destination yet).
+        """
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        task = self.row_map.get(item)
+        if not task or task.status != "finished":
+            return
+        self._open_folder(os.path.dirname(task.file_path) or ".")
 
     def log(self, msg: str) -> None:
         self._ui_logger.info(msg)
