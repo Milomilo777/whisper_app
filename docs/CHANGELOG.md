@@ -4,8 +4,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-05-20
+
 ### Added
 
+- **Session 12** — Three independent installation methods, all shipped from a single branch (`release/v0.7.0-installer-3-options`) on a single tag (`v0.7.0`):
+  - **Method A — Portable** (`WhisperProject-v0.7.0-Portable.exe`, ~190 MB). PyInstaller `--onefile` build via `whisper_project_onefile.spec`. One file, no install, unpacks to `%TEMP%\_MEI*` per launch.
+  - **Method B — Setup-Compact** (`WhisperProject-v0.7.0-Setup-Compact.exe`, ~137 MB). PyInstaller onedir from `whisper_project_onedir.spec` wrapped in `installer.iss` (Inno Setup 6, LZMA2 ultra). Real installer with Start Menu / desktop / Add-Remove-Programs entries.
+  - **Method C — Setup-Standard** (`WhisperProject-v0.7.0-Setup-Standard.exe`, ~153 MB). Embeds a full `cpython-3.11.15+20260510-x86_64-pc-windows-msvc-install_only` distribution from [python-build-standalone](https://github.com/astral-sh/python-build-standalone), pip-installs `requirements.txt` into the bundle, copies the source tree, and wraps it via `installer_embed.iss`. Shortcuts launch `pythonw.exe gui.py`; the source is browsable on disk after install.
+  - `build_embed_installer.bat` orchestrates the Method C tree.
+  - All three pass `tests/smoke/test_exe_real_e2e.py::test_exe_worker_transcribes_real_video` on a clean install location with a real video, confirmed via the dual-launcher conftest fixture (`WHISPER_SMOKE_GUI` env var selects the embeddable-Python flavour).
 - **Session 11** — Supreme Master TV download integration. New module `core/integrations/smtv.py` (stdlib only) scrapes any `/{lang}1/v/<id>.html` episode page for video qualities (1080p/720p/396p), the MP3 audio file, the article-text transcript, and the sibling-parts playlist; the Download tab automatically routes SMTV URLs through this module instead of yt-dlp. Sub-features:
   - **Series download.** When a multi-part episode is pasted, a "Download all parts of this series (SMTV)" checkbox appears (default ON) and enqueues one task per sibling part.
   - **MP3 audio mode.** SMTV serves real MP3 files directly; the Audio mode dropdown shows `MP3 (audio only)` and the download path skips ffmpeg entirely.
@@ -27,8 +35,12 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Changed
 
+- **Session 12** — `whisper_project.spec` renamed to `whisper_project_onefile.spec` to disambiguate from the new onedir variant. EXE `name=` field updated to `WhisperProject-v0.7.0-Portable`. `installer.iss` `OutputBaseFilename=` updated to `WhisperProject-v0.7.0-Setup-Compact`. Both .gitignore whitelist entries follow the rename.
+- **Session 12** — `tests/smoke/conftest.py` and `tests/smoke/test_exe_real_e2e.py` gained dual-launcher support. The new `gui_script` fixture reads `WHISPER_SMOKE_GUI` and, when set, makes the worker subprocess launch as `[pythonw, gui.py, "--worker"]` instead of `[exe, "--worker"]` — required to verify Method C without writing a third smoke file.
+- **Session 12** — `installer_embed.iss` carries a `[UninstallDelete]` block that sweeps `__pycache__` and the install subdirectories on uninstall. Inno Setup otherwise leaves Python's runtime-generated `*.pyc` files behind because they weren't recorded in the install manifest.
+- **Session 12** — Repo cleanup: nine phase-acceptance plans + briefs + session writeups (PHASE_0/1/1B/2A/3A/NEXT acceptance, PHASE_1 brief, PHASE_NEXT brief, NEXT_SESSION_HANDOFF, SESSION_8_PACKAGING_FIX, SESSION_SINGLE_FILE_EXE, SESSION_DUAL_DELIVERABLE) moved into `docs/history/` to keep the active docs surface at-a-glance. README rewritten 190 → ~60 lines. BUILD.md rewritten to cover all three pipelines.
 - **Session 11** — `app/services/format_service.py` and `app/services/download_service.py` now branch on SMTV URLs (`core.integrations.smtv.parse_episode_id` and a `kind: "smtv"` marker on the format dict) and bypass the yt-dlp probe / spawn entirely. No behaviour change for YouTube or any other URL.
-- **Session 11** — Both PyInstaller specs (`whisper_project.spec` and `whisper_project_onedir.spec`) gain `core.integrations.smtv` in `hiddenimports` so the module survives onefile bundling and onedir-via-installer packaging.
+- **Session 11** — Both PyInstaller specs (`whisper_project_onefile.spec` and `whisper_project_onedir.spec`) gain `core.integrations.smtv` in `hiddenimports` so the module survives onefile bundling and onedir-via-installer packaging.
 - **Session 7** — `docs/MANUAL_STEPS.md` scrubbed: the `## A. Security` block that named two leaked GitHub PAT prefixes was removed. Sections re-lettered (B → A through H → G) so the file still reads cleanly. The Summary was rewritten to drop the "two human-required items" framing; there's now exactly one open human decision — which Phase to ship next.
 - **Session 7** — `README.md` "Project documentation" footer now points at `architecture-diagrams.md` first, then the direct SVG link, then the prose ARCHITECTURE.md, so a new reader hits the visuals before the prose.
 
