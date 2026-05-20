@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 REM build_embed_installer.bat — produce the embed_build\ tree that
-REM installer_embed.iss turns into WhisperProject-v0.7.0-Setup-Standard.exe.
+REM installer_embed.iss turns into WhisperProject-v0.7.1-Setup-Standard.exe.
 REM
 REM Why python-build-standalone, not python.org's embeddable zip:
 REM the embeddable distro ships *without* tkinter and the Tcl/Tk

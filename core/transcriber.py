@@ -320,10 +320,21 @@ def _render_filename_template(
     other ``{name}`` token is preserved verbatim so a typo doesn't
     yield a confusing FileNotFound at write time.
 
+    Safety:
+      * Positional ``{0}`` (or any IndexError-raising shape) falls
+        back to the legacy ``"{base}.{ext}"`` layout.
+      * Malformed templates (unbalanced braces, attribute access)
+        fall back to the legacy layout — a corrupt config never
+        blocks a write.
+      * Path-traversal is rejected after render: the resolved
+        absolute path must stay under the directory of ``base``.
+        ``../etc/passwd.srt`` and similar escapes fall back to the
+        legacy layout.
+
     ``base`` is the input-file stem *with* its directory prefix. That
     keeps writes next to the source media by default; the user can
     still pull files into a sibling folder by prefixing with e.g.
-    ``"transcripts/{base}.{ext}"`` — split path is honoured by the
+    ``"transcripts/{base}.{ext}"`` — split paths are honoured by the
     later ``os.makedirs(dirname, exist_ok=True)``.
     """
     import datetime as _dt
@@ -342,13 +353,36 @@ def _render_filename_template(
             # typo rather than getting a silent ENOENT.
             return "{" + key + "}"
 
+    legacy = f"{base}.{ext}"
     try:
-        return template.format_map(_Fmt(fields))
-    except (IndexError, ValueError):
-        # Malformed template (unbalanced braces, positional `{0}`). Fall
-        # back to the safe legacy layout so a corrupt config never blocks
-        # a write.
-        return f"{base}.{ext}"
+        rendered = template.format_map(_Fmt(fields))
+    except (IndexError, KeyError, ValueError, TypeError, AttributeError):
+        # Malformed template (unbalanced braces, positional `{0}`,
+        # attribute access in a token, etc.). Fall back to the safe
+        # legacy layout so a corrupt config never blocks a write.
+        return legacy
+
+    # Path-traversal guard. ``base`` always has a directory prefix
+    # (the source media's folder); a rendered path that resolves
+    # outside that root means the template tried to escape via
+    # ``../`` segments. Reject and fall back rather than write into
+    # an unintended location.
+    try:
+        base_dir = os.path.dirname(os.path.abspath(base)) or os.path.abspath(".")
+        rendered_abs = os.path.abspath(rendered)
+        # On Windows os.path.commonpath rejects mixed-drive args; in
+        # that case the template is clearly escaping (different drive
+        # letter than base) — fall back.
+        try:
+            common = os.path.commonpath([base_dir, rendered_abs])
+        except ValueError:
+            return legacy
+        if os.path.normcase(common) != os.path.normcase(base_dir):
+            return legacy
+    except (OSError, ValueError):
+        return legacy
+
+    return rendered
 
 
 def _write_outputs(
@@ -421,6 +455,23 @@ def _write_outputs(
     return written
 
 
+_ALT_BACKEND_LOCK = threading.Lock()
+
+
+def _deep_merge_dict(dest: dict[str, Any], src: dict[str, Any]) -> None:
+    """Recursively merge ``src`` into ``dest`` in place.
+
+    Unlike ``dict.update``, nested dicts are walked depth-first so a
+    user override of `{"model": {"name": "tiny"}}` keeps any other
+    keys under ``model`` (e.g. ``url``, ``md5``) intact.
+    """
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dest.get(k), dict):
+            _deep_merge_dict(dest[k], v)
+        else:
+            dest[k] = v
+
+
 def _get_alt_backend(name: str) -> Any:
     """Lazy-construct (and load) the alt backend for ``name``.
 
@@ -428,18 +479,23 @@ def _get_alt_backend(name: str) -> Any:
     instance here. The Advanced dialog's "Download model..." button is
     expected to have populated the model file before the user picks
     the matching backend in config.
+
+    Thread-safe: guarded by ``_ALT_BACKEND_LOCK`` so two concurrent
+    ``transcribe()`` calls don't both load (and one overwrite the
+    other) on first use.
     """
     global _ALT_BACKEND, _ALT_BACKEND_NAME
-    if _ALT_BACKEND is not None and _ALT_BACKEND_NAME == name:
-        return _ALT_BACKEND
-    from .backends import get_backend
-    backend = get_backend(name)
-    if not backend.load():
-        err = backend.get_error() or f"failed to load {name} backend"
-        raise RuntimeError(err)
-    _ALT_BACKEND = backend
-    _ALT_BACKEND_NAME = name
-    return backend
+    with _ALT_BACKEND_LOCK:
+        if _ALT_BACKEND is not None and _ALT_BACKEND_NAME == name:
+            return _ALT_BACKEND
+        from .backends import get_backend
+        backend = get_backend(name)
+        if not backend.load():
+            err = backend.get_error() or f"failed to load {name} backend"
+            raise RuntimeError(err)
+        _ALT_BACKEND = backend
+        _ALT_BACKEND_NAME = name
+        return backend
 
 
 def _run_post_pipeline(
@@ -521,11 +577,34 @@ def transcribe(
         project_overrides = load_project_overrides(task.file_path)
         for k, v in project_overrides.items():
             if isinstance(v, dict) and isinstance(config.get(k), dict):
-                config[k].update(v)
+                _deep_merge_dict(config[k], v)
             else:
                 config[k] = v
     except Exception:  # noqa: BLE001
         pass
+
+    # Refresh runtime-mutable keys from runtime_cfg ONLY when the
+    # in-memory ``config`` doesn't already carry a value for them
+    # (e.g. a test has monkeypatched ``transcriber.config`` and we
+    # must respect that). Runs BEFORE backend dispatch so both
+    # faster_whisper and whisper_cpp paths see the same diarization
+    # / alignment knobs and per-folder overrides win for the keys
+    # they actually speak.
+    for key, default in (
+        ("diarization_enabled", False),
+        ("diarization_num_speakers", -1),
+        ("diarization_cluster_threshold", 0.5),
+        ("alignment", "none"),
+    ):
+        if key not in config:
+            config[key] = runtime_cfg.get(key, default)
+    config["diarization_enabled"] = bool(config["diarization_enabled"])
+    config["diarization_num_speakers"] = int(config["diarization_num_speakers"])
+    config["diarization_cluster_threshold"] = float(
+        config["diarization_cluster_threshold"]
+    )
+    config["alignment"] = str(config["alignment"])
+
     backend_name = (
         str(config.get("transcribe_backend")
             or runtime_cfg.get("transcribe_backend")
@@ -542,31 +621,6 @@ def transcribe(
         if MODEL_ERROR:
             raise RuntimeError(MODEL_ERROR)
         time.sleep(0.5)
-
-    # The long-lived worker process reads config once at module
-    # import. Re-read the *runtime-mutable* keys (diarization, ...)
-    # so UI toggles take effect without a restart, but only fall
-    # back to runtime_cfg when the in-memory `config` doesn't carry
-    # the key (or carries a falsy default). Per-folder
-    # .whisperproject.json overrides have already been merged into
-    # `config` above, so they win for any key they speak.
-    config["diarization_enabled"] = bool(
-        config.get("diarization_enabled",
-                   runtime_cfg.get("diarization_enabled", False))
-    )
-    config["diarization_num_speakers"] = int(
-        config.get("diarization_num_speakers",
-                   runtime_cfg.get("diarization_num_speakers", -1))
-    )
-    config["diarization_cluster_threshold"] = float(
-        config.get(
-            "diarization_cluster_threshold",
-            runtime_cfg.get("diarization_cluster_threshold", 0.5),
-        )
-    )
-    config["alignment"] = str(
-        config.get("alignment", runtime_cfg.get("alignment", "none"))
-    )
 
     duration = get_duration(task.file_path)
     start = time.time()
@@ -693,7 +747,13 @@ def _transcribe_via_alt_backend(
         return
 
     base = os.path.splitext(task.file_path)[0]
-    detected_lang = lang_info.language
+    # Defensive str cast: backends may emit None for language when
+    # they couldn't detect. The faster_whisper path already
+    # normalises via str(getattr(info, "language", "") or "")
+    # at the call site — mirror that defensive style here so
+    # downstream consumers (writer template, post-pipeline) never
+    # see "None" as a stringified language code.
+    detected_lang = str(lang_info.language or "")
     speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb)
     written = _write_outputs(
         base,

@@ -48,3 +48,10 @@ Root: HKCR; Subkey: "*\shell\WhisperProjectTranscribe\command"; ValueType: strin
 
 [Run]
 Filename: "{app}\WhisperProject.exe"; Description: "Launch Whisper Project"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; PyInstaller drops __pycache__ trees beside the exe on first
+; launch; Inno doesn't track files created after install, so sweep
+; them on uninstall. dirifempty cleans up if nothing else remains.
+Type: filesandordirs; Name: "{app}\__pycache__"
+Type: dirifempty; Name: "{app}"

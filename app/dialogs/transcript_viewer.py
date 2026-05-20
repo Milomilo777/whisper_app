@@ -66,9 +66,13 @@ def _fmt_hms(seconds: float) -> str:
 
 def _filler_regex() -> re.Pattern[str]:
     """Build a single regex that matches any filler with optional
-    trailing punctuation. Whole-word match, case-insensitive."""
+    trailing punctuation + one trailing space. Whole-word match,
+    case-insensitive. We deliberately do NOT eat the leading space:
+    swallowing it on "Hello, um, world" would collapse to
+    "Hello,world", losing the natural punctuation spacing. Instead
+    ``_strip_fillers`` post-processes any "  " or " ." artefacts."""
     words = "|".join(re.escape(w) for w in _FILLER_WORDS)
-    return re.compile(rf"(?i)\b(?:{words})\b[,.!?\s]*\s?")
+    return re.compile(rf"(?i)\b(?:{words})\b[,.!?]*\s?")
 
 
 def _segment_min_probability(seg: dict[str, Any]) -> float | None:
@@ -121,11 +125,18 @@ def _try_load_vlc() -> tuple[Any, str]:
 
 def _strip_fillers(text: str, pattern: re.Pattern[str]) -> str:
     """Return ``text`` with filler words removed, internal whitespace
-    collapsed, and leading punctuation cleaned up."""
+    collapsed, and leading punctuation cleaned up. We also tidy up
+    space-before-punctuation artefacts like ``"Hello !"`` that come
+    from removing an inline filler with trailing ``!`` already
+    attached."""
     cleaned = pattern.sub("", text)
-    # Collapse double spaces and tidy leading punctuation
+    # Collapse double spaces and tidy leading punctuation.
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     cleaned = re.sub(r"^[,.!?\s]+", "", cleaned)
+    # Remove the orphan space that lands BEFORE a punctuation mark
+    # when an inline filler with its trailing punctuation got eaten
+    # (e.g. "Hello um!" → "Hello !" → "Hello!").
+    cleaned = re.sub(r"\s+([,.!?])", r"\1", cleaned)
     return cleaned
 
 
@@ -155,6 +166,13 @@ class TranscriptViewer(tk.Toplevel):
         self._dirty = False
         self._active_segment_idx: int | None = None
         self._active_word_idx: int | None = None
+        # Set on _on_close so any pending after() tick or watcher
+        # callback short-circuits before touching destroyed widgets.
+        self._closing = False
+        # Track find/replace dialog so we can destroy it before the
+        # parent viewer closes (otherwise it becomes a zombie that
+        # crashes on the next button click).
+        self._find_dialog: "FindReplaceDialog | None" = None
 
         self.vlc_mod, self.vlc_unavailable_reason = _try_load_vlc()
         self.vlc_instance: Any = None
@@ -313,6 +331,7 @@ class TranscriptViewer(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         self.filtered_indices = []
         query = (self.search_var.get() if hasattr(self, "search_var") else "").strip().lower()
+        active_idx = self._active_segment_idx
         for idx, seg in enumerate(self.segments):
             text = (seg.get("text") or "").strip()
             speaker = (seg.get("speaker") or "").strip()
@@ -320,14 +339,22 @@ class TranscriptViewer(tk.Toplevel):
                 continue
             self.filtered_indices.append(idx)
             min_prob = _segment_min_probability(seg)
-            tags: tuple[str, ...] = ()
+            conf_tags: tuple[str, ...] = ()
             if min_prob is not None:
                 if min_prob >= 0.85:
-                    tags = ("conf_high",)
+                    conf_tags = ("conf_high",)
                 elif min_prob >= 0.6:
-                    tags = ("conf_med",)
+                    conf_tags = ("conf_med",)
                 else:
-                    tags = ("conf_low",)
+                    conf_tags = ("conf_low",)
+            # Re-layer the karaoke 'active' tag on top of the
+            # confidence colour when this row is the currently-
+            # playing segment, so edits (find/replace, fillers,
+            # rename) don't visually drop the highlight.
+            if active_idx is not None and idx == active_idx:
+                tags = ("active",) + conf_tags
+            else:
+                tags = conf_tags
             self.tree.insert(
                 "",
                 "end",
@@ -416,7 +443,15 @@ class TranscriptViewer(tk.Toplevel):
     # -- edit operations -------------------------------------------------
 
     def _open_find_replace(self) -> None:
-        FindReplaceDialog(self).show()
+        if self._find_dialog is not None:
+            try:
+                if self._find_dialog.winfo_exists():
+                    self._find_dialog.show()
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+        self._find_dialog = FindReplaceDialog(self)
+        self._find_dialog.show()
 
     def _rename_speaker(self, current: str) -> None:
         new = simpledialog.askstring(
@@ -425,12 +460,17 @@ class TranscriptViewer(tk.Toplevel):
             parent=self,
             initialvalue=current,
         )
-        if not new or new.strip() == current:
+        # Guard against the user pressing OK with empty / whitespace-
+        # only input — that would erase every matching speaker label.
+        if new is None:
+            return
+        new_clean = new.strip()
+        if not new_clean or new_clean == current:
             return
         renamed = 0
         for seg in self.segments:
             if (seg.get("speaker") or "").strip() == current:
-                seg["speaker"] = new.strip()
+                seg["speaker"] = new_clean
                 renamed += 1
         if renamed:
             self._dirty = True
@@ -551,7 +591,11 @@ class TranscriptViewer(tk.Toplevel):
             pass
 
     def _update_position(self) -> None:
-        if self.vlc_player is None:
+        # Guard against ticks that fire after the viewer's been
+        # destroyed. _on_close sets _closing BEFORE destroy() so a
+        # tick mid-flight short-circuits cleanly rather than calling
+        # self.after() on a dead Tcl interpreter.
+        if self._closing or self.vlc_player is None:
             return
         try:
             cur_ms = self.vlc_player.get_time() or 0
@@ -562,14 +606,22 @@ class TranscriptViewer(tk.Toplevel):
             self._update_karaoke(cur_ms / 1000.0)
         except Exception:  # noqa: BLE001
             pass
-        self.vlc_seek_after = self.after(250, self._update_position)
+        # Re-arm only if we're still alive. Without this re-check a
+        # close that lands between the try block and the after()
+        # schedules a tick on a destroyed window.
+        if self._closing:
+            return
+        try:
+            self.vlc_seek_after = self.after(250, self._update_position)
+        except tk.TclError:
+            self.vlc_seek_after = None
 
-    def _set_active_segment(self, idx: int) -> None:
+    def _set_active_segment(self, idx: int | None) -> None:
         """Mark a segment as the active one (visually + for karaoke).
 
-        Adds the ``active`` tag to the row in the Treeview and stashes
-        the index so the karaoke updater knows which segment's words
-        to scan.
+        ``idx=None`` clears the active highlight without selecting a
+        new row — used when the playhead lands in a gap between
+        segments.
         """
         if self._active_segment_idx == idx:
             return
@@ -583,6 +635,14 @@ class TranscriptViewer(tk.Toplevel):
                 pass
         self._active_segment_idx = idx
         self._active_word_idx = None
+        if idx is None:
+            # Clear the karaoke word panel so a stale highlighted
+            # word doesn't linger between segments.
+            try:
+                self._words_lbl.configure(text="")
+            except Exception:  # noqa: BLE001
+                pass
+            return
         try:
             cur = str(idx)
             if self.tree.exists(cur):
@@ -590,6 +650,15 @@ class TranscriptViewer(tk.Toplevel):
                 tags = ("active",) + self._tags_for(idx)
                 self.tree.item(cur, tags=tags)
                 self.tree.see(cur)
+        except Exception:  # noqa: BLE001
+            pass
+        # Reset the karaoke panel to the new segment's text (or empty
+        # if no words list); the per-word highlight will fill in on
+        # the next tick.
+        try:
+            seg = self.segments[idx] if 0 <= idx < len(self.segments) else None
+            if seg is not None:
+                self._words_lbl.configure(text=(seg.get("text") or "").strip())
         except Exception:  # noqa: BLE001
             pass
 
@@ -606,16 +675,32 @@ class TranscriptViewer(tk.Toplevel):
         return ("conf_low",)
 
     def _update_karaoke(self, t_seconds: float) -> None:
-        """Refresh the active segment + word highlight from the playhead."""
-        # Find the active segment (the one whose [start, end] covers t).
+        """Refresh the active segment + word highlight from the playhead.
+
+        Uses ``bisect_left`` over the (sorted) segment-start list to
+        find the candidate segment in O(log N) per tick — without
+        this, the 250-ms tick costs O(N) which becomes noticeable on
+        transcripts with thousands of segments.
+        """
+        from bisect import bisect_right
+
+        if not self.segments:
+            return
+        starts = [float(s.get("start", 0.0)) for s in self.segments]
+        # Candidate: largest start <= t_seconds.
+        i = bisect_right(starts, t_seconds) - 1
         active_idx: int | None = None
-        for idx, seg in enumerate(self.segments):
+        if 0 <= i < len(self.segments):
+            seg = self.segments[i]
             start = float(seg.get("start", 0.0))
             end = float(seg.get("end", start))
             if start <= t_seconds <= end:
-                active_idx = idx
-                break
+                active_idx = i
         if active_idx is None:
+            # Playhead in a gap between segments — clear any lingering
+            # highlight rather than leaving the previous segment lit.
+            if self._active_segment_idx is not None:
+                self._set_active_segment(None)
             return
         if active_idx != self._active_segment_idx:
             self._set_active_segment(active_idx)
@@ -661,12 +746,24 @@ class TranscriptViewer(tk.Toplevel):
                 parent=self,
             ):
                 return
+        # Set the closing flag FIRST so any after()-loop tick in
+        # flight (notably _update_position → _update_karaoke) sees
+        # it and short-circuits before touching widgets.
+        self._closing = True
         if self.vlc_seek_after is not None:
             try:
                 self.after_cancel(self.vlc_seek_after)
             except Exception:  # noqa: BLE001
                 pass
             self.vlc_seek_after = None
+        # Destroy any open find/replace dialog so it doesn't become
+        # a zombie referencing this viewer's destroyed widgets.
+        if self._find_dialog is not None:
+            try:
+                self._find_dialog.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+            self._find_dialog = None
         if self.vlc_player is not None:
             try:
                 self.vlc_player.stop()
@@ -744,6 +841,12 @@ class FindReplaceDialog(tk.Toplevel):
     def _needle(self) -> str:
         return self.find_var.get() or ""
 
+    def _is_valid_needle(self, needle: str) -> bool:
+        """Reject empty or whitespace-only needles — replacing every
+        space in every segment with a user-supplied string is almost
+        never intentional and breaks the transcript silently."""
+        return bool(needle) and bool(needle.strip())
+
     def _match(self, haystack: str, needle: str) -> bool:
         if not needle:
             return False
@@ -753,7 +856,7 @@ class FindReplaceDialog(tk.Toplevel):
 
     def find_next(self) -> bool:
         needle = self._needle()
-        if not needle:
+        if not self._is_valid_needle(needle):
             return False
         start = self.last_match_idx + 1
         n = len(self.viewer.segments)
@@ -776,9 +879,27 @@ class FindReplaceDialog(tk.Toplevel):
         except Exception:  # noqa: BLE001
             pass
 
+    @staticmethod
+    def _safe_replace(text: str, needle: str, replacement: str, case_sensitive: bool) -> str:
+        """Replace ``needle`` with ``replacement`` literally.
+
+        Critical: we use a lambda over re.sub so backreferences in
+        ``replacement`` (``\\1``, ``\\g<name>``, ``\\\\``) are kept as
+        literal characters rather than parsed as regex syntax. The
+        previous implementation interpreted ``\\1`` as group-1 and
+        either crashed or silently mangled the segment text.
+        """
+        if case_sensitive:
+            return text.replace(needle, replacement)
+        # Use lambda to avoid re.sub's parsing of \\1 / \\g<...> /
+        # \\\\ in the replacement string.
+        return re.sub(
+            re.escape(needle), lambda _m: replacement, text, flags=re.IGNORECASE
+        )
+
     def replace_current(self) -> None:
         needle = self._needle()
-        if not needle:
+        if not self._is_valid_needle(needle):
             return
         if self.last_match_idx < 0 or self.last_match_idx >= len(self.viewer.segments):
             if not self.find_next():
@@ -786,10 +907,7 @@ class FindReplaceDialog(tk.Toplevel):
         seg = self.viewer.segments[self.last_match_idx]
         text = seg.get("text", "") or ""
         replacement = self.replace_var.get() or ""
-        if self.case_var.get():
-            new_text = text.replace(needle, replacement)
-        else:
-            new_text = re.sub(re.escape(needle), replacement, text, flags=re.IGNORECASE)
+        new_text = self._safe_replace(text, needle, replacement, self.case_var.get())
         if new_text == text:
             self.find_next()
             return
@@ -800,18 +918,14 @@ class FindReplaceDialog(tk.Toplevel):
 
     def replace_all(self) -> None:
         needle = self._needle()
-        if not needle:
+        if not self._is_valid_needle(needle):
             return
         replacement = self.replace_var.get() or ""
+        case_sensitive = self.case_var.get()
         count = 0
         for seg in self.viewer.segments:
             text = seg.get("text", "") or ""
-            if self.case_var.get():
-                new_text = text.replace(needle, replacement)
-            else:
-                new_text = re.sub(
-                    re.escape(needle), replacement, text, flags=re.IGNORECASE
-                )
+            new_text = self._safe_replace(text, needle, replacement, case_sensitive)
             if new_text != text:
                 seg["text"] = new_text
                 count += 1
@@ -823,6 +937,16 @@ class FindReplaceDialog(tk.Toplevel):
             f"Replaced in {count} segment(s).",
             parent=self,
         )
+
+    def destroy(self) -> None:  # type: ignore[override]
+        # Clear the parent's reference so re-opening Ctrl+F builds a
+        # fresh dialog instead of a stale one.
+        try:
+            if self.viewer._find_dialog is self:
+                self.viewer._find_dialog = None
+        except Exception:  # noqa: BLE001
+            pass
+        super().destroy()
 
 
 def open_viewer(

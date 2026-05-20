@@ -1,7 +1,7 @@
 ; installer_embed.iss — Inno Setup script for Method C
 ; (Standard installer with an embeddable Python interpreter).
 ;
-; Builds: dist_installer\WhisperProject-v0.7.0-Setup-Standard.exe
+; Builds: dist_installer\WhisperProject-v0.7.1-Setup-Standard.exe
 ;
 ; Source tree expected: embed_build\ — produced by
 ; build_embed_installer.bat. The tree contains a self-contained
@@ -59,4 +59,6 @@ Type: filesandordirs; Name: "{app}\core"
 Type: filesandordirs; Name: "{app}\bin"
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\Lib"
+Type: files; Name: "{app}\gui.py"
+Type: files; Name: "{app}\sitecustomize.py"
 Type: dirifempty; Name: "{app}"

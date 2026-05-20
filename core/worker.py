@@ -29,7 +29,7 @@ from typing import Any
 from .config import load_config
 from .logging_setup import setup_logging
 from .task import TranscriptionTask
-from .transcriber import load_existing_model, transcribe
+from .transcriber import get_model_error, load_existing_model, transcribe
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,8 @@ def main() -> int:
         emit("progress", percent=percent)
 
     if not load_existing_model(log_cb):
-        emit("startup_error", message="Existing model failed to load in worker")
+        detail = get_model_error() or "Existing model failed to load in worker"
+        emit("startup_error", message=detail)
         return 1
 
     emit("ready")

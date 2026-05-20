@@ -15,17 +15,26 @@
 # what onedir frozen layout requires — no source changes needed.
 # pyright: reportMissingImports=false
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 # Same Silero VAD packaging note as whisper_project.spec: faster_whisper
 # loads silero_vad_v6.onnx by file path at runtime, so PyInstaller's
 # module collection alone is not enough.
 faster_whisper_datas = collect_data_files('faster_whisper')
 
+# pywhispercpp ships a native whisper.cpp shared library beside its
+# Python wheel — same packaging note as the onefile spec.
+try:
+    whisper_cpp_libs = collect_dynamic_libs('pywhispercpp')
+except Exception:
+    whisper_cpp_libs = []
+
 a = Analysis(
     ['gui.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        *whisper_cpp_libs,
+    ],
     datas=[
         ('bin', 'bin'),
         *faster_whisper_datas,
@@ -33,6 +42,10 @@ a = Analysis(
     hiddenimports=[
         'app',
         'app.app',
+        'app.dialogs',
+        'app.domain',
+        'app.services',
+        'app.widgets',
         'app.observability',
         'app.dialogs.advanced',
         'app.dialogs.model_download',

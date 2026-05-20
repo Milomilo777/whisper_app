@@ -269,6 +269,44 @@ def test_render_filename_template_malformed_falls_back(transcriber):
     assert out == "x.srt"
 
 
+def test_render_filename_template_positional_token_falls_back(transcriber):
+    """A template that uses positional `{0}` instead of named tokens
+    must fall back to the legacy layout rather than embed a literal
+    `{0}` in the filename or raise."""
+    out = transcriber._render_filename_template(
+        "{0}.{ext}",
+        base="x",
+        ext="srt",
+    )
+    assert out == "x.srt"
+
+
+def test_render_filename_template_path_traversal_rejected(transcriber, tmp_path):
+    """``../etc/passwd.{ext}`` and similar templates that try to
+    escape the source-media folder must fall back to the legacy
+    layout instead of resolving outside the base directory."""
+    base = str(tmp_path / "show")
+    out = transcriber._render_filename_template(
+        "../../../etc/passwd.{ext}",
+        base=base,
+        ext="srt",
+    )
+    # Legacy fallback when path-traversal is detected.
+    assert out == base + ".srt"
+
+
+def test_render_filename_template_zero_speaker_count_is_empty(transcriber):
+    """``{speaker_count}`` renders empty when diarisation produced 0
+    speakers — keeps the default filename clean when the feature is off."""
+    out = transcriber._render_filename_template(
+        "{base}.{speaker_count}{ext}",
+        base="x",
+        ext=".srt",
+        speaker_count=0,
+    )
+    assert out == "x..srt"
+
+
 def test_write_outputs_honours_template_config(transcriber, tmp_path, monkeypatch):
     """End-to-end: a template with {lang} + {speaker_count} produces
     the matching final filename, including the new path."""

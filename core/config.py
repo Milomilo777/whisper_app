@@ -136,7 +136,15 @@ def _drive_is_mounted(path: str | Path) -> bool:
         return False
     if not p.drive:
         return True
-    return Path(p.drive + os.sep).exists()
+    # UNC paths (``\\server\share\...``) — checking exists() on a
+    # disconnected share can block for the SMB resolution timeout
+    # (~30 s). Treat them as available; downstream code surfaces
+    # the I/O error if the share is really gone. The slow probe is
+    # worse than a deferred error message.
+    drive = p.drive
+    if drive.startswith("\\\\") or drive.startswith("//"):
+        return True
+    return Path(drive + os.sep).exists()
 
 
 def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
@@ -255,7 +263,10 @@ def load_project_overrides(start: str | Path) -> dict[str, Any]:
 
     Returns an empty dict when the file is absent, malformed, or not
     a JSON object. Never raises — a bad project file should not
-    block a transcription, only the in-file override.
+    block a transcription, only the in-file override. We catch
+    ``UnicodeDecodeError`` explicitly because it's a ``ValueError``
+    that bubbles past the OSError branch (e.g. when a user saves
+    the file in cp1252 with a non-UTF8 character).
     """
     f = find_project_file(start)
     if f is None:
@@ -263,7 +274,7 @@ def load_project_overrides(start: str | Path) -> dict[str, Any]:
     try:
         with open(f, "r", encoding="utf-8") as fp:
             data = json.load(fp)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         logger.warning("Could not read project overrides at %s", f)
         return {}
     if not isinstance(data, dict):
@@ -274,24 +285,34 @@ def load_project_overrides(start: str | Path) -> dict[str, Any]:
     return data
 
 
+def deep_merge_dicts(dest: dict[str, Any], src: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``src`` into ``dest`` and return ``dest``.
+
+    Unlike ``dict.update``, nested dicts are walked depth-first so a
+    project override of ``{"model": {"name": "tiny"}}`` keeps every
+    other key under ``model`` (``url``, ``md5`, …) intact.
+    """
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dest.get(k), dict):
+            deep_merge_dicts(dest[k], v)
+        else:
+            dest[k] = v
+    return dest
+
+
 def merge_project_overrides(
     base_config: dict[str, Any], source_path: str | Path
 ) -> dict[str, Any]:
-    """Return a shallow copy of ``base_config`` with overrides applied.
+    """Return a deep copy of ``base_config`` with overrides applied.
 
     Walks up from ``source_path`` to find the nearest
     ``.whisperproject.json`` and overlays its keys on top of
-    ``base_config``. Dict-valued keys are deep-merged (one level)
-    so the user can override e.g. ``model.name`` without forcing the
-    whole model dict.
+    ``base_config``. Dict-valued keys are deep-merged recursively
+    so the user can override ``model.name`` (or anything deeper)
+    without forcing the whole sub-dict.
     """
     overrides = load_project_overrides(source_path)
     if not overrides:
         return base_config
     merged: dict[str, Any] = json.loads(json.dumps(base_config))
-    for k, v in overrides.items():
-        if isinstance(v, dict) and isinstance(merged.get(k), dict):
-            merged[k].update(v)
-        else:
-            merged[k] = v
-    return merged
+    return deep_merge_dicts(merged, overrides)

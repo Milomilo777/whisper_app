@@ -28,6 +28,17 @@ dependencies = [
     "requests>=2.31.0",
     "sv-ttk>=2.6.0",
     "platformdirs>=4.0.0",
+    # Session-13 / Session-14 runtime deps that were previously
+    # only in requirements.txt — kept here too so `pip install
+    # whisper-project` yields a runnable install.
+    "python-docx>=1.0",
+    "tkinterdnd2>=0.4.0",
+    "sherpa-onnx>=1.10",
+    "python-vlc>=3.0",
+    "reportlab>=4.0",
+    "watchdog>=3.0",
+    "pystray>=0.19",
+    "Pillow>=10.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +53,16 @@ crash_reporting = [
 ]
 theme_detection = [
     "darkdetect>=0.8.0",
+]
+backend_cpp = [
+    # whisper.cpp backend — opt-in because the ggml model download
+    # is 1.1 GB and pywhispercpp transitively pulls a native lib.
+    "pywhispercpp>=1.4",
+]
+alignment = [
+    # stable-ts word-level alignment — opt-in because it transitively
+    # pulls torch (~125 MB).
+    "stable-ts>=2.17",
 ]
 
 [project.scripts]

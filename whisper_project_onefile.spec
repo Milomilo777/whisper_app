@@ -15,7 +15,7 @@
 # own _MEIPASS at start, which is the unavoidable cost of onefile.
 # pyright: reportMissingImports=false
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 # faster_whisper ships a Silero VAD model under faster_whisper/assets/.
 # It is loaded by file path at runtime (not via importlib.resources), so
@@ -25,10 +25,23 @@ from PyInstaller.utils.hooks import collect_data_files
 # every time VAD is enabled (which is the default).
 faster_whisper_datas = collect_data_files('faster_whisper')
 
+# pywhispercpp ships a native whisper.cpp shared library beside its
+# Python wheel. PyInstaller's default scan misses non-Python binaries,
+# so users who switch to the whisper_cpp backend get an ImportError on
+# launch. collect_dynamic_libs picks up the bundled DLL/SO. The call
+# silently returns [] when pywhispercpp isn't installed in the build
+# environment, so the spec stays valid even on slim CI builders.
+try:
+    whisper_cpp_libs = collect_dynamic_libs('pywhispercpp')
+except Exception:
+    whisper_cpp_libs = []
+
 a = Analysis(
     ['gui.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        *whisper_cpp_libs,
+    ],
     datas=[
         ('bin', 'bin'),
         *faster_whisper_datas,
@@ -36,6 +49,10 @@ a = Analysis(
     hiddenimports=[
         'app',
         'app.app',
+        'app.dialogs',
+        'app.domain',
+        'app.services',
+        'app.widgets',
         'app.observability',
         'app.dialogs.advanced',
         'app.dialogs.model_download',

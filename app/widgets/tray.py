@@ -119,6 +119,16 @@ class TrayController:
                     self._icon.run()
                 except Exception as e:  # noqa: BLE001
                     logger.warning("Tray icon thread crashed: %s", e)
+                finally:
+                    # Mark the controller dead so later set_active /
+                    # notify calls don't operate on a corpse. Bounce
+                    # back to the Tk thread to null out app.tray so
+                    # the rest of the app stops dispatching to us.
+                    self._icon = None
+                    try:
+                        self.app.after(0, lambda: setattr(self.app, "tray", None))
+                    except Exception:  # noqa: BLE001
+                        pass
 
             self._thread = threading.Thread(target=_runner, daemon=True)
             self._thread.start()

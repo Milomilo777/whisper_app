@@ -106,3 +106,6 @@ htmlcov/
 New Text Document.txt
 NOTES.local.md
 TODO.local.md
+
+# Live SMTV E2E fixtures — downloaded on demand; keep out of repo
+tests/fixtures/smtv_clip/

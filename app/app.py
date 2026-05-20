@@ -213,8 +213,9 @@ class App(tk.Tk):
         self.bind("<Control-O>", lambda _e: self.browse())
         self.bind("<Control-Return>", lambda _e: self.add())
         self.bind("<Escape>", lambda _e: self._cancel_running())
-        self.bind("<Control-q>", lambda _e: self.on_exit())
-        self.bind("<Control-Q>", lambda _e: self.on_exit())
+        # Ctrl+Q always exits — same convention as File→Exit.
+        self.bind("<Control-q>", lambda _e: self._force_exit())
+        self.bind("<Control-Q>", lambda _e: self._force_exit())
 
         # Opt-in drag-and-drop on the main window. tkinterdnd2 is in
         # requirements.txt but the desktop app stays usable even if
@@ -227,6 +228,12 @@ class App(tk.Tk):
         self.tray = None
         self._folder_watcher = None
         self._exit_from_tray = False
+        # Flag flipped to True at the top of on_exit so watcher
+        # callbacks / stability-check ticks short-circuit before
+        # touching destroyed widgets. Keep watched_after_ids so
+        # each path only schedules ONE stability-check ladder.
+        self._closing = False
+        self._watched_after_ids: dict[str, str] = {}
         self._install_tray()
         self._restart_watched_folder()
 
@@ -256,7 +263,11 @@ class App(tk.Tk):
         f.add_separator()
         f.add_command(label="Statistics...", command=self.show_statistics)
         f.add_separator()
-        f.add_command(label="Exit                                  Ctrl+Q", command=self.on_exit)
+        # File→Exit bypasses the minimise-to-tray redirect. When the
+        # user explicitly clicks Exit they mean exit; the redirect is
+        # only for the window-close (X) button.
+        f.add_command(label="Exit                                  Ctrl+Q",
+                      command=self._force_exit)
 
         v = tk.Menu(m, tearoff=0)
         for label, value in (("Light", "light"), ("Dark", "dark"), ("System", "system")):
@@ -464,12 +475,23 @@ class App(tk.Tk):
         self.app_config["theme"] = name
         save_config(self.app_config)
 
+    def _force_exit(self) -> None:
+        """Bypass the minimise-to-tray redirect and exit immediately.
+
+        Called by File → Exit, Ctrl+Q, and the tray menu's Exit item.
+        The window's X button (WM_DELETE_WINDOW) continues to honour
+        the minimise-to-tray preference.
+        """
+        self._exit_from_tray = True
+        self.on_exit()
+
     def on_exit(self) -> None:
         # Optional minimise-to-tray: when the user has enabled tray
         # support in the Advanced dialog and the tray icon is running,
-        # the WM_DELETE_WINDOW / File→Exit path hides the window
-        # instead of tearing down. The tray menu's Exit forces a real
-        # exit via `_exit_from_tray = True`.
+        # the window's close (X) button hides the window instead of
+        # tearing down. File → Exit / Ctrl+Q route through
+        # _force_exit() which sets _exit_from_tray=True so they
+        # always exit regardless of the preference.
         if (
             not self._exit_from_tray
             and bool(self.app_config.get("minimise_to_tray", False))
@@ -482,6 +504,10 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
             return
+
+        # Flip the closing flag so watcher events / stability-checks
+        # in flight short-circuit before touching destroyed widgets.
+        self._closing = True
 
         active = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         active_downloads = [
@@ -1155,7 +1181,15 @@ class App(tk.Tk):
 
         def _on_new_file(path: str) -> None:
             # watchdog calls back from its own thread — bounce to Tk.
-            self.after(0, lambda p=path: self._enqueue_watched_file(p))
+            # Skip when the app is mid-shutdown to avoid scheduling
+            # callbacks on a destroyed Tcl interpreter.
+            if self._closing:
+                return
+            try:
+                self.after(0, lambda p=path: self._enqueue_watched_file(p))
+            except Exception:  # noqa: BLE001
+                # after() can raise once destroy() has started.
+                pass
 
         try:
             watcher = FolderWatcher(folder, _on_new_file)
@@ -1174,28 +1208,70 @@ class App(tk.Tk):
         Treeview. Skips when the file is still being written (size
         keeps growing for a few seconds after the first detect on
         Windows).
+
+        Deduplicated by path: Windows fires both ``on_created`` and
+        ``on_modified`` for the same file (sometimes several of the
+        latter as the writer flushes). Each invocation cancels any
+        in-flight stability-check ladder for the same path before
+        scheduling a fresh one, so we never enqueue the same file
+        twice.
         """
+        if self._closing:
+            return
         if not os.path.isfile(path):
             return
         try:
             size1 = os.path.getsize(path)
         except OSError:
             return
-        # Stability check — schedule a re-check 1.2 s later. Only the
-        # *second* call (with stable size) actually enqueues.
+
+        norm = os.path.normcase(os.path.abspath(path))
+        # Cancel any prior stability-check ladder for this path so
+        # we don't double-enqueue under rapid event bursts.
+        prior = self._watched_after_ids.pop(norm, None)
+        if prior is not None:
+            try:
+                self.after_cancel(prior)
+            except Exception:  # noqa: BLE001
+                pass
+
         def _check_stable_then_enqueue(prev_size: int) -> None:
+            self._watched_after_ids.pop(norm, None)
+            if self._closing:
+                return
             try:
                 size_now = os.path.getsize(path)
             except OSError:
                 return
             if size_now != prev_size:
-                self.after(1200, lambda: _check_stable_then_enqueue(size_now))
+                # File still growing — re-schedule. Track the new id
+                # so a later event can cancel us cleanly.
+                try:
+                    aid = self.after(1200, lambda: _check_stable_then_enqueue(size_now))
+                    self._watched_after_ids[norm] = aid
+                except Exception:  # noqa: BLE001
+                    pass
                 return
+            # Don't re-enqueue a file we've already finished. Cheap
+            # dedup: skip if any queue entry references the same
+            # normalised path AND is not in a terminal state.
+            for existing in self.queue:
+                try:
+                    if (os.path.normcase(os.path.abspath(existing.file_path)) == norm
+                            and existing.status not in ("finished", "cancelled", "error")):
+                        return
+                except Exception:  # noqa: BLE001
+                    continue
             task = TranscriptionTask(path)
             self.queue.append(task)
             self.refresh()
             self.log(f"Watched: enqueued {os.path.basename(path)}")
-        self.after(1200, lambda: _check_stable_then_enqueue(size1))
+
+        try:
+            aid = self.after(1200, lambda: _check_stable_then_enqueue(size1))
+            self._watched_after_ids[norm] = aid
+        except Exception:  # noqa: BLE001
+            pass
 
     def _maybe_offer_crash_resume(self) -> None:
         """If history.db flagged any rows interrupted on launch, offer

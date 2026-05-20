@@ -309,3 +309,94 @@ def test_find_replace_replace_all(tmp_path):
             viewer._on_close()
     finally:
         root.destroy()
+
+
+def test_find_replace_backreference_in_replacement_is_literal():
+    """Replacement strings that look like regex backreferences
+    (e.g. ``\\1``, ``\\g<0>``) must be inserted LITERALLY, not
+    interpreted as regex syntax — otherwise the user gets a
+    misleading crash or silent garbage in the transcript."""
+    from app.dialogs.transcript_viewer import FindReplaceDialog
+
+    out = FindReplaceDialog._safe_replace("Hello world", "world", r"\1", False)
+    assert out == r"Hello \1"
+
+    out = FindReplaceDialog._safe_replace("Hello world", "world", r"\g<name>", False)
+    assert out == r"Hello \g<name>"
+
+    out = FindReplaceDialog._safe_replace("Hello world", "world", r"\\", False)
+    assert out == r"Hello \\"
+
+
+def test_find_replace_rejects_whitespace_only_needle(tmp_path):
+    """Find with whitespace-only needle must noop instead of
+    destructively replacing every space in every segment."""
+    from app.dialogs.transcript_viewer import TranscriptViewer, FindReplaceDialog
+
+    segs = [{"start": 0.0, "end": 1.0, "text": "hello world"}]
+    p = tmp_path / "ws.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            from app.dialogs import transcript_viewer as tv_mod
+            tv_mod.messagebox.showinfo = lambda *a, **kw: None  # type: ignore[attr-defined]
+            dlg = FindReplaceDialog(viewer)
+            dlg.find_var.set("  ")
+            dlg.replace_var.set("X")
+            dlg.replace_all()
+            assert viewer.segments[0]["text"] == "hello world"
+            assert viewer._dirty is False
+            dlg.destroy()
+        finally:
+            tv_mod.messagebox.askyesno = lambda *a, **kw: True  # type: ignore[attr-defined]
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_speaker_rename_rejects_empty_input(tmp_path):
+    """Renaming a speaker to empty / whitespace-only must noop,
+    otherwise every matching label gets silently erased."""
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "a", "speaker": "Speaker 00"},
+    ]
+    p = tmp_path / "rn2.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            from app.dialogs import transcript_viewer as tv_mod
+            # askstring returns " " (whitespace) — viewer must noop.
+            tv_mod.simpledialog.askstring = lambda *a, **kw: "   "  # type: ignore[attr-defined]
+            viewer._rename_speaker("Speaker 00")
+            assert viewer.segments[0]["speaker"] == "Speaker 00"
+            assert viewer._dirty is False
+        finally:
+            tv_mod.messagebox.askyesno = lambda *a, **kw: True  # type: ignore[attr-defined]
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_strip_fillers_collapses_space_before_punctuation():
+    """When an inline filler is removed, any space-before-punctuation
+    artefact left behind must be tidied. The terminal-punctuation
+    case ("Hello um!") collapses the filler word AND its trailing
+    "!" because the regex treats them as one unit — this is the
+    documented behaviour. The interesting case is the inline one."""
+    from app.dialogs.transcript_viewer import _strip_fillers, _filler_regex
+
+    pat = _filler_regex()
+    # Inline filler — punctuation that wasn't part of the filler
+    # group survives the cleanup.
+    assert _strip_fillers("Are you um sure?", pat) == "Are you sure?"
