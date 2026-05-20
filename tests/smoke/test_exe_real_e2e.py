@@ -67,8 +67,29 @@ def _drain_until_done(
             return False, f"transcription did not finish in {deadline_s}s", summary
 
 
+def _build_worker_argv(exe_path: Path, gui_script: Path | None) -> list[str]:
+    """Two flavours of worker launch:
+
+      * Methods A and B — ``[exe, "--worker"]`` against the frozen exe.
+      * Method C       — ``[pythonw, gui.py, "--worker"]`` against the
+        embeddable Python interpreter shipped by installer_embed.iss.
+    """
+    if gui_script is not None:
+        return [str(exe_path), str(gui_script), "--worker"]
+    return [str(exe_path), "--worker"]
+
+
+def _worker_cwd(exe_path: Path, gui_script: Path | None) -> str:
+    """Worker spawns relative imports from cwd. Method C needs the
+    install root (where gui.py / app / core sit); the frozen exes are
+    self-contained so the cwd is just the exe's directory."""
+    if gui_script is not None:
+        return str(gui_script.parent)
+    return str(exe_path.parent)
+
+
 def test_exe_worker_transcribes_real_video(
-    exe_path: Path, model_dir: Path, test_video: Path
+    exe_path: Path, model_dir: Path, test_video: Path, gui_script: Path | None
 ) -> None:
     """The compiled exe's worker mode transcribes a real file end-to-end.
 
@@ -76,6 +97,9 @@ def test_exe_worker_transcribes_real_video(
     asset (Silero VAD ONNX, ctranslate2 DLL, tokenizer vocab) and the exe
     crashes when the user hits 'Transcribe'. Source-side tests don't see
     this because they read the asset from site-packages, not the bundle.
+
+    When ``gui_script`` is set (Method C — embeddable Python install),
+    the worker is invoked as ``[pythonw, gui.py, "--worker"]`` instead.
     """
     srt = test_video.with_suffix(".srt")
     js = test_video.with_suffix(".json")
@@ -88,8 +112,8 @@ def test_exe_worker_transcribes_real_video(
         creation_flags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
 
     proc = subprocess.Popen(
-        [str(exe_path), "--worker"],
-        cwd=str(exe_path.parent),
+        _build_worker_argv(exe_path, gui_script),
+        cwd=_worker_cwd(exe_path, gui_script),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
         creationflags=creation_flags,
@@ -122,32 +146,43 @@ def test_exe_worker_transcribes_real_video(
             proc.terminate()
 
 
-def test_exe_size_within_expected_range(exe_path: Path) -> None:
+def test_exe_size_within_expected_range(exe_path: Path, gui_script: Path | None) -> None:
     """The onefile exe carries ffmpeg + ffprobe + yt-dlp + faster_whisper
     deps + Python runtime + Tk + Silero VAD onnx. Anything under 150 MB
     is missing something major; over 400 MB means upstream wheels
     got fat and we should investigate before shipping.
+
+    Skipped for Method B (onedir layout — exe is a thin launcher with
+    sibling DLLs and bin/) and Method C (exe_path is pythonw.exe).
+    Both modes have their own bundle-size verifications via the
+    installer's [Files] block and the release-notes table.
     """
+    if gui_script is not None:
+        pytest.skip("size check is meaningful only for the onefile exe (Method A)")
+    if (exe_path.parent / "bin").is_dir():
+        pytest.skip("onedir layout — sibling bin/ present; size check applies to Method A only")
     size_mb = exe_path.stat().st_size / (1024 * 1024)
     assert 150 <= size_mb <= 400, f"unexpected exe size: {size_mb:.1f} MB"
 
 
-def test_exe_boots_and_loads_bundle(exe_path: Path, model_dir: Path) -> None:
-    """Spawn the exe in --worker mode and wait for the 'ready' event.
+def test_exe_boots_and_loads_bundle(
+    exe_path: Path, model_dir: Path, gui_script: Path | None
+) -> None:
+    """Spawn the worker and wait for the 'ready' event.
 
-    Reaching 'ready' means PyInstaller successfully extracted the
-    onefile archive (Silero VAD onnx, ffmpeg/ffprobe in bin/, the Tk
-    runtime, ctranslate2 DLLs) AND the worker imported every module
-    and loaded the Whisper model. This is the single-file analogue of
-    the old per-asset filesystem checks: if anything is missing from
-    the bundle, the worker emits 'startup_error' instead of 'ready'.
+    Reaching 'ready' means PyInstaller successfully extracted every
+    bundled asset (Silero VAD onnx, ffmpeg/ffprobe in bin/, Tk, the
+    ctranslate2 DLLs) **and** the worker imported every module and
+    loaded the Whisper model. The Method C variant verifies the
+    embeddable Python tree has every dependency on disk under
+    ``Lib\\site-packages\\``.
     """
     creation_flags = 0
     if sys.platform == "win32":
         creation_flags = subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
     proc = subprocess.Popen(
-        [str(exe_path), "--worker"],
-        cwd=str(exe_path.parent),
+        _build_worker_argv(exe_path, gui_script),
+        cwd=_worker_cwd(exe_path, gui_script),
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
         creationflags=creation_flags,

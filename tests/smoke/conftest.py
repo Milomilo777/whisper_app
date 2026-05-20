@@ -43,14 +43,41 @@ def model_dir() -> Path:
 
 @pytest.fixture(scope="session")
 def exe_path() -> Path:
-    """Compiled WhisperProject.exe (single-file build).
+    """Worker launcher under test.
 
-    Override path via $WHISPER_SMOKE_EXE — useful for testing the exe
-    from a clean directory rather than the dist/ that built it.
+    Two flavours, picked by environment variable:
+
+      * Methods A and B ship a frozen PyInstaller exe. The fixture
+        returns the exe path; the e2e test then spawns
+        ``[exe, "--worker"]``.
+
+      * Method C ships an embeddable Python interpreter plus a
+        gui.py entry. Set both ``$WHISPER_SMOKE_EXE`` (to the
+        pythonw.exe path) and ``$WHISPER_SMOKE_GUI`` (to the gui.py
+        path). The e2e test detects the GUI env var and spawns
+        ``[pythonw, gui.py, "--worker"]`` instead.
+
+    Override the default with ``$WHISPER_SMOKE_EXE``.
     """
     p = Path(os.environ.get("WHISPER_SMOKE_EXE", str(DEFAULT_EXE)))
     if not p.exists():
-        pytest.skip(f"compiled exe not present: {p}  (run build.bat)")
+        pytest.skip(f"worker launcher not present: {p}  (run build.bat / installer)")
+    return p
+
+
+@pytest.fixture(scope="session")
+def gui_script() -> Path | None:
+    """Optional ``gui.py`` companion for Method C builds.
+
+    Returns the path when ``$WHISPER_SMOKE_GUI`` is set and the file
+    exists; otherwise ``None``. The frozen-exe flow ignores this.
+    """
+    raw = os.environ.get("WHISPER_SMOKE_GUI", "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    if not p.exists():
+        pytest.skip(f"gui.py launcher not present: {p}")
     return p
 
 
