@@ -111,6 +111,30 @@ end-to-end:
 
 Source-of-truth commit for this refresh: `5f7c141`.
 
+## UX refresh (2026-05-20, second refresh)
+
+After the audit, a second pass focused on a recurring user
+complaint: "the app finishes but it's not obvious — no notification,
+no visible output file path". Eight surgical UI changes:
+
+- **Last Result card** on the Transcribe tab. After every
+  transcription, shows the input filename, every output file
+  (.srt / .json / .vtt / .tsv / .txt / .lrc) with size and a
+  per-file **Open** button, plus a single **Open folder** button.
+- **Status icons** in the Queue table (`✓ ▶ ⋯ ⊘ ✗ ⏸`) — glanceable
+  state without reading the word.
+- **Double-click a finished Queue row** to open its folder.
+- **Window title shows progress** — `"Whisper — 34% transcribing
+  foo.mp4"` when busy, idle when not. Visible in taskbar / Alt-Tab.
+- **Bell on completion** + new `View → Chime on completion` toggle.
+- **About dialog** gains version + GitHub URL.
+- **Empty-state hints** in the Queue tab and Last Result card.
+- **Friendlier text** at the most-confusing user touchpoints
+  (model-required prompt, download finish line, "pick a file
+  first" guidance).
+
+Source-of-truth commit for the UX refresh: `bfd067a`.
+
 ## Known limitations
 
 - **SmartScreen warning.** None of the three exes are code-signed.
