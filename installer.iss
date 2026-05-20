@@ -34,6 +34,17 @@ Name: "{commondesktop}\Whisper Project"; Filename: "{app}\WhisperProject.exe"; T
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
+Name: "shellext"; Description: "Add 'Transcribe with Whisper Project' to the Windows Explorer right-click menu"; GroupDescription: "Integration:"
+
+[Registry]
+; Explorer shell extension — adds a 'Transcribe with Whisper Project'
+; verb to every file's right-click menu. Hits the CLI mode added in
+; v0.7.0 (gui.py / WhisperProject.exe transcribe "<path>"). The keys
+; live under HKCR\*\shell so they apply to every file regardless of
+; extension; admin install means we write them once for all users.
+Root: HKCR; Subkey: "*\shell\WhisperProjectTranscribe"; ValueType: string; ValueName: ""; ValueData: "Transcribe with Whisper Project"; Flags: uninsdeletekey; Tasks: shellext
+Root: HKCR; Subkey: "*\shell\WhisperProjectTranscribe"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\WhisperProject.exe,0"; Tasks: shellext
+Root: HKCR; Subkey: "*\shell\WhisperProjectTranscribe\command"; ValueType: string; ValueName: ""; ValueData: """{app}\WhisperProject.exe"" transcribe ""%1"""; Tasks: shellext
 
 [Run]
 Filename: "{app}\WhisperProject.exe"; Description: "Launch Whisper Project"; Flags: nowait postinstall skipifsilent

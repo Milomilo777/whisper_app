@@ -16,7 +16,7 @@ from app.dialogs.advanced import AdvancedDialog
 from app.dialogs.model_download import ModelDownloadDialog
 from app.dialogs.transcript_viewer import open_viewer as _open_transcript_viewer
 from app.domain.tasks import TranscriptionTask, VideoDownloadTask
-from app.observability import init_sentry
+from app.observability import init_sentry, send_launch_ping_async
 from app.services.download_service import DownloadService
 from app.services.format_service import FormatService
 from app.services.integrations_service import IntegrationsService
@@ -168,6 +168,7 @@ class App(tk.Tk):
         self.app_config = load_config()
         setup_logging(self.app_config.get("log_level", "INFO"))
         init_sentry()
+        send_launch_ping_async()
         self._ui_logger = get_ui_logger()
         logger.info("App startup; theme=%s", self.app_config.get("theme", "dark"))
         self.theme_var = tk.StringVar(value=self.app_config.get("theme", "dark"))

@@ -510,6 +510,14 @@ def transcribe(
     # the default path so the existing unit + smoke tests keep
     # working without monkeypatch churn.
     runtime_cfg = load_config()
+    # Per-folder overrides: a .whisperproject.json next to (or above)
+    # the source file gets merged on top of the global config for
+    # the duration of this task.
+    try:
+        from .config import merge_project_overrides
+        runtime_cfg = merge_project_overrides(runtime_cfg, task.file_path)
+    except Exception:  # noqa: BLE001
+        pass
     backend_name = (
         str(runtime_cfg.get("transcribe_backend") or "faster_whisper").strip().lower()
     )
@@ -527,7 +535,8 @@ def transcribe(
 
     # The long-lived worker process reads config once at module
     # import. Re-read the *runtime-mutable* keys (diarization,
-    # output_formats) so UI toggles take effect without a restart.
+    # output_formats, ...) so UI toggles + per-folder
+    # .whisperproject.json overrides take effect without a restart.
     # Keys read directly off the module-level ``config`` (vad,
     # word_timestamps, batch_size, …) still respect the
     # established mutation pattern that tests rely on.
@@ -546,6 +555,15 @@ def transcribe(
     config["alignment"] = str(
         runtime_cfg.get("alignment", config.get("alignment", "none"))
     )
+    # The remaining "writer / inference" keys also flow from
+    # runtime_cfg so per-folder overrides win.
+    for k in (
+        "output_formats", "output_filename_template", "word_timestamps",
+        "vad_enabled", "vad_min_silence_ms", "vad_threshold",
+        "vad_speech_pad_ms", "batch_size", "initial_prompt", "hotwords",
+    ):
+        if k in runtime_cfg:
+            config[k] = runtime_cfg[k]
 
     duration = get_duration(task.file_path)
     start = time.time()

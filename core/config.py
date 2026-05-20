@@ -222,3 +222,76 @@ def save_config(config: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+# Per-folder project overrides --------------------------------------------------
+
+PROJECT_FILE_NAME = ".whisperproject.json"
+
+
+def find_project_file(start: str | Path) -> Path | None:
+    """Walk up from ``start`` looking for ``.whisperproject.json``.
+
+    Returns the first match or ``None`` when none is found. We stop
+    at the filesystem root so a misconfigured cwd never causes an
+    infinite loop. Both files and directories are valid starting
+    points — for a file we begin from its parent directory.
+    """
+    try:
+        p = Path(str(start)).resolve()
+    except (OSError, ValueError):
+        return None
+    if p.is_file():
+        p = p.parent
+    for candidate in [p, *p.parents]:
+        f = candidate / PROJECT_FILE_NAME
+        if f.is_file():
+            return f
+    return None
+
+
+def load_project_overrides(start: str | Path) -> dict[str, Any]:
+    """Read the nearest ``.whisperproject.json`` and return its keys.
+
+    Returns an empty dict when the file is absent, malformed, or not
+    a JSON object. Never raises — a bad project file should not
+    block a transcription, only the in-file override.
+    """
+    f = find_project_file(start)
+    if f is None:
+        return {}
+    try:
+        with open(f, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not read project overrides at %s", f)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "Project override at %s is not a JSON object; ignoring", f
+        )
+        return {}
+    return data
+
+
+def merge_project_overrides(
+    base_config: dict[str, Any], source_path: str | Path
+) -> dict[str, Any]:
+    """Return a shallow copy of ``base_config`` with overrides applied.
+
+    Walks up from ``source_path`` to find the nearest
+    ``.whisperproject.json`` and overlays its keys on top of
+    ``base_config``. Dict-valued keys are deep-merged (one level)
+    so the user can override e.g. ``model.name`` without forcing the
+    whole model dict.
+    """
+    overrides = load_project_overrides(source_path)
+    if not overrides:
+        return base_config
+    merged: dict[str, Any] = json.loads(json.dumps(base_config))
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k].update(v)
+        else:
+            merged[k] = v
+    return merged
