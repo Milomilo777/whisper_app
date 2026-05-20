@@ -219,6 +219,101 @@ weight (~15 MB net). All three still well under the original
 Source-of-truth commits for this refresh: `cb4e1a0` (writers)
 through `9137e57` (CI xvfb fix).
 
+## Hands-off polish push (2026-05-20, fourth refresh)
+
+The final refresh under the `release/v0.7.0-installer-3-options`
+branch shipped every item still open in
+`docs/HANDOFF_NEXT_SESSION.md`. Highlights:
+
+### Backends (A2)
+
+A pluggable `core/backends/` package now sits between the
+transcriber dispatcher and the underlying engine. `faster_whisper`
+remains the default; **whisper.cpp** is opt-in via pywhispercpp on
+quantised ggml models — much smaller (~1.1 GB for large-v3-q5_0)
+and runs on weaker CPUs that struggle with the float16 path. The
+Advanced dialog gains a backend picker + a "Download whisper.cpp
+model..." button that fetches the model into
+`%LOCALAPPDATA%\WhisperProject\Cache\whisper_cpp\`.
+
+### Word-level alignment (A3)
+
+`config["alignment"] = "stable_ts"` runs a DTW pass via stable-ts
+after the main transcribe, refining word timestamps to ±50 ms.
+Opt-in; faster_whisper installs that don't enable it skip the dep
+entirely.
+
+### Viewer polish (B1 + B2)
+
+The in-app transcript viewer now supports:
+
+- `Ctrl+F` find-and-replace, case-insensitive by default
+- Right-click → "Rename speaker (everywhere)..."
+- Word-confidence colour coding (green ≥ 0.85 / amber / red)
+- One-click "Remove fillers" (uh / um / er / …)
+- `Ctrl+S` atomic save through the JSON writer
+- Karaoke-style word highlight following the VLC playhead
+
+### System tray + native toast + HiDPI (C1, C2, C3)
+
+`app/widgets/tray.py` runs the tray icon on a daemon thread;
+right-click menu Show / Hide / Exit. Icon flips colour when work
+is running. `config["minimise_to_tray"]` redirects window-close to
+hide-window. Completed jobs raise a native toast via
+`pystray.Icon.notify` so background runs are visible. Tk scaling
+is now computed from system DPI on launch so fonts and paddings
+stop shrinking on 150 % displays.
+
+### Filename templating (A1)
+
+The pre-existing `output_filename_template` key is finally wired
+in. Tokens `{base} {ext} {lang} {date} {speaker_count}` resolve
+at write time; sibling subdirectories
+(`transcripts/{base}.{ext}`) auto-create on demand.
+
+### Opt-in telemetry (C4)
+
+Sentry crash reporting and a one-shot launch ping are now gated
+on `config["telemetry_opt_in"]` (Advanced dialog checkbox). Both
+additionally require their respective env vars — without `$SENTRY_DSN`
+or `$WHISPER_TELEMETRY_URL` nothing is sent. The ping carries only
+`{os, version, python, anonymised_id}`; the id is a SHA-256 of a
+one-shot UUID stashed under `user_cache_dir()/telemetry_id`.
+
+### Crash auto-resume (D1)
+
+On launch, rows that were `running` in the previous run get
+flagged `interrupted`. The new boot-time prompt offers to
+re-enqueue the still-existing files.
+
+### Per-folder `.whisperproject.json` (D2)
+
+`core.config.merge_project_overrides` walks up from each
+transcribed file and overlays the closest `.whisperproject.json`
+on top of the global config. Lets a user keep "this folder always
+uses these output_formats / hotwords / etc." without sharing those
+keys across the whole machine.
+
+### Watched-folder UI wiring (G4 leftover)
+
+`core.watcher.FolderWatcher` is wired through the Advanced dialog.
+Media files dropped into the configured folder are stability-checked
+(size stable for 1.2 s) then auto-enqueued.
+
+### Explorer right-click verb (E1)
+
+Both `installer.iss` and `installer_embed.iss` now ship an
+optional `shellext` task that writes the registry entries under
+`HKCR\*\shell\WhisperProjectTranscribe`. Hits the existing CLI
+mode (`WhisperProject.exe transcribe "%1"`).
+
+### Test suite growth
+
+Hermetic unit suite: 197 → **246 passing**. New tests cover the
+backend dispatcher + segment normalisation, alignment, tray
+helpers, observability gates, project-override merge, filename
+templating, and every viewer edit operation.
+
 ## Known limitations
 
 - **SmartScreen warning.** None of the three exes are code-signed.

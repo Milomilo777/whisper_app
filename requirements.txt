@@ -42,6 +42,18 @@ watchdog>=3.0
 pystray>=0.19
 Pillow>=10.0
 
+# Alternative backend: whisper.cpp via pywhispercpp. Quantised ggml
+# models (~1.1 GB for large-v3-q5_0) run on weak CPUs that struggle
+# with the float16 faster-whisper path. Optional — the user can keep
+# the default faster_whisper backend with no install changes.
+pywhispercpp>=1.4
+
+# Word-level alignment refinement (DTW). Loads its own tiny Whisper
+# checkpoint (~75 MB) for the alignment pass — kept out of the
+# transcribe backend so faster-whisper users skip the dep when they
+# don't enable stable-ts.
+stable-ts>=2.17
+
 # Optional: dark/light system-theme detection used when theme="system"
 # (sv-ttk falls back to dark if missing). Uncomment if desired.
 # darkdetect>=0.8.0
