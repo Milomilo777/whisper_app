@@ -1,5 +1,8 @@
 # Whisper Project
 
+[![CI](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml/badge.svg?branch=release%2Fv0.7.0-installer-3-options)](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Milomilo777/whisper_project_direct_download_v2?label=release)](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)
+
 Offline transcription + video downloader for Windows. Built on
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and
 [yt-dlp](https://github.com/yt-dlp/yt-dlp).
