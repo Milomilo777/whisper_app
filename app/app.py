@@ -558,6 +558,28 @@ class App(tk.Tk):
 
     # Adding tasks ------------------------------------------------------------
     def add(self) -> None:
+        text = self.fv.get().strip()
+        if not text:
+            self.log("Pick a file first — use the Browse button on the Transcribe tab.")
+            return
+        # YouTube / yt-dlp URL detection — if the user pastes a URL
+        # into the Transcribe file field, route it through the
+        # Download tab with auto-transcribe-after-download on. The
+        # download flow is the established way to fetch network
+        # media; we just connect the dots.
+        if text.startswith(("http://", "https://")):
+            try:
+                self.download_url_var.set(text)
+                if hasattr(self, "auto_transcribe_var"):
+                    self.auto_transcribe_var.set(True)
+                self.nb.select(self.t3)
+                self.log(
+                    f"URL detected — pasted into the Download tab with "
+                    f"auto-transcribe ON: {text[:60]}"
+                )
+            except Exception as e:  # noqa: BLE001
+                self.log(f"URL handoff failed: {e}")
+            return
         if not self.fv.get():
             self.log("Pick a file first — use the Browse button on the Transcribe tab.")
             return
