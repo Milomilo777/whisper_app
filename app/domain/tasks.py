@@ -31,6 +31,9 @@ class VideoDownloadTask:
         self.status = "waiting"
         self.progress: float = 0
         self.start_time: float | None = None
+        # Frozen wall-clock for terminal downloads (finished /
+        # cancelled / error) — same role as on TranscriptionTask.
+        self.end_time: float | None = None
         self.process: Any = None
         self.cancelled = False
         self.subtitles_enabled = subtitles_enabled

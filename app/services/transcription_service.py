@@ -263,6 +263,9 @@ class TranscriptionService:
             t.status = "running"
             t.progress = 0
             t.start_time = _time.time()
+            # Clear any prior end_time (re-run path) so the freshly-
+            # restarted task counter doesn't immediately freeze.
+            t.end_time = None
             app.update_overall_progress()
             # Phase 3a — record start in history.
             history = getattr(app, "history", None)
@@ -293,6 +296,13 @@ class TranscriptionService:
         task = worker["task"]
         if not task:
             return
+        import time as _time
+        # Freeze the Elapsed-column counter ASAP — irrespective of
+        # which terminal status (finished / cancelled / error) the
+        # task ended in. Before this, app.fmt_time kept incrementing
+        # via time.time() - start_time forever.
+        if getattr(task, "end_time", None) is None:
+            task.end_time = _time.time()
         newly_finished = (
             not keep_status and not task.cancelled
         )

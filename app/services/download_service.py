@@ -359,6 +359,9 @@ class DownloadService:
         import time as _t  # local to avoid shadow on type-checking
 
         task.start_time = _t.time()
+        # Re-run path: clear a frozen end_time so the counter starts
+        # incrementing again for the second attempt.
+        task.end_time = None
         app.refresh_download_queue()
 
         threading.Thread(target=self._run_task, args=(task,), daemon=True).start()
@@ -742,6 +745,12 @@ class DownloadService:
                 self._finish(task, payload["status"], saved_path=payload.get("saved_path"))
             elif kind == "error":
                 task.status = "error"
+                import time as _time
+                if getattr(task, "end_time", None) is None:
+                    try:
+                        task.end_time = _time.time()
+                    except AttributeError:
+                        pass
                 app.log(payload)
                 if app.download_current is task:
                     app.download_current = None
@@ -754,6 +763,17 @@ class DownloadService:
     def _finish(self, task: "VideoDownloadTask", status: str, saved_path: str | None) -> None:
         app = self.app
         task.status = status
+        # Freeze the Elapsed column the moment the task is terminal,
+        # regardless of which status it ended in (finished / error /
+        # cancelled). Without this, app.fmt_time kept ticking.
+        # Defensive getattr — the unit suite passes a SimpleNamespace
+        # mock that doesn't carry end_time.
+        if getattr(task, "end_time", None) is None:
+            import time as _time
+            try:
+                task.end_time = _time.time()
+            except AttributeError:
+                pass
         if status == "finished":
             task.progress = 100
             if saved_path:

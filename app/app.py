@@ -870,6 +870,9 @@ class App(tk.Tk):
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True
         task.status = "cancelled"
+        # Freeze the Elapsed column at the cancel moment.
+        if task.end_time is None:
+            task.end_time = time.time()
         if task.process and task.process.poll() is None:
             task.process.terminate()
         self.refresh_download_queue()
@@ -892,6 +895,10 @@ class App(tk.Tk):
     def cancel(self, t: TranscriptionTask) -> None:
         t.cancelled = True
         t.status = "cancelled"
+        # Freeze the Elapsed column at the cancel moment so the user
+        # sees how long the task actually ran before they killed it.
+        if getattr(t, "end_time", None) is None:
+            t.end_time = time.time()
         for worker in self.workers:
             if worker["task"] == t:
                 self.log("Cancelling running task and restarting its worker...")
@@ -916,7 +923,17 @@ class App(tk.Tk):
     def fmt_time(self, t: Any) -> str:
         if not getattr(t, "start_time", None):
             return ""
-        s = time.time() - t.start_time
+        # Freeze at end_time once the task is in a terminal state
+        # (finished / cancelled / error). Before this, the Elapsed
+        # column kept incrementing forever — the user never saw
+        # "this file took 1m 22s", just a number that grew while
+        # they were doing something else.
+        end = getattr(t, "end_time", None)
+        if end is not None:
+            s = end - t.start_time
+        else:
+            s = time.time() - t.start_time
+        s = max(0.0, s)
         h = int(s // 3600)
         m = int((s % 3600) // 60)
         sec = int(s % 60)
@@ -1135,6 +1152,15 @@ class App(tk.Tk):
             f"Done: {os.path.basename(task.file_path)} → "
             f"{len(existing)} file(s) in {folder}"
         )
+        # Auto-switch back to the Transcribe tab when a job finishes
+        # so the user lands on the Last Result card (file paths +
+        # Open buttons) instead of having to manually switch from the
+        # Queue tab. Mirrors the auto-switch to Queue when a
+        # transcription starts.
+        try:
+            self.nb.select(self.t1)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _open_file(self, path: str) -> None:
         """Open a single file with the OS default handler."""
