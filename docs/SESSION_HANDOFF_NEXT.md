@@ -5,18 +5,19 @@ this repo. Read this file before anything else.
 
 ---
 
-## 1. Current state (2026-05-21, end of v0.8 Phase 1 session)
+## 1. Current state (2026-05-21, end of v0.8 Phase 1 + 2 + 3 session)
 
 | Item | Value |
 |---|---|
 | Branch | `release/v0.7.0-installer-3-options` |
-| Last commit | `fb45094` — v0.8 Shard B (hardware autodetect wizard) |
-| Pushed | ✅ everything is on origin |
+| Last commit | `99af9bf` — v0.8 Phase 2 + 3 wiring + real-file E2E |
+| Pushed | ✅ everything is on origin (after push step below) |
 | Working tree | clean |
 | Release tag | `v0.7.1` on GitHub (three EXEs uploaded) |
-| Unit suite | 337 passing (+62 from v0.8 Phase 1) |
+| Unit suite | 438 passing (+163 from baseline 275) |
+| Real-file E2E | 10/10 PASS (`tests/core/test_v08_real_file_e2e.py`) |
 | Pyright basic | 0 errors, 0 warnings |
-| Smoke | 7/7 PASS against real SMTV clip (last verified end of Phase 1) |
+| Smoke | 7/7 PASS against real SMTV clip (re-verified end of Phase 3) |
 
 ## 2. What just happened this session (chronological)
 
@@ -79,28 +80,80 @@ End-of-Phase-1 verification (this session):
   - pytest test_transcribe_smoke + test_transcribe_end_to_end → 7/7
     (real Whisper model + real audio).
 
-### Phase 2 — pick this up next
+### Phase 2 — DONE this session ✅ (`commit 99af9bf modules + wiring`)
 
-Live + capture (M effort, opt-in download for the AI layer model).
-See `docs/V08_FEATURE_RESEARCH.md` § "Track 1 — Live & Capture" and
-§ "Track 2 — AI Layer".
+* `core/recorder.py` — sounddevice (mic) + pyaudiowpatch (Windows
+  WASAPI loopback) recorder writing 16-kHz mono WAV. Graceful
+  fallback when deps missing.
+* `core/llm.py` — local LLM panel: Qwen2.5-1.5B-Instruct Q4_K_M via
+  llama-cpp-python with download-on-first-use to
+  `user_cache_dir()/llm/`. LLMRunner.summarise / action_items /
+  ask / translate. Atomic download (.part + os.replace) with
+  cancel-aware cleanup.
+* `core/separator.py` — Demucs htdemucs vocal-separation pre-process
+  with file size+mtime+model cache key. `separate_vocals()` is
+  safe to always call (no-op when off / dep missing).
 
-Headline features:
-  - **Live mic streaming** via RealtimeSTT (MIT) on top of the
-    existing `WhisperModel` instance + Silero/WebRTC VAD.
-  - **System audio capture** via WASAPI loopback (`soundcard` or
-    `pyaudiowpatch`).
-  - **Local LLM panel** — llama-cpp-python + Qwen2.5-1.5B-Instruct
-    Q4_K_M with download-on-first-use (don't bundle, keeps Portable
-    at ~450 MB instead of growing to 1.45 GB). GBNF for guaranteed
-    JSON output.
-  - **Vocal separation pre-processing** — Demucs htdemucs toggle.
+### Phase 3 — DONE this session ✅ (`commit 99af9bf`)
 
-### Phase 3 — deferred until Phase 2 lands
+* `core/backends/parakeet.py` — sherpa-onnx Parakeet TDT v3 adapter.
+  `sherpa_onnx` is already bundled (diarisation dep) so zero new
+  wheel cost. Requires four model files under
+  `user_cache_dir()/parakeet/`. Token-to-segment grouping cuts on
+  gap > 0.8s. Registered under backend slug `"parakeet"`.
+* `core/search.py` — semantic search across `history.db` with
+  sentence-transformers/all-MiniLM-L6-v2 when installed +
+  sqlite FTS5 keyword fallback. Sidecar `search.db` carries
+  per-segment FTS5 + optional float32 embedding BLOBs.
+* `core/chapters.py` — auto-chapter markers via long-silence
+  heuristic, optional LLM titler when AI Layer on. Outputs land
+  as `<base>.chapters.json` sidecar — writers untouched.
+* `core/voiceprint.py` — cross-file speaker fingerprint DB via
+  pyannote/embedding. Enrol once → matching SPEAKER_NN clusters
+  get relabelled on every future transcript. Storage: sqlite
+  with float32 BLOB packing.
 
-See `docs/V08_FEATURE_RESEARCH.md` § "Track 3" + the worth-investigating
-table. Includes Parakeet adapter (sherpa-onnx), semantic search across
-history.db, auto-chapter markers, cross-file speaker fingerprint.
+### Phase 2 + 3 wiring
+
+* `core/config.py` — `ai_enabled`, `ai_model_path`, `demucs_enabled`,
+  `auto_chapters_enabled`, `chapter_min_seconds`, `chapter_gap_seconds`,
+  `voiceprint_enabled` keys with sensible defaults (Demucs +
+  LLM off; chapters + voiceprint on).
+* `core/transcriber.py` — Demucs pre-process hook + auto-chapter
+  build + `_write_chapter_sidecar()` + `_maybe_get_llm_runner()`.
+* `app/dialogs/advanced.py` — new "AI Layer (Phase 2 + 3)" frame
+  with toggles + "Install AI model…" worker. Backend dropdown
+  now includes `parakeet`.
+* `core/backends/__init__.py` — Parakeet registered in dispatcher.
+* Both PyInstaller specs — hidden imports updated for all 7 new
+  modules.
+
+### Real-file E2E ✅
+
+`tests/core/test_v08_real_file_e2e.py` — 10 tests that load the
+real Whisper model and transcribe the SMTV clip, then verify
+every v0.8 feature end-to-end on real audio: JSON / SRT output
+shape, hallucination detector flags, chapters sidecar
+(sequential indices + full time coverage), search index +
+keyword recovery, voiceprint relabel no-op, pipeline log
+markers. Auto-skips when the fixture is missing. ~3 minutes
+wall time on a cold cache.
+
+### What's NOT done (Phase 2 follow-ups)
+
+* Live mic recording UI — module is ready, but a "Live" tab
+  hasn't been added yet. The Phase-2 module can be exercised
+  programmatically; UI work in a follow-up.
+* RealtimeSTT streaming integration — out of scope for the
+  recorder module (record-then-transcribe is enough for MVP).
+  Add when the user asks for low-latency live transcription.
+* Local LLM panel UI — `_install_ai_model` button is wired and
+  the four LLMRunner entry points (summarise / ask / etc.) are
+  callable, but the viewer-level "Summarize transcript" /
+  "Ask question" panel is a follow-up.
+* Voiceprint enrolment UI — `enrol_with_vector` works, full
+  pipeline including pyannote embedding extraction + a
+  "Enrol speaker…" button in the viewer is a follow-up.
 
 ## 4. User preferences learned this session (durable)
 
@@ -192,5 +245,5 @@ same (overwrites in place).
 Paste this verbatim to start the next session:
 
 ```
-Read docs/SESSION_HANDOFF_NEXT.md first, then start Phase 2 of v0.8 (live mic + WASAPI loopback + local LLM panel) per docs/V08_FEATURE_RESEARCH.md Tracks 1 and 2.
+Read docs/SESSION_HANDOFF_NEXT.md first, then build the v0.8 user-facing UIs that were deferred at the end of Phase 3: Live tab using core/recorder.py, AI Layer panel using core/llm.py.LLMRunner from the transcript viewer, and a Voice enrol dialog using core/voiceprint.py. Bundle whichever heavy deps the user wants shipped.
 ```
