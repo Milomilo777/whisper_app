@@ -73,8 +73,8 @@ def test_srt_roundtrip_ascii():
         assert o_body == r_body
 
 
-def test_srt_roundtrip_persian():
-    original, roundtripped = _round_trip_segments(FIXTURES / "sample_persian.srt")
+def test_srt_roundtrip_unicode():
+    original, roundtripped = _round_trip_segments(FIXTURES / "sample_unicode.srt")
     assert len(original) == len(roundtripped)
     for (o_start, _o_end, o_body), (r_start, _r_end, r_body) in zip(
         original, roundtripped
