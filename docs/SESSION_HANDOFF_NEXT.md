@@ -5,18 +5,18 @@ this repo. Read this file before anything else.
 
 ---
 
-## 1. Current state (2026-05-21)
+## 1. Current state (2026-05-21, end of v0.8 Phase 1 session)
 
 | Item | Value |
 |---|---|
 | Branch | `release/v0.7.0-installer-3-options` |
-| Last commit | `941b89f` — timer freeze + auto-switch to Transcribe on finish |
+| Last commit | `fb45094` — v0.8 Shard B (hardware autodetect wizard) |
 | Pushed | ✅ everything is on origin |
 | Working tree | clean |
 | Release tag | `v0.7.1` on GitHub (three EXEs uploaded) |
-| Unit suite | 275 passing |
+| Unit suite | 337 passing (+62 from v0.8 Phase 1) |
 | Pyright basic | 0 errors, 0 warnings |
-| Smoke | 5/5 PASS against real SMTV clip (last verified) |
+| Smoke | 7/7 PASS against real SMTV clip (last verified end of Phase 1) |
 
 ## 2. What just happened this session (chronological)
 
@@ -44,59 +44,63 @@ All of the above are committed + pushed.
 
 ## 3. What's pending — pick this up first
 
-The user has approved a 3-phase v0.8 roadmap (6 features). The
-detailed plan + library / model / effort estimates are in
+The user has approved a 3-phase v0.8 roadmap. Phase 1 LANDED in
+this session (commits `dbe7de9` + `fb45094`). The detailed plan +
+library / model / effort estimates for Phases 2 + 3 are in
 **`docs/V08_FEATURE_RESEARCH.md`** — read that file second.
 
-### Phase 1 — start HERE in the next session
+### Phase 1 — DONE this session ✅
 
-Light features, no heavy deps. The user wants **2 parallel shards**:
+**Shard A — `dbe7de9`** (hallucination detector + multi-model picker)
+  - `core/hallucination.py` — BoH + 1/2/3-gram repetition + optional
+    VAD-disagreement; wires into `_run_post_pipeline`; toggleable via
+    `config["hallucination_detect_enabled"]` (default ON).
+  - Transcript viewer highlights suspect rows with a light-red row
+    background (`tag_configure("suspect", background="#ffe0e0")`).
+  - `core/model_manager.MODEL_REGISTRY` — Large v3 (default), Large
+    v3 Turbo, Distil Large v3.5. `whisper_model` config key.
+  - Advanced dialog gains a model dropdown + hallucination checkbox.
+  - 60 new unit tests; all 320 (Shard A) passing at this commit.
 
-**Shard A** — covers two features that both touch transcriber + UI:
-  - **Hallucination detector flag** (S effort)
-    * New `core/hallucination.py` — regex repetition + BoH wordlist
-      + VAD-disagreement
-    * Integrate into `_run_post_pipeline` in `core/transcriber.py`
-    * Annotate segments with `seg["suspect"] = True` + reason
-    * Make the viewer (`app/dialogs/transcript_viewer.py`) highlight
-      suspect rows in red
-    * Tests: `tests/core/test_hallucination.py`
-  - **Multi-model picker** — turbo + distil-v3.5 only (S effort)
-    * Modify `app/dialogs/advanced.py` to add a model dropdown
-    * Modify `core/model_manager.py` to handle multiple model paths
-    * Add `whisper_model` config key (default: `large-v3` to preserve
-      current behavior)
-    * faster-whisper supports all three natively — no new adapter
-    * Tests: `tests/core/test_model_picker.py`
-    * **Parakeet defers to Phase 3** (needs new sherpa-onnx adapter)
+**Shard B — `fb45094`** (hardware autodetect wizard)
+  - `core/hardware.py` — Tk-free probe layer (CUDA → QNN → OpenVINO
+    NPU/GPU → DirectML → CPU int8) + atomic `hardware.json` round
+    trip + CUDA re-validation at load.
+  - `app/widgets/hardware_wizard.py` — modal Treeview UI with
+    Re-probe + Run-5s-benchmark + Save-and-use buttons.
+  - `core.transcriber.detect_device` reads `hardware.json` first
+    when `device == "auto"`.
+  - "Re-detect hardware…" button in Advanced dialog.
+  - 17 new unit tests; all 337 passing at this commit.
 
-**Shard B** — a single self-contained feature:
-  - **Hardware autodetect wizard** (M effort)
-    * New `app/widgets/hardware_wizard.py` — probe CUDA → QNN/NPU →
-      Intel-NPU → OpenVINO → DirectML → CPU int8
-    * 5-second benchmark on a bundled clip → real RTF
-    * Persist choice in `%LOCALAPPDATA%\WhisperProject\hardware.json`
-    * Modify `core/transcriber.py::detect_device` to read that file
-    * "Re-detect" button in Advanced dialog
-    * Tests: `tests/core/test_hardware_wizard.py`
+End-of-Phase-1 verification (this session):
+  - pyright app/ core/ → 0 errors, 0 warnings.
+  - pytest tests/ (excl. smoke) → 337/337.
+  - pytest test_transcribe_smoke + test_transcribe_end_to_end → 7/7
+    (real Whisper model + real audio).
 
-**Sharding rules**:
-  - Each shard has its own test + Pyright + smoke
-  - Both shards commit independently (atomic commits per feature)
-  - User wants push at the end, not after every commit (this is
-    different from the durable rule in CLAUDE.md — confirm with the
-    user if doubtful, but the current explicit instruction in
-    Phase 1 is "commit, but don't push until the user OKs the UI"
-    pattern was for UI work specifically; for Phase 1 functional
-    features the standing rule of commit-and-push-immediately may
-    apply — ASK IF UNSURE).
+### Phase 2 — pick this up next
 
-### Phase 2 + 3 — deferred
+Live + capture (M effort, opt-in download for the AI layer model).
+See `docs/V08_FEATURE_RESEARCH.md` § "Track 1 — Live & Capture" and
+§ "Track 2 — AI Layer".
 
-After Phase 1 lands, decide with the user whether to continue in
-the same session or spawn a fresh one (context is the deciding
-factor). Phase 2 and Phase 3 details are in
-`docs/V08_FEATURE_RESEARCH.md`.
+Headline features:
+  - **Live mic streaming** via RealtimeSTT (MIT) on top of the
+    existing `WhisperModel` instance + Silero/WebRTC VAD.
+  - **System audio capture** via WASAPI loopback (`soundcard` or
+    `pyaudiowpatch`).
+  - **Local LLM panel** — llama-cpp-python + Qwen2.5-1.5B-Instruct
+    Q4_K_M with download-on-first-use (don't bundle, keeps Portable
+    at ~450 MB instead of growing to 1.45 GB). GBNF for guaranteed
+    JSON output.
+  - **Vocal separation pre-processing** — Demucs htdemucs toggle.
+
+### Phase 3 — deferred until Phase 2 lands
+
+See `docs/V08_FEATURE_RESEARCH.md` § "Track 3" + the worth-investigating
+table. Includes Parakeet adapter (sherpa-onnx), semantic search across
+history.db, auto-chapter markers, cross-file speaker fingerprint.
 
 ## 4. User preferences learned this session (durable)
 
@@ -188,5 +192,5 @@ same (overwrites in place).
 Paste this verbatim to start the next session:
 
 ```
-Read docs/SESSION_HANDOFF_NEXT.md first, then start Phase 1 of v0.8 with 2 parallel shards as described there.
+Read docs/SESSION_HANDOFF_NEXT.md first, then start Phase 2 of v0.8 (live mic + WASAPI loopback + local LLM panel) per docs/V08_FEATURE_RESEARCH.md Tracks 1 and 2.
 ```
