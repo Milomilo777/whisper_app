@@ -254,6 +254,30 @@ class App(tk.Tk):
 
     # Bootstrap ---------------------------------------------------------------
     def _on_start(self) -> None:
+        # v0.9 — first-run Hub Folder picker. ``ensure_hub_configured``
+        # is a no-op when the user has already picked a folder (or the
+        # config-loader's legacy migration filled it in from an old
+        # model_path). When the dialog needs to fire we still launch
+        # the model standby with the default path so the user can
+        # start working immediately; the on_done callback below
+        # re-reads the config + reloads the model when the user
+        # commits a different path.
+        try:
+            from app.dialogs.hub_setup import ensure_hub_configured
+
+            def _hub_picked(path: str) -> None:
+                self.log(f"Model hub folder set to: {path}")
+                try:
+                    self.app_config = load_config()
+                except Exception:  # noqa: BLE001
+                    pass
+
+            ensure_hub_configured(
+                self, self.app_config,
+                on_done=_hub_picked,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Hub setup dialog failed: %s", e)
         self.transcription_service.start_standby()
 
     # Menu --------------------------------------------------------------------

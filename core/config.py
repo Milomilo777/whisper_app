@@ -98,6 +98,14 @@ DEFAULT_CONFIG = {
     # the diariser's per-file SPEAKER_NN labels are renamed to the
     # matching enrolled names.
     "voiceprint_enabled": True,
+    # Model Hub folder — the parent directory that holds one or more
+    # ``models--Vendor--name`` subdirectories. Empty by default so
+    # ``app.dialogs.hub_setup`` fires its first-run picker. The
+    # picker pre-fills ``core.hub.default_hub_folder()`` =
+    # ``<app_dir>/hub``. ``model_path`` (above) remains as a per-
+    # model override for users with an existing config; new
+    # installs derive ``model_path`` from ``hub_folder + model.name``.
+    "hub_folder": "",
 }
 
 
@@ -182,14 +190,37 @@ def _drive_is_mounted(path: str | Path) -> bool:
 
 
 def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
+    # Migration (v0.8 hub folder): if the user has a legacy
+    # ``model_path`` set but no ``hub_folder``, derive the hub from
+    # the parent directory of the model. This keeps existing
+    # installs working without forcing the first-run dialog when
+    # the user has clearly already pointed the app at a real model
+    # folder. We don't clear model_path — it stays as an explicit
+    # override per resolve order in core.hub.
+    from . import hub as _hub  # local import to avoid bootstrap cycle
     model_path = (config.get("model_path") or "").strip()
+    hub_folder = (config.get("hub_folder") or "").strip()
+    if model_path and not hub_folder:
+        derived = _hub.derive_hub_from_model_path(model_path)
+        if derived:
+            config["hub_folder"] = derived
+            hub_folder = derived
+            logger.info(
+                "Migrated legacy model_path → hub_folder=%s "
+                "(model_path kept as explicit override).",
+                derived,
+            )
+
+    # Compute model_path on the fly when it's missing or unreachable,
+    # using the hub folder when configured. This is the v0.8
+    # resolution order: explicit model_path wins → hub_folder +
+    # model_name → user_cache_dir fallback.
     if not model_path or not _drive_is_mounted(model_path):
         model_name = (config.get("model") or {}).get("name") or "whisper-model"
-        if model_name.startswith("models--"):
-            folder_name = model_name
-        else:
-            folder_name = f"models--Systran--{model_name}"
-        fallback = user_cache_dir() / "models" / folder_name
+        try:
+            fallback = _hub.model_folder_for(hub_folder or None, model_name)
+        except ValueError:
+            fallback = user_cache_dir() / "models" / "whisper-model"
         if model_path:
             logger.warning(
                 "model_path %r is unreachable on this machine; "
