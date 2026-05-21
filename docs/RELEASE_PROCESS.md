@@ -4,8 +4,9 @@ The exact sequence to ship a new build of Whisper Project. This is
 written for the **private-distribution** workflow — a small group of
 users on your distribution channel, not a public GitHub release.
 
-Read this file before cutting a release. The exact commands +
-ordering are below.
+If anything here disagrees with `CLAUDE.md`, CLAUDE.md wins (it's
+auto-loaded into every Claude Code session and represents durable
+rules).
 
 ---
 
