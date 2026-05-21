@@ -397,8 +397,20 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Label(top, textvariable=app.format_status_var).grid(
         row=9, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0)
     )
-    ttk.Button(top, text="Download", command=app.add_download).grid(
-        row=10, column=2, sticky="e", pady=(10, 0)
+
+    # Primary CTA for the Download tab — same Accent style + larger
+    # ipadx/ipady as the Transcribe button on the other tab, so the
+    # user has a single visual rule for "this is the main action".
+    # Spans the full row (columnspan=3) and sits at the bottom of the
+    # form so it's the natural last step after filling URL + format.
+    download_btn = ttk.Button(
+        top, text="⬇    Download",
+        command=app.add_download,
+        style="Accent.TButton",
+    )
+    download_btn.grid(
+        row=10, column=0, columnspan=3, sticky="e",
+        padx=(0, 0), pady=(12, 0), ipadx=24, ipady=8,
     )
 
     top.columnconfigure(1, weight=1)
