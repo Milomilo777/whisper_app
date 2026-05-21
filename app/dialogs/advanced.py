@@ -183,15 +183,26 @@ class AdvancedDialog(tk.Toplevel):
             variable=self._hallucination_detect,
         ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
 
-        ttk.Label(extras, text="Output filename template").grid(row=7, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(extras, text="Hardware").grid(row=7, column=0, sticky="w", padx=8, pady=4)
+        ttk.Button(
+            extras, text="Re-detect hardware…",
+            command=self._open_hardware_wizard,
+        ).grid(row=7, column=1, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            extras,
+            text="Probes CUDA / NPU / DirectML and picks the fastest tier.",
+            foreground="#666",
+        ).grid(row=7, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(extras, text="Output filename template").grid(row=8, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(extras, textvariable=self._filename_template, width=42).grid(
-            row=7, column=1, columnspan=2, sticky="ew", padx=8, pady=4
+            row=8, column=1, columnspan=2, sticky="ew", padx=8, pady=4
         )
         ttk.Label(
             extras,
             text="Tokens: {base} {ext} {lang} {date} {speaker_count}",
             foreground="#666",
-        ).grid(row=8, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ).grid(row=9, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         extras.columnconfigure(1, weight=1)
 
         # Watched folder
@@ -327,6 +338,25 @@ class AdvancedDialog(tk.Toplevel):
         folder = filedialog.askdirectory(parent=self, title="Choose a folder to watch")
         if folder:
             self._watched_folder.set(folder)
+
+    def _open_hardware_wizard(self) -> None:
+        """Launch the hardware autodetect wizard.
+
+        The wizard probes CUDA / NPU / DirectML / CPU, persists the
+        winning tier to ``%LOCALAPPDATA%\\WhisperProject\\hardware.json``,
+        and ``core.transcriber.detect_device`` reads that file on the
+        next model load. The dialog is non-modal so the user can keep
+        the Advanced window open while it runs.
+        """
+        try:
+            from app.widgets.hardware_wizard import HardwareWizard
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"Hardware wizard unavailable: {e}")
+            return
+        try:
+            HardwareWizard(self, app=self.app)
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"Hardware wizard failed to launch: {e}")
 
     def _download_whisper_cpp_model(self) -> None:
         """Kick off the whisper.cpp model download in a daemon thread.

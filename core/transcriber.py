@@ -60,9 +60,26 @@ def log(msg: str, cb: Callable[[str], None] | None = None) -> None:
 
 
 def detect_device() -> tuple[str, str]:
-    """Pick (device, compute_type). Honours an explicit ``device`` setting."""
+    """Pick (device, compute_type).
+
+    Resolution order:
+      1. Explicit ``device`` config setting (anything ≠ ``"auto"``).
+      2. The Hardware Wizard's persisted choice in ``hardware.json``
+         when it picks a tier the bundled backend can drive AND the
+         hardware is still present (v0.8).
+      3. ctranslate2 CUDA probe.
+      4. torch CUDA probe (legacy fallback).
+      5. CPU with the configured compute_type.
+    """
     if config.get("device") != "auto":
         return config.get("device", "cpu"), config.get("compute_type", "int8")
+    try:
+        from . import hardware as _hw
+        wizard_choice = _hw.device_choice_from_hardware_file()
+        if wizard_choice is not None:
+            return wizard_choice
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import ctranslate2
         if ctranslate2.contains_cuda_device():  # type: ignore[attr-defined]

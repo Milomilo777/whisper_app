@@ -1,0 +1,274 @@
+"""Tests for the v0.8 hardware autodetect data layer.
+
+The Tk dialog itself (``app.widgets.hardware_wizard.HardwareWizard``)
+is harder to drive headless because Treeview interactions depend on
+focus state; we cover the core probe + persistence logic here and
+exercise the dialog construction in a single smoke test.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from core import hardware as hw
+
+
+# ---------- Tier dataclass -----------------------------------------------------
+
+
+def test_tier_dataclass_round_trips_via_asdict():
+    t = hw.Tier(
+        slug="cuda_float16",
+        label="NVIDIA CUDA (float16) — RTX 4090",
+        device="cuda",
+        compute_type="float16",
+        detail="RTX 4090",
+    )
+    d = hw.tier_to_dict(t)
+    assert d["slug"] == "cuda_float16"
+    assert d["device"] == "cuda"
+    assert d["compute_type"] == "float16"
+    assert d["backend"] == "faster_whisper"
+
+
+# ---------- probe order --------------------------------------------------------
+
+
+def test_probe_tiers_always_includes_cpu_fallback(monkeypatch):
+    monkeypatch.setattr(hw, "_probe_cuda", lambda: [])
+    monkeypatch.setattr(hw, "_probe_qnn_npu", lambda: [])
+    monkeypatch.setattr(hw, "_probe_openvino", lambda: [])
+    monkeypatch.setattr(hw, "_probe_directml", lambda: [])
+    tiers = hw.probe_tiers()
+    assert len(tiers) == 1
+    assert tiers[-1].slug == "cpu_int8"
+    assert tiers[-1].backend == "faster_whisper"
+
+
+def test_probe_tiers_orders_cuda_above_cpu(monkeypatch):
+    fake_cuda = hw.Tier(
+        slug="cuda_float16", label="CUDA",
+        device="cuda", compute_type="float16",
+    )
+    monkeypatch.setattr(hw, "_probe_cuda", lambda: [fake_cuda])
+    monkeypatch.setattr(hw, "_probe_qnn_npu", lambda: [])
+    monkeypatch.setattr(hw, "_probe_openvino", lambda: [])
+    monkeypatch.setattr(hw, "_probe_directml", lambda: [])
+    tiers = hw.probe_tiers()
+    assert tiers[0].slug == "cuda_float16"
+    assert tiers[-1].slug == "cpu_int8"
+
+
+def test_first_supported_tier_skips_non_bundled(monkeypatch):
+    fake_qnn = hw.Tier(
+        slug="qnn_npu", label="QNN", device="cpu",
+        compute_type="int8", backend="qnn_npu",
+    )
+    fake_cpu = hw.Tier(
+        slug="cpu_int8", label="CPU", device="cpu",
+        compute_type="int8",
+    )
+    chosen = hw.first_supported_tier([fake_qnn, fake_cpu])
+    assert chosen.slug == "cpu_int8"
+
+
+def test_first_supported_tier_picks_cuda_when_present():
+    fake_cuda = hw.Tier(
+        slug="cuda_float16", label="CUDA", device="cuda",
+        compute_type="float16",
+    )
+    fake_cpu = hw.Tier(
+        slug="cpu_int8", label="CPU", device="cpu",
+        compute_type="int8",
+    )
+    chosen = hw.first_supported_tier([fake_cuda, fake_cpu])
+    assert chosen.slug == "cuda_float16"
+
+
+# ---------- CUDA probe ---------------------------------------------------------
+
+
+def test_probe_cuda_returns_empty_when_no_device(monkeypatch):
+    fake_ct2 = types.ModuleType("ctranslate2")
+    fake_ct2.contains_cuda_device = lambda: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    assert hw._probe_cuda() == []
+
+
+def test_probe_cuda_returns_both_compute_types_when_supported(monkeypatch):
+    fake_ct2 = types.ModuleType("ctranslate2")
+    fake_ct2.contains_cuda_device = lambda: True  # type: ignore[attr-defined]
+    fake_ct2.get_supported_compute_types = lambda _d: {  # type: ignore[attr-defined]
+        "float16", "int8_float16",
+    }
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    monkeypatch.setattr(hw, "_gpu_name", lambda: "RTX 9999")
+    tiers = hw._probe_cuda()
+    slugs = [t.slug for t in tiers]
+    assert "cuda_float16" in slugs
+    assert "cuda_int8_float16" in slugs
+    # float16 must rank first (preferred compute type).
+    assert slugs[0] == "cuda_float16"
+
+
+def test_probe_cuda_handles_import_error_gracefully(monkeypatch):
+    """When ctranslate2 isn't importable the probe returns [], not raise."""
+    monkeypatch.setitem(sys.modules, "ctranslate2", None)
+    assert hw._probe_cuda() == []
+
+
+# ---------- persistence --------------------------------------------------------
+
+
+def test_save_and_load_hardware_choice_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="cuda_float16",
+        label="NVIDIA CUDA (float16) — RTX 3060",
+        device="cuda",
+        compute_type="float16",
+        detail="RTX 3060",
+    )
+    path = hw.save_hardware_choice(tier, benchmark_rtf=0.04)
+    assert path.exists()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["tier"] == "cuda_float16"
+    assert data["device"] == "cuda"
+    assert data["compute_type"] == "float16"
+    assert data["benchmark_rtf"] == 0.04
+    assert data["version"] == hw.HARDWARE_FILE_VERSION
+
+    loaded = hw.load_hardware_choice()
+    assert loaded is not None
+    assert loaded["tier"] == "cuda_float16"
+
+
+def test_load_hardware_choice_missing_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    assert hw.load_hardware_choice() is None
+
+
+def test_load_hardware_choice_corrupt_file_renamed(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    path = tmp_path / hw.HARDWARE_FILE_NAME
+    path.write_text("{not valid json", encoding="utf-8")
+    assert hw.load_hardware_choice() is None
+    assert not path.exists()
+    assert (tmp_path / (hw.HARDWARE_FILE_NAME + ".corrupt")).exists()
+
+
+# ---------- device_choice_from_hardware_file -----------------------------------
+
+
+def test_device_choice_returns_pair_for_cpu_tier(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="cpu_int8", label="CPU", device="cpu", compute_type="int8",
+    )
+    hw.save_hardware_choice(tier)
+    result = hw.device_choice_from_hardware_file()
+    assert result == ("cpu", "int8")
+
+
+def test_device_choice_rejects_non_bundled_backend(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="qnn_npu", label="QNN", device="cpu", compute_type="int8",
+        backend="qnn_npu",
+    )
+    hw.save_hardware_choice(tier)
+    # The detect_device path must not return a tier that needs a
+    # backend the bundled engine can't drive.
+    assert hw.device_choice_from_hardware_file() is None
+
+
+def test_device_choice_revalidates_cuda_at_load(tmp_path, monkeypatch):
+    """If the wizard saved CUDA but ctranslate2 no longer sees it
+    (e.g. the user unplugged a Thunderbolt eGPU), the loader must
+    return None so detect_device falls back to auto-probe instead
+    of crashing the worker."""
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="cuda_float16", label="CUDA",
+        device="cuda", compute_type="float16",
+    )
+    hw.save_hardware_choice(tier)
+    fake_ct2 = types.ModuleType("ctranslate2")
+    fake_ct2.contains_cuda_device = lambda: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    assert hw.device_choice_from_hardware_file() is None
+
+
+def test_device_choice_honours_cuda_when_still_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="cuda_float16", label="CUDA",
+        device="cuda", compute_type="float16",
+    )
+    hw.save_hardware_choice(tier)
+    fake_ct2 = types.ModuleType("ctranslate2")
+    fake_ct2.contains_cuda_device = lambda: True  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    assert hw.device_choice_from_hardware_file() == ("cuda", "float16")
+
+
+# ---------- detect_device integration ------------------------------------------
+
+
+def test_detect_device_honours_hardware_file_when_device_is_auto(monkeypatch, tmp_path):
+    """detect_device() with device='auto' must return the wizard's
+    choice before falling back to its own probe."""
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    tier = hw.Tier(
+        slug="cpu_int8", label="CPU", device="cpu", compute_type="int8",
+    )
+    hw.save_hardware_choice(tier)
+
+    if "core.transcriber" not in sys.modules:
+        fake_fw = types.ModuleType("faster_whisper")
+        fake_fw.WhisperModel = object  # type: ignore[attr-defined]
+        sys.modules.setdefault("faster_whisper", fake_fw)
+    import core.transcriber as t  # noqa: E402
+
+    monkeypatch.setattr(t, "config", {"device": "auto", "compute_type": "int8"})
+    # core.transcriber.detect_device does ``from . import hardware as _hw``
+    # at call time — patching the shared core.hardware.user_data_dir
+    # (which we already did above) is enough for it to read tmp_path.
+    device, ct = t.detect_device()
+    assert device == "cpu"
+    assert ct == "int8"
+
+
+# ---------- dialog smoke -------------------------------------------------------
+
+
+def test_hardware_wizard_constructs_without_crashing(monkeypatch, tmp_path):
+    tk = pytest.importorskip("tkinter")
+    monkeypatch.setattr(hw, "user_data_dir", lambda: tmp_path)
+    # Force a single CPU tier so we don't depend on the host's actual
+    # hardware in CI.
+    monkeypatch.setattr(hw, "_probe_cuda", lambda: [])
+    monkeypatch.setattr(hw, "_probe_qnn_npu", lambda: [])
+    monkeypatch.setattr(hw, "_probe_openvino", lambda: [])
+    monkeypatch.setattr(hw, "_probe_directml", lambda: [])
+
+    from app.widgets.hardware_wizard import HardwareWizard
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        wiz = HardwareWizard(root)
+        wiz.withdraw()
+        try:
+            children = wiz.tree.get_children()
+            assert len(children) == 1
+            assert wiz._selected_idx == 0
+            assert wiz._tiers[0].slug == "cpu_int8"
+        finally:
+            wiz._on_close()
+    finally:
+        root.destroy()
