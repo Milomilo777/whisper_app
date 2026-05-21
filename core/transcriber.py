@@ -621,7 +621,78 @@ def _run_post_pipeline(
         except Exception as e:  # noqa: BLE001
             log(f"Hallucination detector failed (continuing): {e}", log_cb)
 
+    # Auto-chapter detection (v0.8 Phase 3). Pure heuristic by
+    # default; if the LLM is enabled + loaded, chapter titles are
+    # LLM-generated. Chapters land in a sidecar JSON next to the
+    # other writer outputs (``<base>.chapters.json``) so existing
+    # writers (SRT / VTT / TXT / JSON) keep their shape and the
+    # viewer / external tools can read chapters independently.
+    task._chapters_for_writer = []  # type: ignore[attr-defined]
+    if config.get("auto_chapters_enabled", True) and not task.cancelled:
+        try:
+            from . import chapters as _chap
+            runner = _maybe_get_llm_runner()
+            chapter_list = _chap.build_chapters(
+                segments_data,
+                runner=runner,
+                min_chapter_seconds=float(config.get("chapter_min_seconds", 60.0)),
+                gap_seconds=float(config.get("chapter_gap_seconds", 2.5)),
+            )
+            if chapter_list:
+                task._chapters_for_writer = chapter_list  # type: ignore[attr-defined]
+                log(
+                    f"Detected {len(chapter_list)} chapter(s) in the transcript.",
+                    log_cb,
+                )
+        except Exception as e:  # noqa: BLE001
+            log(f"Auto-chapter detection failed (continuing): {e}", log_cb)
+
     return speaker_count
+
+
+def _maybe_get_llm_runner() -> Any | None:
+    """Return a loaded LLMRunner when the AI Layer is on, else None.
+
+    Wraps every failure mode (dep missing, model file missing, load
+    error) so a broken LLM never blocks transcription.
+    """
+    if not config.get("ai_enabled", False):
+        return None
+    try:
+        from . import llm as _llm
+        if not _llm.runtime_available():
+            return None
+        model_path = (config.get("ai_model_path") or "").strip()
+        if not model_path:
+            model_path = str(_llm.default_model_path())
+        if not _llm.is_model_present(Path(model_path)):
+            return None
+        runner = _llm.LLMRunner(_llm.LLMConfig(model_path=model_path))
+        runner.load()
+        return runner
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _write_chapter_sidecar(base: str, chapters: list[dict[str, Any]]) -> str | None:
+    """Write ``<base>.chapters.json`` atomically. Returns the path or None."""
+    if not chapters:
+        return None
+    import json as _json
+    path = base + ".chapters.json"
+    part = f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+    try:
+        with open(part, "w", encoding="utf-8", newline="\n") as f:
+            _json.dump(chapters, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(part, path)
+    except Exception:
+        try:
+            os.unlink(part)
+        except OSError:
+            pass
+        return None
+    return path
 
 
 def transcribe(
@@ -692,9 +763,25 @@ def transcribe(
             raise RuntimeError(MODEL_ERROR)
         time.sleep(0.5)
 
-    duration = get_duration(task.file_path)
+    # Optional Demucs vocal-separation pre-process (v0.8 Phase 2).
+    # Returns the input path unchanged when demucs isn't installed or
+    # the feature is off, so this is safe to always call.
+    audio_path = task.file_path
+    if config.get("demucs_enabled", False):
+        try:
+            from . import separator as _sep
+            audio_path = _sep.separate_vocals(
+                task.file_path,
+                enabled=True,
+                log=log_cb,
+            )
+        except Exception as e:  # noqa: BLE001
+            log(f"Demucs separation failed (using original audio): {e}", log_cb)
+            audio_path = task.file_path
+
+    duration = get_duration(audio_path)
     start = time.time()
-    log(f"Processing: {task.file_path}", log_cb)
+    log(f"Processing: {audio_path}", log_cb)
 
     assert MODEL is not None
     want_words = bool(config.get("word_timestamps", False))
@@ -720,7 +807,7 @@ def transcribe(
     if PIPELINE is not None:
         transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
 
-    segments, info = runner.transcribe(task.file_path, **transcribe_kwargs)
+    segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
 
     if language_cb and getattr(info, "language", None):
         try:
@@ -761,6 +848,10 @@ def transcribe(
         lang=detected_lang,
         speaker_count=speaker_count,
     )
+    chapters_attr = getattr(task, "_chapters_for_writer", None) or []
+    chapter_path = _write_chapter_sidecar(base, chapters_attr)
+    if chapter_path:
+        written.append(chapter_path)
     log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
         log_cb)
 
@@ -832,6 +923,10 @@ def _transcribe_via_alt_backend(
         lang=detected_lang,
         speaker_count=speaker_count,
     )
+    chapters_attr = getattr(task, "_chapters_for_writer", None) or []
+    chapter_path = _write_chapter_sidecar(base, chapters_attr)
+    if chapter_path:
+        written.append(chapter_path)
     log(
         f"Wrote {len(written)} output file(s): "
         f"{', '.join(os.path.basename(p) for p in written)}",

@@ -77,6 +77,27 @@ DEFAULT_CONFIG = {
     # When the user changes this, the Advanced dialog also rewrites
     # ``model`` + ``model_path`` so ensure_model downloads the new one.
     "whisper_model": "large-v3",
+    # v0.8 Phase 2 — Demucs vocal-separation pre-process (off by default;
+    # heavy dep, large model). When True + demucs installed, transcribe
+    # pipeline runs the input through Demucs first and feeds Whisper the
+    # vocals stem.
+    "demucs_enabled": False,
+    # v0.8 Phase 2 — AI Layer. ``ai_enabled`` is the global on/off; the
+    # actual model file lives at ``ai_model_path`` (empty = use the
+    # default cache path under ``user_cache_dir()/llm/``).
+    "ai_enabled": False,
+    "ai_model_path": "",
+    # v0.8 Phase 3 — auto-chapter markers in the JSON sidecar. Pure
+    # heuristic by default; if ai_enabled + LLM loaded, chapter titles
+    # are LLM-generated.
+    "auto_chapters_enabled": True,
+    "chapter_min_seconds": 60.0,
+    "chapter_gap_seconds": 2.5,
+    # v0.8 Phase 3 — cross-file voice fingerprint matching. When True
+    # AND pyannote is installed AND voices.db has enrolled speakers,
+    # the diariser's per-file SPEAKER_NN labels are renamed to the
+    # matching enrolled names.
+    "voiceprint_enabled": True,
 }
 
 

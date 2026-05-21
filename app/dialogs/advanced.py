@@ -73,6 +73,19 @@ class AdvancedDialog(tk.Toplevel):
         self._hallucination_detect = tk.BooleanVar(
             value=bool(cfg.get("hallucination_detect_enabled", True))
         )
+        # v0.8 Phase 2 + 3 toggles
+        self._demucs_enabled = tk.BooleanVar(
+            value=bool(cfg.get("demucs_enabled", False))
+        )
+        self._ai_enabled = tk.BooleanVar(
+            value=bool(cfg.get("ai_enabled", False))
+        )
+        self._auto_chapters_enabled = tk.BooleanVar(
+            value=bool(cfg.get("auto_chapters_enabled", True))
+        )
+        self._voiceprint_enabled = tk.BooleanVar(
+            value=bool(cfg.get("voiceprint_enabled", True))
+        )
         self._alignment = tk.StringVar(
             value=str(cfg.get("alignment") or "none")
         )
@@ -153,7 +166,7 @@ class AdvancedDialog(tk.Toplevel):
             extras,
             textvariable=self._transcribe_backend,
             state="readonly",
-            values=("faster_whisper", "whisper_cpp"),
+            values=("faster_whisper", "whisper_cpp", "parakeet"),
             width=20,
         )
         backend_combo.grid(row=4, column=1, sticky="w", padx=8, pady=4)
@@ -204,6 +217,34 @@ class AdvancedDialog(tk.Toplevel):
             foreground="#666",
         ).grid(row=9, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         extras.columnconfigure(1, weight=1)
+
+        # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
+        ai = ttk.LabelFrame(body, text="AI Layer (Phase 2 + 3)")
+        ai.pack(fill="x", pady=(0, 8))
+        ttk.Checkbutton(
+            ai, text="Enable local LLM (download Qwen2.5-1.5B ~1 GB on first use)",
+            variable=self._ai_enabled,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ttk.Button(
+            ai, text="Install AI model…",
+            command=self._install_ai_model,
+        ).grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            ai, text="Powers summary / Q&A / chapter titles when enabled.",
+            foreground="#666",
+        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(
+            ai, text="Pre-process noisy audio with Demucs vocals separation",
+            variable=self._demucs_enabled,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(
+            ai, text="Generate auto-chapter markers (writes <name>.chapters.json)",
+            variable=self._auto_chapters_enabled,
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(
+            ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
+            variable=self._voiceprint_enabled,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=4)
 
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
@@ -284,6 +325,10 @@ class AdvancedDialog(tk.Toplevel):
         cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
+        cfg["demucs_enabled"] = bool(self._demucs_enabled.get())
+        cfg["ai_enabled"] = bool(self._ai_enabled.get())
+        cfg["auto_chapters_enabled"] = bool(self._auto_chapters_enabled.get())
+        cfg["voiceprint_enabled"] = bool(self._voiceprint_enabled.get())
         # Model picker — convert the displayed label back to the
         # registry slug and rewrite cfg["model"] + cfg["model_path"]
         # when the user picked something different. Setting
@@ -357,6 +402,33 @@ class AdvancedDialog(tk.Toplevel):
             HardwareWizard(self, app=self.app)
         except Exception as e:  # noqa: BLE001
             self.app.log(f"Hardware wizard failed to launch: {e}")
+
+    def _install_ai_model(self) -> None:
+        """Download the local LLM model in a background thread.
+
+        ~1 GB Qwen2.5-1.5B-Instruct Q4_K_M; the wizard logs progress
+        to ``self.app.log`` so the user can leave the dialog open
+        while it runs.
+        """
+        import threading
+        try:
+            from core import llm as _llm
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"LLM module unavailable: {e}")
+            return
+        if not _llm.runtime_available():
+            self.app.log(_llm.runtime_availability_reason())
+            return
+
+        def _worker() -> None:
+            try:
+                self.app.log("Downloading Qwen2.5-1.5B LLM model (~1 GB)…")
+                path = _llm.download_default_model(log=self.app.log)
+                self.app.log(f"LLM model ready at {path}")
+            except Exception as e:  # noqa: BLE001
+                self.app.log(f"LLM model download failed: {e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _download_whisper_cpp_model(self) -> None:
         """Kick off the whisper.cpp model download in a daemon thread.

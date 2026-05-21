@@ -112,6 +112,13 @@ a = Analysis(
         'core.backends.base',
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
+        'core.backends.parakeet',
+        'core.chapters',
+        'core.llm',
+        'core.recorder',
+        'core.search',
+        'core.separator',
+        'core.voiceprint',
         # Opt-in backends — explicit submodule names so a user
         # who flips the config gets a working backend rather than
         # a silent ImportError. The collect_all calls above pick

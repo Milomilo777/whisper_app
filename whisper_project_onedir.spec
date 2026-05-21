@@ -105,6 +105,13 @@ a = Analysis(
         'core.backends.base',
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
+        'core.backends.parakeet',
+        'core.chapters',
+        'core.llm',
+        'core.recorder',
+        'core.search',
+        'core.separator',
+        'core.voiceprint',
         # Opt-in backends (see onefile spec comment).
         'pywhispercpp',
         'pywhispercpp.model',
