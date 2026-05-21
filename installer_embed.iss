@@ -62,3 +62,82 @@ Type: filesandordirs; Name: "{app}\Lib"
 Type: files; Name: "{app}\gui.py"
 Type: files; Name: "{app}\sitecustomize.py"
 Type: dirifempty; Name: "{app}"
+
+[Code]
+{ -------------------------------------------------------------------- }
+{  Hub-folder uninstall prompt — identical logic to installer.iss.     }
+{  See that file for full commentary; this script keeps a copy so the  }
+{  two installers stay self-contained (Inno Setup has no [Include]).   }
+{ -------------------------------------------------------------------- }
+
+function ExtractHubFolder(): string;
+var
+  ConfigPath: string;
+  Lines: TArrayOfString;
+  i, ColonPos, StartQ, EndQ: Integer;
+  Line, Value: string;
+begin
+  Result := '';
+  { platformdirs.user_config_dir on Windows resolves to %LOCALAPPDATA% }
+  { with appauthor=False; see installer.iss for the full rationale.    }
+  ConfigPath := ExpandConstant('{localappdata}\WhisperProject\config.json');
+  if not FileExists(ConfigPath) then
+    Exit;
+  if not LoadStringsFromFile(ConfigPath, Lines) then
+    Exit;
+  for i := 0 to GetArrayLength(Lines) - 1 do begin
+    Line := Trim(Lines[i]);
+    if Pos('"hub_folder"', Line) <> 1 then
+      Continue;
+    ColonPos := Pos(':', Line);
+    if ColonPos = 0 then
+      Continue;
+    Value := Trim(Copy(Line, ColonPos + 1, Length(Line) - ColonPos));
+    StartQ := Pos('"', Value);
+    if StartQ = 0 then
+      Continue;
+    EndQ := Pos('"', Copy(Value, StartQ + 1, Length(Value) - StartQ));
+    if EndQ = 0 then
+      Continue;
+    Value := Copy(Value, StartQ + 1, EndQ - 1);
+    StringChangeEx(Value, '\\', '\', True);
+    Result := Value;
+    Exit;
+  end;
+end;
+
+function IsPathInside(Child, Parent: string): Boolean;
+var
+  C, P: string;
+begin
+  Result := False;
+  if (Child = '') or (Parent = '') then
+    Exit;
+  C := LowerCase(AddBackslash(Child));
+  P := LowerCase(AddBackslash(Parent));
+  Result := Pos(P, C) = 1;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  HubFolder, AppFolder, Msg: string;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    Exit;
+  HubFolder := ExtractHubFolder();
+  if (HubFolder = '') or (not DirExists(HubFolder)) then
+    Exit;
+  AppFolder := ExpandConstant('{app}');
+  if IsPathInside(HubFolder, AppFolder) then
+    Exit;
+  Msg := 'The Whisper model hub folder is located outside the install directory:' + #13#10 + #13#10 +
+         HubFolder + #13#10 + #13#10 +
+         'It may contain several gigabytes of downloaded Whisper models.' + #13#10 +
+         'Do you want to delete this folder as part of the uninstall?';
+  if MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES then begin
+    if not DelTree(HubFolder, True, True, True) then
+      MsgBox('Could not fully delete ' + HubFolder + '.' + #13#10 +
+             'You can remove it manually with File Explorer.',
+             mbInformation, MB_OK);
+  end;
+end;

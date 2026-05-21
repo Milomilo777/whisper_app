@@ -55,3 +55,100 @@ Filename: "{app}\WhisperProject.exe"; Description: "Launch Whisper Project"; Fla
 ; them on uninstall. dirifempty cleans up if nothing else remains.
 Type: filesandordirs; Name: "{app}\__pycache__"
 Type: dirifempty; Name: "{app}"
+
+[Code]
+{ -------------------------------------------------------------------- }
+{  Hub-folder uninstall prompt                                          }
+{                                                                       }
+{  v0.9 — the user can pick where Whisper model files live (the "hub"   }
+{  folder). When the folder is INSIDE {app} it goes away with the rest  }
+{  of the install; when it's OUTSIDE (e.g. an external drive the user   }
+{  chose during first-launch) the installer asks whether to delete it   }
+{  too. The decision is the user's; we never touch it without a Yes.    }
+{                                                                       }
+{  The hub_folder value lives in                                        }
+{    %APPDATA%\WhisperProject\config.json                               }
+{  which we parse with a tiny regex-free string search to avoid pulling }
+{  a JSON library into the Pascal Script side.                          }
+{ -------------------------------------------------------------------- }
+
+function ExtractHubFolder(): string;
+var
+  ConfigPath: string;
+  Lines: TArrayOfString;
+  i, ColonPos, StartQ, EndQ: Integer;
+  Line, Key, Value: string;
+begin
+  Result := '';
+  { config.json lives next to the rest of the user data; APPDATA is the }
+  { roaming dir on Windows which platformdirs maps onto.                }
+  { platformdirs.user_config_dir("WhisperProject", appauthor=False) on   }
+  { Windows resolves to %LOCALAPPDATA%, NOT %APPDATA%. Inno's            }
+  { {localappdata} expands to the same path so config.json lives at      }
+  { {localappdata}\WhisperProject\config.json — verified empirically     }
+  { with the project's core.config.user_config_dir() at install time.    }
+  ConfigPath := ExpandConstant('{localappdata}\WhisperProject\config.json');
+  if not FileExists(ConfigPath) then
+    Exit;
+  if not LoadStringsFromFile(ConfigPath, Lines) then
+    Exit;
+  for i := 0 to GetArrayLength(Lines) - 1 do begin
+    Line := Trim(Lines[i]);
+    if Pos('"hub_folder"', Line) <> 1 then
+      Continue;
+    { Layout: "hub_folder": "C:\\path\\to\\hub", ... }
+    ColonPos := Pos(':', Line);
+    if ColonPos = 0 then
+      Continue;
+    Value := Trim(Copy(Line, ColonPos + 1, Length(Line) - ColonPos));
+    StartQ := Pos('"', Value);
+    if StartQ = 0 then
+      Continue;
+    EndQ := Pos('"', Copy(Value, StartQ + 1, Length(Value) - StartQ));
+    if EndQ = 0 then
+      Continue;
+    Value := Copy(Value, StartQ + 1, EndQ - 1);
+    { Replace JSON-escaped backslashes with real ones. }
+    StringChangeEx(Value, '\\', '\', True);
+    Result := Value;
+    Exit;
+  end;
+end;
+
+function IsPathInside(Child, Parent: string): Boolean;
+var
+  C, P: string;
+begin
+  Result := False;
+  if (Child = '') or (Parent = '') then
+    Exit;
+  C := LowerCase(AddBackslash(Child));
+  P := LowerCase(AddBackslash(Parent));
+  Result := Pos(P, C) = 1;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  HubFolder, AppFolder, Msg: string;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    Exit;
+  HubFolder := ExtractHubFolder();
+  if (HubFolder = '') or (not DirExists(HubFolder)) then
+    Exit;
+  AppFolder := ExpandConstant('{app}');
+  { When the hub sat under {app}, Inno already swept it via the }
+  { onedir uninstall + UninstallDelete entries; nothing to do.  }
+  if IsPathInside(HubFolder, AppFolder) then
+    Exit;
+  Msg := 'The Whisper model hub folder is located outside the install directory:' + #13#10 + #13#10 +
+         HubFolder + #13#10 + #13#10 +
+         'It may contain several gigabytes of downloaded Whisper models.' + #13#10 +
+         'Do you want to delete this folder as part of the uninstall?';
+  if MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES then begin
+    if not DelTree(HubFolder, True, True, True) then
+      MsgBox('Could not fully delete ' + HubFolder + '.' + #13#10 +
+             'You can remove it manually with File Explorer.',
+             mbInformation, MB_OK);
+  end;
+end;
