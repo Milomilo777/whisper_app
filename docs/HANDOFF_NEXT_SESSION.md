@@ -1,5 +1,10 @@
 # Handoff for the next hands-off session
 
+> ⚠️ **Stale as of 2026-05-21.** For the most recent state of the
+> project + the next-up Phase-1-of-v0.8 plan, see
+> **[`SESSION_HANDOFF_NEXT.md`](SESSION_HANDOFF_NEXT.md)** first.
+> This file is the older v0.7.0/v0.7.1 history retained for context.
+
 Branch is `release/v0.7.0-installer-3-options`. Built artifacts on
 the v0.7.0 GitHub release are in sync with the branch HEAD.
 
