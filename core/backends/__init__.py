@@ -32,6 +32,9 @@ def get_backend(name: str) -> Backend:
     if name == "whisper_cpp":
         from .whisper_cpp import WhisperCppBackend
         return WhisperCppBackend()
+    if name == "parakeet":
+        from .parakeet import ParakeetBackend
+        return ParakeetBackend()
     from .faster_whisper_be import FasterWhisperBackend
     return FasterWhisperBackend()
 
