@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a feature for the desktop app, the SMTV integration, or the build pipeline.
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening, please skim
+        [docs/ROADMAP.md](../blob/master/docs/ROADMAP.md) and
+        [docs/GAPS_AGAINST_PEERS_2026.md](../blob/master/docs/GAPS_AGAINST_PEERS_2026.md)
+        — many obvious features are already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the user-facing pain. Skip the proposed solution for a moment.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed feature
+      description: What should the app do? UI sketch is welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

@@ -1,0 +1,11 @@
+1
+00:00:00,000 --> 00:00:02,500
+Bonjour et bienvenue.
+
+2
+00:00:02,500 --> 00:00:06,000
+Aujourd'hui nous parlons de transcription.
+
+3
+00:00:06,000 --> 00:00:09,000
+Mixed accents/English: voilà — café — naïve

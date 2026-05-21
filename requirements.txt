@@ -1,0 +1,57 @@
+# Runtime dependencies for the Whisper Project.
+# Tested on Python 3.11+.
+#
+# Optional / per-feature deps live under [project.optional-dependencies]
+# in pyproject.toml so installs can pick what they need. Anything not
+# strictly required to launch the app belongs there, not here.
+#
+# History notes that used to live in this file have been moved to
+# docs/CHANGELOG.md to keep this manifest scannable.
+
+# Core transcription
+faster-whisper>=1.0.3
+
+# HTTP for model + asset downloads
+requests>=2.31.0
+
+# UI
+sv-ttk>=2.6.0
+tkinterdnd2>=0.4.0
+python-vlc>=3.0
+
+# OS-correct config / cache / log paths
+platformdirs>=4.0.0
+
+# Output writers
+python-docx>=1.0
+reportlab>=4.0
+
+# Speaker diarisation (sherpa-onnx + pyannote-3.0 ONNX). No HF
+# token required. Lazy-imported — absence disables the feature
+# without crashing the app.
+sherpa-onnx>=1.10
+
+# Folder watcher (auto-transcribe on new file)
+watchdog>=3.0
+
+# System tray (minimise-to-tray)
+pystray>=0.19
+Pillow>=10.0
+
+# Alt backend: pywhispercpp (quantised ggml). Optional but pinned
+# here so `pip install -r requirements.txt` gets the same shape
+# the installers ship with.
+pywhispercpp>=1.4
+
+# Word-level alignment refinement via stable-ts (loads its own
+# ~75 MB Whisper checkpoint on first use).
+stable-ts>=2.17
+
+# --- Notes -----------------------------------------------------------
+# * tkinter ships with the Windows Python installer. On Linux install
+#   python3-tk via the package manager. On macOS use the python.org build.
+# * GPU support: faster-whisper picks up a system CUDA install
+#   automatically. For a self-contained CUDA wheel pair, install:
+#       pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# * darkdetect is optional; sv-ttk falls back to dark when missing.
+# * For dev / test deps see pyproject.toml [project.optional-dependencies.dev].

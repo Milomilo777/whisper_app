@@ -1,0 +1,55 @@
+name: Bug report
+description: A reproducible defect in the desktop app or one of the installers.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include the asset you used
+        (Portable / Setup-Compact / Setup-Standard), the OS version,
+        and the log file from `%LOCALAPPDATA%\WhisperProject\Logs\app.log`
+        if the bug is a crash or a transcription error.
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: Which install method?
+      options:
+        - Portable (single .exe)
+        - Setup-Compact (Inno Setup installer, onedir)
+        - Setup-Standard (Inno Setup installer, embeddable Python)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: v0.7.0
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 23H2 (x64)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Steps to reproduce. What you expected vs. what you got.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant log
+      description: Paste the tail of `app.log` if the bug is a crash or transcription failure. Code blocks please.
+      render: shell

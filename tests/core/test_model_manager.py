@@ -1,0 +1,172 @@
+"""Tests for core.model_manager — pure helpers + ensure_model with mocked HTTP.
+
+Uses ``responses`` to fake the model zip + md5 manifest endpoints. Builds a
+trivial in-memory zip whose contents match the manifest, so the full
+download → extract → verify happy path runs without touching the network.
+"""
+from __future__ import annotations
+
+import hashlib
+import io
+import threading
+import zipfile
+from pathlib import Path
+
+import pytest
+import responses
+
+from core import model_manager as mm
+
+
+def test_md5_file_matches_hashlib(tmp_path):
+    payload = b"the quick brown fox jumps over the lazy dog"
+    file = tmp_path / "sample.bin"
+    file.write_bytes(payload)
+    assert mm.md5_file(file) == hashlib.md5(payload).hexdigest()
+
+
+def test_md5_file_respects_cancel(tmp_path):
+    file = tmp_path / "big.bin"
+    file.write_bytes(b"x" * (4 * 1024 * 1024))
+    cancel = threading.Event()
+    cancel.set()
+    with pytest.raises(mm.DownloadCancelled):
+        mm.md5_file(file, cancel)
+
+
+def test_zip_name_from_url():
+    assert mm._zip_name_from_url("https://example.com/path/model.zip") == "model.zip"
+    assert mm._zip_name_from_url("https://example.com/with%20space.zip") == "with space.zip"
+    assert mm._zip_name_from_url("https://example.com/") == "model.zip"
+
+
+def test_parse_md5_manifest_handles_variants():
+    text = "abc123 *file1.bin\ndef456  ./sub/file2.bin\n  \nXYZ789 sub\\file3.bin\n"
+    parsed = mm._parse_md5_manifest(text)
+    assert ("abc123", "file1.bin") in parsed
+    assert ("def456", "sub/file2.bin") in parsed
+    assert ("xyz789", "sub/file3.bin") in parsed
+
+
+def test_fmt_bytes_units():
+    assert mm._fmt_bytes(0) == "0 B"
+    assert mm._fmt_bytes(2048).endswith("KB")
+    assert mm._fmt_bytes(5 * 1024 * 1024).endswith("MB")
+
+
+def test_fmt_time_handles_none_and_negative():
+    assert mm._fmt_time(None) == "--:--"
+    assert mm._fmt_time(-5) == "00:00"
+    assert mm._fmt_time(3661) == "01:01:01"
+    assert mm._fmt_time(125) == "02:05"
+
+
+def _build_model_zip(extract_dir_name: str, files: dict[str, bytes]) -> bytes:
+    """Make a zip whose top-level dir is extract_dir_name, containing files."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, data in files.items():
+            z.writestr(f"{extract_dir_name}/{rel}", data)
+    return buf.getvalue()
+
+
+@responses.activate
+def test_ensure_model_full_download_and_verify(tmp_path):
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+    file_a = b"file-a-bytes"
+    file_b = b"file-b-bytes-longer"
+    files = {"a.bin": file_a, "sub/b.bin": file_b}
+
+    zip_bytes = _build_model_zip(model_dir_name, files)
+    md5_text = "\n".join(
+        [
+            f"{hashlib.md5(file_a).hexdigest()} {model_dir_name}/a.bin",
+            f"{hashlib.md5(file_b).hexdigest()} {model_dir_name}/sub/b.bin",
+        ]
+    )
+
+    zip_url = "https://fake.test/model.zip"
+    md5_url = "https://fake.test/model.md5"
+
+    responses.add(responses.GET, zip_url, body=zip_bytes, status=200,
+                  headers={"content-length": str(len(zip_bytes))})
+    responses.add(responses.GET, md5_url, body=md5_text, status=200)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(cache_dir / model_dir_name),
+    }
+
+    statuses: list[str] = []
+    progress_payloads: list[dict] = []
+    result = mm.ensure_model(
+        config,
+        status_cb=statuses.append,
+        progress_cb=progress_payloads.append,
+    )
+    assert Path(result) == cache_dir / model_dir_name
+    assert (cache_dir / model_dir_name / "a.bin").read_bytes() == file_a
+    assert (cache_dir / model_dir_name / "sub" / "b.bin").read_bytes() == file_b
+    assert any(p.get("phase") == "ready" for p in progress_payloads)
+    assert any("Model ready" in s for s in statuses)
+
+
+@responses.activate
+def test_ensure_model_already_installed_no_redownload(tmp_path):
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+    file_a = b"already-here"
+
+    cache_dir = tmp_path / "cache"
+    model_dir = cache_dir / model_dir_name
+    model_dir.mkdir(parents=True)
+    (model_dir / "a.bin").write_bytes(file_a)
+
+    md5_text = f"{hashlib.md5(file_a).hexdigest()} {model_dir_name}/a.bin"
+    zip_url = "https://fake.test/model.zip"
+    md5_url = "https://fake.test/model.md5"
+    responses.add(responses.GET, md5_url, body=md5_text, status=200)
+    # Note: zip_url not registered - if ensure_model tries to download we'd see ConnectionError
+
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(model_dir),
+    }
+    progress_payloads: list[dict] = []
+    result = mm.ensure_model(config, progress_cb=progress_payloads.append)
+    assert Path(result) == model_dir
+    assert any(p.get("phase") == "installed" for p in progress_payloads)
+
+
+@responses.activate
+def test_ensure_model_cancels_on_event(tmp_path):
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    cancel = threading.Event()
+    cancel.set()
+
+    config = {
+        "model": {"name": model_name, "url": "https://fake.test/m.zip", "md5": "https://fake.test/m.md5"},
+        "model_path": str(cache_dir / model_dir_name),
+    }
+    with pytest.raises(mm.DownloadCancelled):
+        mm.ensure_model(config, cancel_event=cancel)
+
+
+def test_unsafe_md5_path_raises(tmp_path):
+    """Path traversal attempts in the manifest are rejected."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    md5_url = "https://fake.test/m.md5"
+    with responses.RequestsMock() as rsps:
+        rsps.add(responses.GET, md5_url,
+                 body=f"{hashlib.md5(b'x').hexdigest()} ../escape.bin\n",
+                 status=200)
+        with pytest.raises(RuntimeError, match="Unsafe MD5 manifest path"):
+            mm._verify_extracted_files(cache_dir, md5_url)

@@ -1,0 +1,5 @@
+[
+  {"start": 0.0, "end": 2.5, "text": "First segment from whisper."},
+  {"start": 2.5, "end": 5.75, "text": "Second segment, slightly longer."},
+  {"start": 5.75, "end": 9.0, "text": "Third and final segment."}
+]
