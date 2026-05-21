@@ -13,14 +13,30 @@ Three options, pick one:
 
 | Method | Asset | Size | Best for |
 |---|---|---|---|
-| Portable | `WhisperProject-v0.7.0-Portable.exe` | 190.8 MB | یک فایل، بدون نصب، USB |
-| Compact | `WhisperProject-v0.7.0-Setup-Compact.exe` | 137.2 MB | کاربر معمولی، start-up سریع، Start Menu shortcut |
-| Standard | `WhisperProject-v0.7.0-Setup-Standard.exe` | 153.6 MB | بیشترین شفافیت، فایل‌ها روی disk قابل بازرسی |
+| Portable | [`WhisperProject-v0.7.1-Portable.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Portable.exe) | 447 MB | یک فایل، بدون نصب، USB |
+| Compact | [`WhisperProject-v0.7.1-Setup-Compact.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Compact.exe) | 326 MB | کاربر معمولی، start-up سریع، Start Menu shortcut |
+| Standard | [`WhisperProject-v0.7.1-Setup-Standard.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Standard.exe) | 349 MB | بیشترین شفافیت، فایل‌ها روی disk قابل بازرسی |
 
-دانلود:
+دانلود (همه assetها در یک صفحه):
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
 
 راهنمای نصب گام‌به‌گام: [docs/INSTALL.md](docs/INSTALL.md).
+
+## Configuration + model path
+
+User settings live in a single JSON file at:
+
+```
+%LOCALAPPDATA%\WhisperProject\config.json
+```
+
+The key that controls where the Whisper model is stored on disk is
+`model_path`. By default it points at the platform cache
+(`%LOCALAPPDATA%\WhisperProject\Cache\models\models--Systran--faster-whisper-large-v3`).
+To use an existing model from elsewhere (a network share, a portable
+drive, a custom location) edit `model_path` directly and restart the
+app. If the configured path is missing or its drive isn't mounted,
+the app silently falls back to the cache.
 
 ## Usage
 

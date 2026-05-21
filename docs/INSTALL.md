@@ -15,22 +15,22 @@ This guide is for someone who doesn't know Python or programming and just wants 
 
 ## Install — pick one of three methods
 
-v0.7.0 ships three independent installers. Pick the one that fits.
+v0.7.1 ships three independent installers. Pick the one that fits.
 
 | Method | File | Size | What it is |
 |---|---|---|---|
-| **Portable** | `WhisperProject-v0.7.0-Portable.exe` | 190 MB | A single file. Double-click and it runs. Nothing is installed; no shortcut, no Start Menu entry. Best for USB sticks or one-off use. |
-| **Compact** | `WhisperProject-v0.7.0-Setup-Compact.exe` | 137 MB | An installer that unpacks the app to Program Files, adds a Start Menu shortcut and an Add/Remove Programs entry, and runs noticeably faster on startup. Best for everyday Windows users. |
-| **Standard** | `WhisperProject-v0.7.0-Setup-Standard.exe` | 153 MB | Same shape as Compact but ships a full Python interpreter on disk so the entire source tree is browsable after install. Best for users who want transparency for debugging. |
+| **Portable** | [`WhisperProject-v0.7.1-Portable.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Portable.exe) | 447 MB | A single file. Double-click and it runs. Nothing is installed; no shortcut, no Start Menu entry. Best for USB sticks or one-off use. |
+| **Compact** | [`WhisperProject-v0.7.1-Setup-Compact.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Compact.exe) | 326 MB | An installer that unpacks the app to Program Files, adds a Start Menu shortcut and an Add/Remove Programs entry, and runs noticeably faster on startup. Best for everyday Windows users. |
+| **Standard** | [`WhisperProject-v0.7.1-Setup-Standard.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Standard.exe) | 349 MB | Same shape as Compact but ships a full Python interpreter on disk so the entire source tree is browsable after install. Best for users who want transparency for debugging. |
 
 All three transcribe a real video end-to-end on a clean Windows 10/11 x64 machine.
 
-🔗 Download:
+🔗 Releases page (all three assets):
 **https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest**
 
 ### If you picked Portable
 
-Move `WhisperProject-v0.7.0-Portable.exe` anywhere convenient
+Move `WhisperProject-v0.7.1-Portable.exe` anywhere convenient
 (`C:\Apps\`, your Desktop, a USB stick). Double-click to launch.
 The first launch unpacks to a temporary folder under `%TEMP%`
 (takes about 5–10 seconds). Subsequent launches feel about the
@@ -137,6 +137,35 @@ This needs **Python**, installable from https://python.org (tick "Add to PATH" d
 - The default model is `large-v3` (large). On CPU with int8 it takes about 2–3× the audio length.
 - If you have an NVIDIA GPU with CUDA: Advanced → device → cuda; compute_type → float16. Speedup is 10×–20×.
 - Or use a smaller model (edit `config.json` at `%LOCALAPPDATA%\WhisperProject\config.json` by hand).
+
+### Use an existing Whisper model from elsewhere
+
+If you've already downloaded the model on another machine or want to
+keep it on a network share / portable drive, edit the **`model_path`**
+key in:
+
+```
+%LOCALAPPDATA%\WhisperProject\config.json
+```
+
+Set it to the absolute path of the
+`models--Systran--faster-whisper-large-v3` folder (the folder that
+contains `model.bin`, `config.json`, `tokenizer.json`, …). Restart the
+app. If the path is missing or its drive isn't mounted at launch, the
+app silently falls back to the cache and re-downloads on demand.
+
+### Where the configuration file lives
+
+All app settings — model path, output formats, hotwords, theme,
+diarization toggle, watched folder, telemetry opt-in — are stored in:
+
+```
+%LOCALAPPDATA%\WhisperProject\config.json
+```
+
+You can edit it by hand while the app is closed. If the file gets
+corrupted (non-UTF8 bytes, malformed JSON), the app moves it aside as
+`config.json.corrupt` on next launch and starts with defaults.
 
 ### The app crashes
 
