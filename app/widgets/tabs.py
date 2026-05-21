@@ -51,15 +51,30 @@ def status_label(status: str) -> str:
 
 
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
+    # File-picker row: label + entry + Browse + primary CTA all on one
+    # line. The Transcribe button is the main action of this tab —
+    # the previous layout put it on a second row, left-aligned with
+    # default styling so it disappeared into the form. Now it sits
+    # next to Browse in the natural reading order (pick file → press
+    # the obvious blue button) with the sv_ttk Accent style for
+    # visual weight.
     ttk.Label(parent, text="File").grid(row=0, column=0, padx=10, pady=10, sticky="w")
     app.fv = tk.StringVar()
-    ttk.Entry(parent, textvariable=app.fv, width=60).grid(
+    ttk.Entry(parent, textvariable=app.fv, width=50).grid(
         row=0, column=1, padx=(0, 6), pady=10, sticky="ew"
     )
-    ttk.Button(parent, text="Browse", command=app.browse).grid(row=0, column=2, padx=(0, 10), pady=10)
-    ttk.Button(parent, text="Transcribe", command=app.add).grid(
-        row=1, column=1, padx=(0, 6), pady=(0, 10), sticky="w"
+    ttk.Button(parent, text="Browse", command=app.browse).grid(
+        row=0, column=2, padx=(0, 6), pady=10
     )
+    transcribe_btn = ttk.Button(
+        parent,
+        text="▶  Transcribe",
+        command=app.add,
+        style="Accent.TButton",
+    )
+    # ipadx widens the button without forcing a fixed pixel width, so
+    # the Accent style's padding still flows naturally with the theme.
+    transcribe_btn.grid(row=0, column=3, padx=(0, 10), pady=10, ipadx=10)
 
     # Phase 2a — VAD + word timestamps controls.
     options = ttk.Frame(parent)
