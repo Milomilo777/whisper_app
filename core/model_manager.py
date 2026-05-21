@@ -15,6 +15,63 @@ import requests
 class DownloadCancelled(RuntimeError):
     pass
 
+
+# ---------------------------------------------------------------- model picker
+#
+# v0.8 — pick one of several pre-bundled faster-whisper variants from
+# the Advanced dialog. Each entry resolves to the ``model`` sub-dict
+# (name + url + md5) the rest of this module already consumes.
+#
+# Mirror URLs follow the existing smch.ir convention so adding a new
+# entry is a one-line change. ``approx_size_gb`` is shown in the
+# Advanced dropdown so the user knows the install cost up front.
+
+MODEL_REGISTRY: dict[str, dict[str, Any]] = {
+    "large-v3": {
+        "label": "Large v3 — best accuracy (default, ~3 GB)",
+        "name": "faster-whisper-large-v3",
+        "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5",
+        "approx_size_gb": 3.0,
+    },
+    "large-v3-turbo": {
+        "label": "Large v3 Turbo — ~5× faster, similar accuracy (~1.6 GB)",
+        "name": "faster-whisper-large-v3-turbo",
+        "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip.md5",
+        "approx_size_gb": 1.6,
+    },
+    "distil-large-v3.5": {
+        "label": "Distil Large v3.5 — fastest English-only (~1.5 GB)",
+        "name": "faster-distil-whisper-large-v3.5",
+        "url": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip.md5",
+        "approx_size_gb": 1.5,
+    },
+}
+
+
+DEFAULT_MODEL_SLUG = "large-v3"
+
+
+def list_models() -> list[tuple[str, str]]:
+    """Return ``[(slug, label), ...]`` for the UI dropdown."""
+    return [(slug, entry["label"]) for slug, entry in MODEL_REGISTRY.items()]
+
+
+def resolve_model_entry(slug: str) -> dict[str, Any] | None:
+    """Return ``{name, url, md5}`` for a registry slug, or ``None`` when unknown.
+
+    The returned dict shape matches ``DEFAULT_CONFIG["model"]`` so the
+    caller can assign it directly to ``config["model"]`` and the rest
+    of the codebase (``ensure_model``, the cache-dir fallback) keeps
+    working without changes.
+    """
+    entry = MODEL_REGISTRY.get(slug)
+    if entry is None:
+        return None
+    return {"name": entry["name"], "url": entry["url"], "md5": entry["md5"]}
+
 def md5_file(path: str | Path, cancel_event: threading.Event | None = None) -> str:
     h=hashlib.md5()
     with open(path,'rb') as f:

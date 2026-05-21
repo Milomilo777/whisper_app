@@ -250,6 +250,10 @@ class TranscriptViewer(tk.Toplevel):
         self.tree.tag_configure("conf_med", foreground="#9c6f00")      # amber
         self.tree.tag_configure("conf_low", foreground="#a00000")      # red
         self.tree.tag_configure("active", background="#fffacd")        # karaoke
+        # v0.8 — segments the hallucination detector flagged as suspect.
+        # Light-red background so the row stands out at a glance; the
+        # confidence foreground colour layers on top normally.
+        self.tree.tag_configure("suspect", background="#ffe0e0")
         vsb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -347,14 +351,20 @@ class TranscriptViewer(tk.Toplevel):
                     conf_tags = ("conf_med",)
                 else:
                     conf_tags = ("conf_low",)
+            # v0.8 — light-red row background when the hallucination
+            # detector flagged this segment. Layer underneath karaoke
+            # 'active' so playback highlight still wins on the active
+            # row.
+            base_tags: tuple[str, ...] = conf_tags
+            if seg.get("suspect"):
+                base_tags = ("suspect",) + conf_tags
             # Re-layer the karaoke 'active' tag on top of the
-            # confidence colour when this row is the currently-
-            # playing segment, so edits (find/replace, fillers,
-            # rename) don't visually drop the highlight.
+            # confidence + suspect colours when this row is the
+            # currently-playing segment.
             if active_idx is not None and idx == active_idx:
-                tags = ("active",) + conf_tags
+                tags = ("active",) + base_tags
             else:
-                tags = conf_tags
+                tags = base_tags
             self.tree.insert(
                 "",
                 "end",
@@ -665,14 +675,19 @@ class TranscriptViewer(tk.Toplevel):
     def _tags_for(self, idx: int) -> tuple[str, ...]:
         if idx < 0 or idx >= len(self.segments):
             return ()
-        min_prob = _segment_min_probability(self.segments[idx])
-        if min_prob is None:
-            return ()
-        if min_prob >= 0.85:
-            return ("conf_high",)
-        if min_prob >= 0.6:
-            return ("conf_med",)
-        return ("conf_low",)
+        seg = self.segments[idx]
+        min_prob = _segment_min_probability(seg)
+        conf: tuple[str, ...] = ()
+        if min_prob is not None:
+            if min_prob >= 0.85:
+                conf = ("conf_high",)
+            elif min_prob >= 0.6:
+                conf = ("conf_med",)
+            else:
+                conf = ("conf_low",)
+        if seg.get("suspect"):
+            return ("suspect",) + conf
+        return conf
 
     def _update_karaoke(self, t_seconds: float) -> None:
         """Refresh the active segment + word highlight from the playhead.

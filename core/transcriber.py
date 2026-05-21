@@ -587,6 +587,23 @@ def _run_post_pipeline(
         except Exception as e:  # noqa: BLE001
             log(f"WARN: Alignment failed (continuing without refinement): {e}", log_cb)
 
+    # Hallucination detector (opt-in, default ON). Runs last so it
+    # sees the final diarised/aligned text. Any flagged segments get
+    # ``suspect=True`` + ``suspect_reason`` which the writers carry
+    # through to JSON and the viewer renders in red.
+    if config.get("hallucination_detect_enabled", True):
+        try:
+            from . import hallucination as _hall
+            flagged = _hall.annotate_segments(segments_data)
+            if flagged:
+                log(
+                    f"Hallucination detector flagged {flagged} segment(s) "
+                    "as suspect — open the transcript viewer to review.",
+                    log_cb,
+                )
+        except Exception as e:  # noqa: BLE001
+            log(f"Hallucination detector failed (continuing): {e}", log_cb)
+
     return speaker_count
 
 

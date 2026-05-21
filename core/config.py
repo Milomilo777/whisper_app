@@ -70,6 +70,13 @@ DEFAULT_CONFIG = {
     # default; whisper_cpp is opt-in via pywhispercpp; future backends slot in
     # here).
     "transcribe_backend": "faster_whisper",
+    # v0.8 — hallucination detector (BoH + repetition + optional VAD
+    # disagreement). Flags segments in the JSON output and the viewer.
+    "hallucination_detect_enabled": True,
+    # v0.8 — model picker. Slug into core.model_manager.MODEL_REGISTRY.
+    # When the user changes this, the Advanced dialog also rewrites
+    # ``model`` + ``model_path`` so ensure_model downloads the new one.
+    "whisper_model": "large-v3",
 }
 
 

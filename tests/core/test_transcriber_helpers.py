@@ -326,6 +326,48 @@ def test_write_outputs_honours_template_config(transcriber, tmp_path, monkeypatc
     assert os.path.isfile(written[0])
 
 
+def test_run_post_pipeline_flags_hallucinations_when_enabled(transcriber, monkeypatch):
+    """With diarisation+alignment off and the detector enabled (default),
+    suspect segments must be annotated by the post-pipeline pass."""
+    monkeypatch.setattr(transcriber, "config", {
+        "diarization_enabled": False,
+        "alignment": "none",
+        "hallucination_detect_enabled": True,
+    })
+
+    class _Task:
+        file_path = "/dev/null"
+        cancelled = False
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "Welcome back."},
+        {"start": 1.0, "end": 2.0, "text": "Thanks for watching!"},
+    ]
+    n = transcriber._run_post_pipeline(_Task(), segs, "en", None)
+    assert n == 0  # speaker_count
+    assert segs[0].get("suspect") is None
+    assert segs[1].get("suspect") is True
+    assert segs[1]["suspect_reason"] == "bag-of-hallucinations"
+
+
+def test_run_post_pipeline_respects_disabled_flag(transcriber, monkeypatch):
+    """When ``hallucination_detect_enabled=False`` no segment is flagged
+    even if it matches a known hallucination phrase."""
+    monkeypatch.setattr(transcriber, "config", {
+        "diarization_enabled": False,
+        "alignment": "none",
+        "hallucination_detect_enabled": False,
+    })
+
+    class _Task:
+        file_path = "/dev/null"
+        cancelled = False
+
+    segs = [{"start": 0.0, "end": 1.0, "text": "Thanks for watching!"}]
+    transcriber._run_post_pipeline(_Task(), segs, "en", None)
+    assert segs[0].get("suspect") is None
+
+
 def test_write_outputs_template_creates_subdirectories(transcriber, tmp_path, monkeypatch):
     """A template that nests outputs in a sibling folder must create
     that folder on the fly."""

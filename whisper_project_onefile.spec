@@ -125,6 +125,7 @@ a = Analysis(
         'core.burn_subs',
         'core.config',
         'core.diarization',
+        'core.hallucination',
         'core.history',
         'core.logging_setup',
         'core.model_manager',

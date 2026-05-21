@@ -10,6 +10,11 @@ from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from core.config import save_config
+from core.model_manager import (
+    DEFAULT_MODEL_SLUG,
+    list_models,
+    resolve_model_entry,
+)
 from core.writers import supported_formats
 
 if TYPE_CHECKING:
@@ -62,6 +67,12 @@ class AdvancedDialog(tk.Toplevel):
         self._transcribe_backend = tk.StringVar(
             value=str(cfg.get("transcribe_backend") or "faster_whisper")
         )
+        self._whisper_model = tk.StringVar(
+            value=str(cfg.get("whisper_model") or DEFAULT_MODEL_SLUG)
+        )
+        self._hallucination_detect = tk.BooleanVar(
+            value=bool(cfg.get("hallucination_detect_enabled", True))
+        )
         self._alignment = tk.StringVar(
             value=str(cfg.get("alignment") or "none")
         )
@@ -102,19 +113,42 @@ class AdvancedDialog(tk.Toplevel):
         # Whisper extras
         extras = ttk.LabelFrame(body, text="Whisper extras")
         extras.pack(fill="x", pady=(0, 8))
-        ttk.Label(extras, text="Batch size (CUDA only)").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+
+        # Model picker (v0.8) — slug → MODEL_REGISTRY entry. Changing
+        # the picker rewrites cfg["model"] + cfg["model_path"] in
+        # _save_and_close so ensure_model downloads the new variant on
+        # the next transcription.
+        ttk.Label(extras, text="Whisper model").grid(
+            row=0, column=0, sticky="w", padx=8, pady=4
+        )
+        self._model_labels = list_models()
+        self._model_slug_to_label = {slug: label for slug, label in self._model_labels}
+        self._model_label_to_slug = {label: slug for slug, label in self._model_labels}
+        current_label = self._model_slug_to_label.get(
+            self._whisper_model.get(), self._model_labels[0][1]
+        )
+        self._model_display = tk.StringVar(value=current_label)
+        ttk.Combobox(
+            extras,
+            textvariable=self._model_display,
+            state="readonly",
+            values=[label for _slug, label in self._model_labels],
+            width=46,
+        ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+
+        ttk.Label(extras, text="Batch size (CUDA only)").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         ttk.Spinbox(extras, from_=1, to=64, increment=1, textvariable=self._batch_size, width=6).grid(
-            row=0, column=1, sticky="w", padx=8, pady=4
+            row=1, column=1, sticky="w", padx=8, pady=4
         )
-        ttk.Label(extras, text="Initial prompt").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(extras, text="Initial prompt").grid(row=2, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(extras, textvariable=self._initial_prompt, width=42).grid(
-            row=1, column=1, sticky="ew", padx=8, pady=4
-        )
-        ttk.Label(extras, text="Hotwords (comma-separated)").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(extras, textvariable=self._hotwords, width=42).grid(
             row=2, column=1, sticky="ew", padx=8, pady=4
         )
-        ttk.Label(extras, text="Backend").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(extras, text="Hotwords (comma-separated)").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(extras, textvariable=self._hotwords, width=42).grid(
+            row=3, column=1, sticky="ew", padx=8, pady=4
+        )
+        ttk.Label(extras, text="Backend").grid(row=4, column=0, sticky="w", padx=8, pady=4)
         backend_combo = ttk.Combobox(
             extras,
             textvariable=self._transcribe_backend,
@@ -122,35 +156,42 @@ class AdvancedDialog(tk.Toplevel):
             values=("faster_whisper", "whisper_cpp"),
             width=20,
         )
-        backend_combo.grid(row=3, column=1, sticky="w", padx=8, pady=4)
+        backend_combo.grid(row=4, column=1, sticky="w", padx=8, pady=4)
         ttk.Button(
             extras, text="Download whisper.cpp model...",
             command=self._download_whisper_cpp_model,
-        ).grid(row=3, column=2, sticky="w", padx=8, pady=4)
+        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
 
-        ttk.Label(extras, text="Word alignment").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(extras, text="Word alignment").grid(row=5, column=0, sticky="w", padx=8, pady=4)
         ttk.Combobox(
             extras,
             textvariable=self._alignment,
             state="readonly",
             values=("none", "stable_ts"),
             width=20,
-        ).grid(row=4, column=1, sticky="w", padx=8, pady=4)
+        ).grid(row=5, column=1, sticky="w", padx=8, pady=4)
         ttk.Label(
             extras,
             text="stable_ts refines word timestamps via DTW (~10-30% slower).",
             foreground="#666",
-        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
+        ).grid(row=5, column=2, sticky="w", padx=8, pady=4)
 
-        ttk.Label(extras, text="Output filename template").grid(row=5, column=0, sticky="w", padx=8, pady=4)
+        # Hallucination detector toggle (v0.8) + Hardware re-detect.
+        ttk.Checkbutton(
+            extras,
+            text="Flag likely hallucinations (repetition + BoH heuristics)",
+            variable=self._hallucination_detect,
+        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+
+        ttk.Label(extras, text="Output filename template").grid(row=7, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(extras, textvariable=self._filename_template, width=42).grid(
-            row=5, column=1, columnspan=2, sticky="ew", padx=8, pady=4
+            row=7, column=1, columnspan=2, sticky="ew", padx=8, pady=4
         )
         ttk.Label(
             extras,
             text="Tokens: {base} {ext} {lang} {date} {speaker_count}",
             foreground="#666",
-        ).grid(row=6, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ).grid(row=8, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         extras.columnconfigure(1, weight=1)
 
         # Watched folder
@@ -231,6 +272,26 @@ class AdvancedDialog(tk.Toplevel):
         cfg["output_filename_template"] = tpl
         cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
         cfg["alignment"] = self._alignment.get() or "none"
+        cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
+        # Model picker — convert the displayed label back to the
+        # registry slug and rewrite cfg["model"] + cfg["model_path"]
+        # when the user picked something different. Setting
+        # model_path to "" forces _apply_runtime_fallbacks to point
+        # at the right cache folder for the new model.
+        chosen_label = self._model_display.get() or ""
+        new_slug = self._model_label_to_slug.get(chosen_label, DEFAULT_MODEL_SLUG)
+        if new_slug and new_slug != cfg.get("whisper_model"):
+            entry = resolve_model_entry(new_slug)
+            if entry is not None:
+                cfg["whisper_model"] = new_slug
+                cfg["model"] = entry
+                cfg["model_path"] = ""
+                self.app.log(
+                    f"Whisper model changed to {new_slug}. The new model "
+                    "will download on the next transcription."
+                )
+            else:
+                self.app.log(f"Unknown model slug {new_slug!r}; keeping current model.")
         cfg["telemetry_opt_in"] = bool(self._telemetry_opt_in.get())
         cfg["minimise_to_tray"] = bool(self._minimise_to_tray.get())
         new_watched = (self._watched_folder.get() or "").strip()

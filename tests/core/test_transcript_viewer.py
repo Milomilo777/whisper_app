@@ -388,6 +388,54 @@ def test_speaker_rename_rejects_empty_input(tmp_path):
         root.destroy()
 
 
+def test_viewer_suspect_segments_get_red_background(tmp_path):
+    """A segment carrying ``suspect=True`` must be rendered with the
+    ``suspect`` row tag so the viewer highlights it in red. Tag layers
+    UNDER the karaoke ``active`` tag and OVER the confidence colour."""
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "real speech"},
+        {
+            "start": 1.0, "end": 2.0,
+            "text": "Thanks for watching!",
+            "suspect": True,
+            "suspect_reason": "bag-of-hallucinations",
+        },
+        {
+            "start": 2.0, "end": 3.0,
+            "text": "low confidence and suspect",
+            "suspect": True,
+            "suspect_reason": "repetition",
+            "words": [
+                {"start": 2.0, "end": 3.0, "word": "x", "probability": 0.2}
+            ],
+        },
+    ]
+    p = tmp_path / "sus.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            children = viewer.tree.get_children()
+            tags0 = viewer.tree.item(children[0], "tags")
+            tags1 = viewer.tree.item(children[1], "tags")
+            tags2 = viewer.tree.item(children[2], "tags")
+            assert "suspect" not in tags0
+            assert "suspect" in tags1
+            # Suspect + low confidence must coexist.
+            assert "suspect" in tags2
+            assert "conf_low" in tags2
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
 def test_strip_fillers_collapses_space_before_punctuation():
     """When an inline filler is removed, any space-before-punctuation
     artefact left behind must be tidied. The terminal-punctuation
