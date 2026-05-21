@@ -51,52 +51,42 @@ def status_label(status: str) -> str:
 
 
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
-    # File-picker row: label + entry + Browse + primary CTA all on one
-    # line. The Transcribe button is the main action of this tab —
-    # the previous layout put it on a second row, left-aligned with
-    # default styling so it disappeared into the form. Now it sits
-    # next to Browse in the natural reading order (pick file → press
-    # the obvious blue button) with the sv_ttk Accent style for
-    # visual weight.
-    ttk.Label(parent, text="File").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+    """Beginner-friendly Transcribe tab.
+
+    Layout philosophy comes from researching MacWhisper / Aiko / Vibe /
+    OpenWhispr / Buzz / WhisperUI in May 2026 (see
+    ``docs/V08_FEATURE_RESEARCH.md`` for the citations). The pattern
+    every well-loved offline app converges on is:
+
+      1. A *hero drop-zone* takes the visual centre of the tab — it's
+         both the empty state and the primary affordance.
+      2. *Three* visible controls beneath: language picker, two
+         feature toggles (identify speakers + per-word timestamps).
+      3. *One* prominent primary CTA — sv_ttk's ``Accent.TButton``
+         style + ``ipady`` so it's ~2× the visual weight of Browse.
+      4. *Everything else hidden* behind an "Advanced settings…"
+         button: VAD knobs, device / compute backend, hotwords,
+         output formats, watched folder, telemetry, etc. None of
+         these strings (``VAD``, ``compute``, ``device``, ``hotwords``)
+         appear on the main canvas — the research's #1 anti-pattern.
+
+    Note for maintainers: every ``*_var`` that lived in the old layout
+    is still created here so the config save path + the hermetic test
+    suite don't need to know the UI was rebuilt. Vars without a
+    matching widget are simply not packed.
+    """
+    from app.domain.languages import SUBTITLE_LANGUAGES as _LANGS
+
+    # ── all vars created up-front (some have no UI surface; they're
+    #     still referenced by config save + test suite + Advanced
+    #     dialog, so we initialise them either way) ───────────────────
     app.fv = tk.StringVar()
-    ttk.Entry(parent, textvariable=app.fv, width=50).grid(
-        row=0, column=1, padx=(0, 6), pady=10, sticky="ew"
+    app.vad_enabled_var = tk.BooleanVar(
+        value=bool(app.app_config.get("vad_enabled", True))
     )
-    ttk.Button(parent, text="Browse", command=app.browse).grid(
-        row=0, column=2, padx=(0, 6), pady=10
+    app.word_timestamps_var = tk.BooleanVar(
+        value=bool(app.app_config.get("word_timestamps", False))
     )
-    transcribe_btn = ttk.Button(
-        parent,
-        text="▶  Transcribe",
-        command=app.add,
-        style="Accent.TButton",
-    )
-    # ipadx widens the button without forcing a fixed pixel width, so
-    # the Accent style's padding still flows naturally with the theme.
-    transcribe_btn.grid(row=0, column=3, padx=(0, 10), pady=10, ipadx=10)
-
-    # Phase 2a — VAD + word timestamps controls.
-    options = ttk.Frame(parent)
-    options.grid(row=2, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 10))
-    app.vad_enabled_var = tk.BooleanVar(value=bool(app.app_config.get("vad_enabled", True)))
-    ttk.Checkbutton(
-        options,
-        text="Voice Activity Detection",
-        variable=app.vad_enabled_var,
-        command=app._save_transcribe_prefs,
-    ).pack(side="left")
-    app.word_timestamps_var = tk.BooleanVar(value=bool(app.app_config.get("word_timestamps", False)))
-    ttk.Checkbutton(
-        options,
-        text="Word timestamps",
-        variable=app.word_timestamps_var,
-        command=app._save_transcribe_prefs,
-    ).pack(side="left", padx=(20, 0))
-
-    # Speaker diarization toggle (sherpa-onnx, on-device). Disabled
-    # when the ONNX models or the sherpa-onnx Python package aren't
-    # present; the label adapts so the user understands why.
     try:
         from core import diarization as _diar  # type: ignore[import-not-found]
         _diar_available = _diar.is_available()
@@ -107,38 +97,57 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     app.diarization_var = tk.BooleanVar(
         value=bool(_diar_available) and bool(app.app_config.get("diarization_enabled", False))
     )
-    diar_label = (
-        "Identify speakers (diarization)"
-        if _diar_available
-        else f"Identify speakers (unavailable: {_diar_reason})"
-    )
-    diar_check = ttk.Checkbutton(
-        options,
-        text=diar_label,
-        variable=app.diarization_var,
-        command=app._save_transcribe_prefs,
-    )
-    if not _diar_available:
-        diar_check.state(["disabled"])
-    diar_check.pack(side="left", padx=(20, 0))
-
-    ttk.Button(options, text="Advanced...", command=app.open_advanced_dialog).pack(
-        side="left", padx=(20, 0)
-    )
-
-    # ----- Second row of transcribe options -----
-    # Language picker (override the auto-detect), compute device,
-    # and a one-line hotwords / initial-prompt field. All persist
-    # into config.json via app._save_transcribe_prefs.
-    from app.domain.languages import SUBTITLE_LANGUAGES as _LANGS
-
-    quick_opts = ttk.Frame(parent)
-    quick_opts.grid(row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 6))
-
-    ttk.Label(quick_opts, text="Language:").pack(side="left")
     app.transcribe_lang_var = tk.StringVar(
         value=str(app.app_config.get("transcribe_language", "Auto"))
     )
+    app.device_var = tk.StringVar(value=str(app.app_config.get("device", "auto")))
+    app.compute_type_var = tk.StringVar(
+        value=str(app.app_config.get("compute_type", "int8"))
+    )
+    app.hotwords_var = tk.StringVar(value=str(app.app_config.get("hotwords", "")))
+
+    # ── Row 0: hero drop zone ─────────────────────────────────────────
+    drop_zone = ttk.LabelFrame(parent, text="", padding=24)
+    drop_zone.grid(
+        row=0, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(15, 6),
+    )
+    ttk.Label(
+        drop_zone,
+        text="🎵    Drop an audio or video file here",
+        font=("TkDefaultFont", 14, "bold"),
+        anchor="center",
+        justify="center",
+    ).pack(fill="x")
+    ttk.Label(
+        drop_zone,
+        text="or use the Browse button below",
+        foreground="#888",
+        anchor="center",
+        justify="center",
+    ).pack(fill="x", pady=(2, 12))
+    ttk.Button(drop_zone, text="Browse files...", command=app.browse).pack()
+
+    # ── Row 1: file path display (always visible — shows what's selected) ─
+    file_row = ttk.Frame(parent)
+    file_row.grid(
+        row=1, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(2, 8),
+    )
+    ttk.Label(file_row, text="Selected file:").pack(side="left")
+    ttk.Entry(file_row, textvariable=app.fv).pack(
+        side="left", fill="x", expand=True, padx=(8, 0)
+    )
+
+    # ── Row 2: three quick options (language + identify speakers +
+    #     per-word timestamps) ────────────────────────────────────────
+    quick_opts = ttk.Frame(parent)
+    quick_opts.grid(
+        row=2, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(0, 8),
+    )
+
+    ttk.Label(quick_opts, text="Language:").pack(side="left")
     lang_values = ["Auto"] + [name for name, _ in _LANGS]
     lang_combo = ttk.Combobox(
         quick_opts,
@@ -147,70 +156,75 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         state="readonly",
         width=14,
     )
-    lang_combo.pack(side="left", padx=(4, 16))
+    lang_combo.pack(side="left", padx=(6, 24))
     lang_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
 
-    ttk.Label(quick_opts, text="Device:").pack(side="left")
-    app.device_var = tk.StringVar(value=str(app.app_config.get("device", "auto")))
-    dev_combo = ttk.Combobox(
+    # Feature toggles — friendly phrasing instead of "diarization" /
+    # "Word timestamps". The research's vocabulary mapping: Aiko ships
+    # "Produce timestamps" and "Skip silent parts"; speaker-detection
+    # is universally framed as "Identify / detect speakers".
+    diar_label = (
+        "Identify speakers"
+        if _diar_available
+        else f"Identify speakers (unavailable — {_diar_reason})"
+    )
+    diar_check = ttk.Checkbutton(
         quick_opts,
-        textvariable=app.device_var,
-        values=("auto", "cpu", "cuda"),
-        state="readonly",
-        width=8,
+        text=diar_label,
+        variable=app.diarization_var,
+        command=app._save_transcribe_prefs,
     )
-    dev_combo.pack(side="left", padx=(4, 16))
-    dev_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
+    if not _diar_available:
+        diar_check.state(["disabled"])
+    diar_check.pack(side="left", padx=(0, 24))
 
-    ttk.Label(quick_opts, text="Compute:").pack(side="left")
-    app.compute_type_var = tk.StringVar(
-        value=str(app.app_config.get("compute_type", "int8"))
-    )
-    compute_combo = ttk.Combobox(
+    ttk.Checkbutton(
         quick_opts,
-        textvariable=app.compute_type_var,
-        values=("int8", "int8_float16", "float16", "float32"),
-        state="readonly",
-        width=14,
-    )
-    compute_combo.pack(side="left", padx=(4, 16))
-    compute_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
+        text="Per-word timestamps",
+        variable=app.word_timestamps_var,
+        command=app._save_transcribe_prefs,
+    ).pack(side="left")
 
-    ttk.Label(quick_opts, text="Hotwords:").pack(side="left")
-    app.hotwords_var = tk.StringVar(value=str(app.app_config.get("hotwords", "")))
-    hw_entry = ttk.Entry(quick_opts, textvariable=app.hotwords_var, width=26)
-    hw_entry.pack(side="left", padx=(4, 0), fill="x", expand=True)
-    hw_entry.bind("<FocusOut>", lambda _e: app._save_transcribe_prefs())
-
-    ttk.Separator(parent, orient="horizontal").grid(
-        row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+    # ── Row 3: the big accent Transcribe CTA + tiny Advanced link ────
+    cta_row = ttk.Frame(parent)
+    cta_row.grid(
+        row=3, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(4, 4),
     )
-    ttk.Label(parent, text="oTranscribe").grid(row=5, column=0, padx=10, pady=(0, 10), sticky="w")
+    transcribe_btn = ttk.Button(
+        cta_row,
+        text="▶    Transcribe",
+        command=app.add,
+        style="Accent.TButton",
+    )
+    # ipady doubles the button height; ipadx widens it. Together they
+    # give the primary CTA a clear ~2× visual weight over Browse,
+    # matching the hero-CTA pattern across MacWhisper / OpenWhispr /
+    # WhisperUI.
+    transcribe_btn.pack(side="left", ipadx=24, ipady=8)
+
     ttk.Button(
-        parent, text="Import .otr → SRT...", command=app.integrations_service.import_otr_to_srt
-    ).grid(row=5, column=1, padx=(0, 6), pady=(0, 10), sticky="w")
+        cta_row, text="Advanced settings…",
+        command=app.open_advanced_dialog,
+    ).pack(side="right")
+
+    parent.columnconfigure(0, weight=1)
     parent.columnconfigure(1, weight=1)
+    parent.columnconfigure(2, weight=1)
 
-    # --- Last Result card -------------------------------------------------
-    # Hidden until the first transcription completes, then populated by
-    # App.show_last_result(task). Lives at the bottom of the Transcribe
-    # tab so a user who just clicked "Transcribe" and switches back here
-    # after the job finishes sees exactly *what* finished and *where*
-    # the outputs went, with one-click "Open" buttons. Closes the
-    # "did anything happen? where's my SRT?" question the previous UI
-    # punted to the Queue tab's right-click menu.
+    # ── Last Result card (hidden until first transcription completes) ─
     ttk.Separator(parent, orient="horizontal").grid(
-        row=6, column=0, columnspan=3, sticky="ew", padx=10, pady=(6, 6)
+        row=4, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(8, 6),
     )
-
-    app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=8)
+    app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=10)
     app.last_result_frame.grid(
-        row=7, column=0, columnspan=3, sticky="nsew", padx=10, pady=(0, 10)
+        row=5, column=0, columnspan=3, sticky="nsew",
+        padx=15, pady=(0, 12),
     )
-    parent.rowconfigure(7, weight=1)
-
+    parent.rowconfigure(5, weight=1)
     app.last_result_empty_var = tk.StringVar(
-        value="No transcription finished yet. Pick a file above and click Transcribe."
+        value="No transcription finished yet. Drop a file above and click Transcribe."
     )
     app.last_result_empty_label = ttk.Label(
         app.last_result_frame,
@@ -218,9 +232,6 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         foreground="#888",
     )
     app.last_result_empty_label.pack(anchor="w")
-
-    # Filled by App.show_last_result; kept as members so that method
-    # can clear/repopulate without rebuilding widgets.
     app.last_result_body = ttk.Frame(app.last_result_frame)
     app.last_result_title_var = tk.StringVar(value="")
     app.last_result_files_frame = ttk.Frame(app.last_result_body)

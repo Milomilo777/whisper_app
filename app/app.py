@@ -295,8 +295,19 @@ class App(tk.Tk):
         h = tk.Menu(m, tearoff=0)
         h.add_command(label="Open transcript viewer...", command=self._open_transcript_viewer_picker)
         h.add_separator()
+        # oTranscribe round-trip — used to be a button on the Transcribe
+        # tab; moved here in the UI simplification pass because it's a
+        # secondary workflow (most users never touch it), and consumer
+        # transcription apps (MacWhisper, Buzz, Aiko) keep
+        # secondary imports under a menu.
+        h.add_command(
+            label="Import oTranscribe (.otr) → SRT...",
+            command=self.integrations_service.import_otr_to_srt,
+        )
+        h.add_command(label="Open oTranscribe website...",
+                      command=self.integrations_service.open_otranscribe)
+        h.add_separator()
         h.add_command(label="Open log folder", command=self.open_log_folder)
-        h.add_command(label="Open oTranscribe...", command=self.integrations_service.open_otranscribe)
         a = tk.Menu(m, tearoff=0)
         a.add_command(label="About", command=self._show_about)
 
