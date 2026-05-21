@@ -1,50 +1,51 @@
-# v0.9 Remote-Mode Research — Burst compute روی سرور GPU
+# v0.9 Remote-Mode Research — Burst compute on a GPU server
 
-این فایل تحقیقات دو شارد موازی است: یکی برای cloud GPU providers +
-pricing + APIs، دیگری برای remote architecture + non-tech UX patterns.
-هدف: یک طراحی برای حالت "دکمه بزن، سرور بگیر، transcribe کن، tear
-down" که برای کاربر غیرفنی به سادگی paste کردن یک API key است.
+Two parallel research shards: cloud GPU providers + pricing + APIs,
+and remote architecture + non-tech UX patterns. Goal: a "click a
+button, get a server, transcribe, tear down" mode where a non-technical
+user only pastes an API key.
 
-## TL;DR — تصمیم پیشنهادی
+## TL;DR — recommended decision
 
-**Stack**: RunPod Community Cloud (RTX 4090 $0.34/hr، per-ms billing،
-Python SDK، SOC 2 Type II) به‌عنوان provider اصلی.
+**Stack**: RunPod Community Cloud (RTX 4090 $0.34/hr, per-ms billing,
+Python SDK, SOC 2 Type II) as the primary provider.
 
-**معماری**: SSH + SFTP + همان `core/worker.py` فعلی روی remote، با
-**JSON-stdio روی کانال SSH** — کد worker دست نمی‌خورد، فقط transport
-عوض می‌شود (الگوی VS Code Remote-SSH).
+**Architecture**: SSH + SFTP + the existing `core/worker.py` on the
+remote, with **JSON-stdio over an SSH channel** — the worker code
+doesn't change, only the transport (VS Code Remote-SSH pattern).
 
-**UX**: ویزارد ۵ مرحله‌ای، password یک‌بار، اپ خودش SSH key تولید و
-push می‌کند، بعد از آن کاربر هرگز password نمی‌دهد.
+**UX**: 5-step wizard. Password is typed once, the app generates and
+pushes an SSH key, and the user never types a password again.
 
-**کوچک‌ترین MVP**: فقط BYO mode + password + SSH key auto-push — **۲
-هفته کار، ۸۰٪ ارزش با ۲۰٪ تلاش**.
+**Smallest MVP**: BYO mode + password + SSH key auto-push only — **2
+weeks of work, 80% of the value with 20% of the effort.**
 
-**پیام marketing**: «۱۰۰ ساعت صوت = ~$۳ GPU، فقط در زمان مصرف».
+**Marketing pitch**: "100 hours of audio ≈ $3 of GPU, only while you
+use it."
 
 ---
 
-## ۱. مقایسه‌ی ارائه‌دهندگان (۲۰۲۶)
+## 1. Provider comparison (2026)
 
 | Provider | RTX 4090 | RTX 3090 | A100 80GB | L40S | H100 | Billing | API Quality |
 |---|---|---|---|---|---|---|---|
 | **RunPod (Community)** | $0.34/hr | ~$0.22 | $1.19/hr | $1.90/hr | ~$2.49 | per-ms | Excellent: Python SDK + GraphQL + runpodctl CLI + SSH |
 | RunPod (Secure) | $0.59/hr | n/a | ~$2.49 | ~$2.49 | ~$2.99 | per-ms | same |
 | **Vast.ai** | $0.31/hr | $0.13/hr | ~$0.75 | ~$1.20 | ~$1.65 | per-sec | Excellent: `pip install vastai` (SDK+CLI in one) |
-| Lambda Labs | n/a | n/a | $1.29/hr | n/a | $2.49-2.99 | per-min | REST API، no spot، 4090/3090 ندارد |
-| Modal | n/a | n/a | $3.73/hr | n/a | $3.95/hr | per-sec | Container-only، SSH ندارد |
+| Lambda Labs | n/a | n/a | $1.29/hr | n/a | $2.49-2.99 | per-min | REST API, no spot, no 4090/3090 |
+| Modal | n/a | n/a | $3.73/hr | n/a | $3.95/hr | per-sec | Container-only, no SSH |
 | **Replicate** | n/a | n/a | n/a | n/a | n/a | per-run | Highest-level: HTTP POST audio in, JSON out |
 | Hyperbolic | $0.50/hr | n/a | $1.80/hr | n/a | $3.00-3.20 | per-hr | OpenAI-compatible API |
-| TensorDock | $0.35/hr | n/a | $0.75-1.20 | n/a | $1.91-2.25 | per-hr | REST، KVM (Windows OK)، spot |
-| Hetzner GEX44 | RTX-4000 Ada 20GB | — | — | — | — | monthly | SSH/bare-metal، API for ad-hoc ندارد |
+| TensorDock | $0.35/hr | n/a | $0.75-1.20 | n/a | $1.91-2.25 | per-hr | REST, KVM (Windows OK), spot |
+| Hetzner GEX44 | RTX-4000 Ada 20GB | — | — | — | — | monthly | SSH/bare-metal, no API for ad-hoc |
 | Hetzner GEX131 | RTX PRO 6000 Blackwell | — | — | — | — | monthly | same |
 
-**برنده‌ها**: RunPod Community + Vast.ai مارکت‌پلیس‌ها هستند و با
-اختلاف زیاد ارزان‌ترین.
+**Winners**: RunPod Community + Vast.ai marketplaces are far and away
+the cheapest.
 
 ---
 
-## ۲. واقعیت هزینه (۱۰۰ ساعت صوت)
+## 2. Cost reality (100 hours of audio)
 
 ```
 Hardware          Wall-clock    GPU $/hr    Total cost (audio-only)
@@ -57,112 +58,112 @@ L40S              2-4 hr        $1.90       $4-8
 H100              1-2 hr        $2.49       $3-5
 ```
 
-**پیام marketing**: «۱۰۰ ساعت صوت ≈ $۳ GPU روی RTX 4090. ۱۰۰۰ ساعت
-زیر $۳۰. فقط در زمان مصرف.»
+**Marketing pitch**: "100 hours of audio ≈ $3 of GPU on RTX 4090. 1000
+hours under $30. Pay only while you use it."
 
-**SaladCloud benchmark** (مرجع جانبی): گزارش رسمی ادعا می‌کند ۱
-میلیون ساعت صوت با large-v3 معادل $۵۱۱۰ روی شبکه‌ی RTX 3060 های
-خانگی است — ~۰.۵ سنت در هر ساعت صوت. این نشان می‌دهد لایه‌ی پایین‌رده
-هم برای backlog های بزرگ منطقی است.
+**SaladCloud benchmark** (sanity check): official report claims 1
+million hours of audio at large-v3 = $5,110 on a network of home RTX
+3060s — roughly half a cent per hour of audio. Suggests low-tier GPU is
+viable for very large backlogs.
 
 ---
 
-## ۳. سه طعم برای کاربر در یک ویزارد
+## 3. Three flavours in one wizard
 
 ```
 Settings → Remote processing →
   ┌───────────────────────────────────────────┐
-  │ □ سرور خودم را دارم (BYO)                │
-  │   host + user + password یا key file      │
+  │ □ I have my own server (BYO)              │
+  │   host + user + password or key file      │
   │                                           │
-  │ □ به من سرور ابری بگیر (Managed)         │
-  │   فقط API key از RunPod                   │
+  │ □ Get me a cloud server (Managed)         │
+  │   Just paste a RunPod API key             │
   │                                           │
-  │ □ از free tier API استفاده کن (Fallback)  │
+  │ □ Use a free-tier API (Fallback)          │
   │   HuggingFace Inference / Replicate       │
   └───────────────────────────────────────────┘
 ```
 
 ### BYO (Bring-Your-Own-Server)
 
-کاربر یک سرور Hetzner / Vast.ai / RunPod / لپ‌تاپ-خانگی-GPU دارد. اپ
-از طریق SSH + Paramiko وصل می‌شود، bootstrap اجرا می‌کند، worker را
-نصب می‌کند، job ها را می‌فرستد.
+User already has a Hetzner / Vast.ai / RunPod / home-GPU machine. The
+app connects via SSH + Paramiko, runs the bootstrap, installs the
+worker, dispatches jobs.
 
-### Managed (مدیریت‌شده توسط اپ)
+### Managed (app provisions a cloud GPU)
 
-کاربر فقط RunPod API key می‌گذارد. اپ خودش pod ایجاد می‌کند، job ها
-را اجرا می‌کند، در پایان terminate می‌کند. هزینه live نمایش داده
-می‌شود.
+User pastes a RunPod API key. The app spawns a pod, dispatches jobs,
+terminates billing on exit. Live cost shown.
 
 ### Fallback API
 
-برای کاربری که نمی‌خواهد pod مدیریت کند: `Replicate
-victor-upmeet/whisperx` HTTP POST. هر فایل ~$۰.۰۰۲ یعنی per-file
-billing. ساده‌ترین UX ولی hotwords / initial_prompt محدود.
+For users who don't want to manage pods: `Replicate
+victor-upmeet/whisperx` HTTP POST. ~$0.002 per file = per-file billing.
+Simplest UX but custom hotwords / initial_prompt are limited.
 
 ---
 
-## ۴. ۵ صفحه ویزارد (UX کامل)
+## 4. 5-step wizard (full UX flow)
 
-**صفحه ۱ — Toggle در Settings**
-کاربر «پردازش راه دور» را فعال می‌کند. ویزارد ماژوله باز می‌شود.
-هیچ اتصال شبکه‌ای رخ نداده.
+**Step 1 — Toggle in Settings**
+User flips "Enable remote processing". A modal wizard opens. No
+network call yet.
 
-**صفحه ۲ — انتخاب طعم**
-سه دکمه‌ی بزرگ (BYO / Managed / Fallback). توضیح کوتاه هر کدام +
-هزینه تقریبی + GDPR badge.
+**Step 2 — Choose flavour**
+Three big buttons (BYO / Managed / Fallback). Short blurb under each +
+ballpark cost + GDPR badge.
 
-**صفحه ۳ — ورود credential**
-چهار فیلد BYO: host، port (پیش‌فرض 22)، username، یکی از password
-یا upload key file. در پس‌زمینه به محض submit:
+**Step 3 — Enter credentials**
+BYO has four fields: host, port (default 22), username, and either
+password or an upload key file. On submit, in the background:
 
-1. اتصال SSH تست می‌شود
-2. سیستم‌عامل ریموت تشخیص داده می‌شود (`cat /etc/os-release`)
-3. اپ یک کلید RSA 4096 محلی تولید می‌کند، public را در
-   `~/.ssh/authorized_keys` ریموت می‌نویسد، password از حافظه پاک
-   می‌شود (الگوی `ssh-copy-id`)
-4. private key در Windows Credential Manager (DPAPI) از طریق `keyring`
-   ذخیره می‌شود
+1. SSH connection is tested
+2. Remote OS is detected (`cat /etc/os-release`)
+3. The app generates a local RSA 4096 key, writes the public half to
+   `~/.ssh/authorized_keys` on the remote, wipes the password from
+   memory (`ssh-copy-id` pattern)
+4. The private key is stored in Windows Credential Manager (DPAPI) via
+   the `keyring` package
 
-**از این لحظه به بعد کاربر هرگز password نخواهد داد.**
+**From this point on the user never types a password again.**
 
-**صفحه ۴ — Bootstrap + تخمین هزینه**
-نوار پیشرفت با چهار گام: «بررسی GPU» → «نصب ffmpeg» → «نصب
-faster-whisper» → «دانلود مدل». لاگ verbose قابل گسترش است.
+**Step 4 — Bootstrap + cost estimate**
+Progress bar with four steps: "Check GPU" → "Install ffmpeg" →
+"Install faster-whisper" → "Download model". A verbose log is
+expandable on demand.
 
-اگر BYO باشد هزینه نشان داده نمی‌شود؛ اگر Managed باشد بر اساس نرخ
-provider:
+For BYO no cost is shown; for Managed the provider rate is shown:
 
 ```
-RTX 4090 RunPod Community: $0.34/hr
+RunPod Community RTX 4090: $0.34/hr
 A100 80GB:                 $1.19/hr
 H100:                      $2.49/hr
 ```
 
-**صفحه ۵ — تایید + badge "remote: hetzner-gpu1"**
-ویزارد بسته می‌شود. در پنل اصلی یک badge کوچک نشان می‌دهد کجا کار
-می‌رود. هر کار جدید به remote route می‌شود، با نوار وضعیت سه‌حالته:
+**Step 5 — Confirmation + a "remote: hetzner-gpu1" badge**
+The wizard closes. A small badge in the main panel indicates where
+jobs run. Each new job routes remote, with a 3-state status bar:
 upload → transcribe → download.
 
 ---
 
-## ۵. معماری: SSH + SFTP + JSON-stdio (الگوی VS Code Remote-SSH)
+## 5. Architecture: SSH + SFTP + JSON-stdio (VS Code Remote-SSH pattern)
 
-**چرا این انتخاب؟**
+**Why this choice?**
 
-- VS Code Remote-SSH (الگوی طلایی) دقیقاً همین کار را می‌کند: دو
-  اتصال SSH باز، یک کارگر روی `$HOME/.vscode-server` نصب، تونل پورت
-  SSH برای RPC.
-- JetBrains Gateway همان الگو + TLS 1.3 درون تونل SSH (overkill اختیاری).
-- چرا نه REST خالص؟ کاربر غیرفنی نمی‌خواهد TLS cert بسازد / port
-  forward کند / nginx بنویسد.
-- چرا نه Modal/container-only؟ معماری ما را عوض می‌کند، queue ادامه‌دار
-  ما را می‌شکند.
-- **بزرگ‌ترین برد**: همان `core/worker.py` فعلی روی remote کار می‌کند
-  — فقط transport عوض می‌شود.
+- VS Code Remote-SSH (the gold standard) does exactly this: two open
+  SSH connections, a worker installed at `$HOME/.vscode-server`, an
+  SSH port tunnel for RPC.
+- JetBrains Gateway uses the same pattern + TLS 1.3 inside the SSH
+  tunnel (optional overkill).
+- Why not pure REST? A non-technical user can't make a TLS cert /
+  port-forward / write nginx config.
+- Why not Modal/container-only? Changes our architecture and breaks
+  our persistent queue.
+- **Biggest win**: the existing `core/worker.py` works unchanged on
+  the remote — only the transport changes.
 
-**جزئیات لایه‌ها**:
+**Layer details**:
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -190,19 +191,20 @@ upload → transcribe → download.
 
 **Transport per file type**:
 
-- **آپلود audio**: SFTP با chunk-resume. حجم ۱۰-۵۰۰ MB روی ۵۰ Mbit
-  خانگی = ۲-۸۰ ثانیه.
-- **ارسال job + receive status**: همان JSON-stdio روی یک کانال SSH
-  exec. **هیچ تغییری در worker code**.
-- **مدل وزن‌ها**: یک‌بار pre-download روی persistent volume، نه per-job.
+- **Audio upload**: SFTP with chunk-resume. 10-500 MB on a 50 Mbit
+  home link = 2-80 seconds.
+- **Job dispatch + status**: the existing JSON-stdio over one SSH exec
+  channel. **No worker-code change.**
+- **Model weights**: pre-downloaded once on a persistent volume, not
+  per-job.
 
-**Multi-worker parallelism**: Paramiko ControlMaster (OpenSSH
-multiplexing) را پشتیبانی نمی‌کند — برای ۴ کارگر موازی باید ۴
-Transport جدا داشت. هزینه‌ی کمی است.
+**Multi-worker parallelism**: Paramiko doesn't support OpenSSH
+ControlMaster multiplexing — for 4 parallel workers, use 4 separate
+Transport channels. Cheap.
 
 ---
 
-## ۶. Bootstrap script (idempotent)
+## 6. Bootstrap script (idempotent)
 
 ```bash
 set -e
@@ -218,136 +220,139 @@ systemctl --user list-unit-files | grep -q whisper-remote \
 systemctl --user enable --now whisper-remote
 ```
 
-هر بار اجرا فقط delta را تغییر می‌دهد.
+Idempotent — only delta changes on each run.
 
-**روش push worker** — سه گزینه:
+**Worker push strategies** (three options):
 
-1. **`pip install whisper-remote-worker` از PyPI** — توصیه‌شده.
-   به‌روزرسانی ساده، signed wheel، نسخه‌بندی واضح.
-2. `git clone` از مخزن عمومی — ساده اما به اعتماد به GitHub وابسته
-   است.
-3. scp کل tarball — بدترین، به نسخه‌ی محلی اپ گره می‌خورد.
+1. **`pip install whisper-remote-worker` from PyPI** — recommended.
+   Simple updates, signed wheel, clear versioning.
+2. `git clone` from a public repo — simple but trusts GitHub.
+3. scp the whole tarball — worst, ties it to the local app version.
 
-**نسخه‌بندی**: یک فایل `version.json` در `/opt/whisper-remote/`
-نوشته می‌شود. اپ هنگام اتصال آن را می‌خواند، اگر کوچک‌تر از
-`minimum_required` باشد reinstall می‌کند.
+**Versioning**: a `version.json` is written to `/opt/whisper-remote/`.
+The app reads it on connect; if smaller than `minimum_required`, it
+reinstalls.
 
-**حالت "دو نسخه‌ی متفاوت"**: suffix → `/opt/whisper-remote-v0.9/` و
-`/opt/whisper-remote-v1.0/` با systemd unit جدا.
+**Two-versions-side-by-side**: suffix → `/opt/whisper-remote-v0.9/` and
+`/opt/whisper-remote-v1.0/` with separate systemd units.
 
 ---
 
-## ۷. حالت‌های شکست — پیام انسانی
+## 7. Failure modes — human-readable messages
 
-| ریشه‌ی فنی | پیغام به کاربر |
+| Technical cause | User-facing message |
 |---|---|
-| SSH timeout | «سرور پاسخ نمی‌دهد. host و port را بررسی کنید» + دکمه‌ی retry |
-| auth failed | «نام کاربری یا رمز نادرست است» (بدون افشای detail) |
-| nvidia-smi missing | «این سرور GPU ندارد — می‌توانید با CPU ادامه دهید؟» |
-| disk full روی remote | «روی سرور حافظه‌ی کافی نیست (نیاز: ۸ GB، موجود: ۲ GB)» |
-| upload dropped | resume خودکار، بعد از ۳ تلاش fallback به local |
-| لپ‌تاپ بسته شد | **کار روی remote ادامه می‌یابد** (systemd persistent). در reopen، اپ status را poll می‌کند و result را pull می‌کند. **این feature است نه bug** — مشابه VS Code که server روی remote persistent است. |
-| installation failed | "show full log" در دیالوگ + دکمه‌ی "report to GitHub" که issue خودکار باز می‌کند |
+| SSH timeout | "Server didn't answer. Check host and port." + retry button |
+| Auth failed | "Username or password is wrong." (no detail leakage) |
+| nvidia-smi missing | "This server has no GPU — continue with CPU?" |
+| Disk full on remote | "Not enough disk on the server (need 8 GB, free 2 GB)" |
+| Upload dropped | Auto-resume; after 3 retries, fall back to local |
+| Laptop lid closed | **Job keeps running on the remote** (systemd persistent). When the app reopens, it polls status and pulls the result. **This is a feature, not a bug** — like VS Code's persistent remote server. |
+| Installation failed | "Show full log" in the dialog + "Report to GitHub" button that opens an issue automatically |
 
 ---
 
-## ۸. امنیت — privacy-first اصول حفظ شد
+## 8. Security — privacy-first principles preserved
 
-- **در ترانزیت**: SSH AES-256-GCM. اگر Tailscale انتخاب شده باشد، لایه‌ی
-  WireGuard اضافه می‌شود (overkill عمدی).
-- **روی سرور**: فایل‌ها در `/opt/whisper-remote/jobs/<uuid>/` با mode
-  0700، auto-delete بعد از ۲۴ ساعت. مدل وزن‌ها read-only mounted.
-- **روی Windows**:
-  - private SSH key در DPAPI از طریق `keyring` package
-  - password اولیه فقط ۳۰ ثانیه در حافظه (برای key push)، سپس wiped
-  - history.db رمز نمی‌شود اما tags حساس را hash می‌کند
-- **revocation**: کلید عمومی pushed شده با comment
-  `whisper-remote@<host>-<install-id>` تا کاربر بتواند بعداً دستی revoke
-  کند
+- **In transit**: SSH AES-256-GCM. With Tailscale selected, an extra
+  WireGuard layer (deliberate overkill).
+- **On the server**: files in `/opt/whisper-remote/jobs/<uuid>/` with
+  mode 0700, auto-delete after 24 hours. Model weights read-only
+  mounted.
+- **On Windows**:
+  - Private SSH key stored in DPAPI via the `keyring` package
+  - Initial password kept in memory only for ~30 seconds (long enough
+    to push the key), then wiped
+  - history.db is not encrypted but sensitive tags are hashed
+- **Revocation**: the pushed public key is marked with the comment
+  `whisper-remote@<host>-<install-id>` so the user can revoke later
+  manually
 
 ---
 
-## ۹. حریم خصوصی و انطباق per provider
+## 9. Privacy + compliance per provider
 
 | Provider | At-rest encryption | EU region | SOC 2 | GDPR | HIPAA |
 |---|---|---|---|---|---|
 | **RunPod Community** | yes | yes | Type II ✓ (2026) | ✓ | ✓ |
-| Vast.ai | host-dependent (متنوع) | varies | no | risky | no |
+| Vast.ai | host-dependent (varies) | varies | no | risky | no |
 | Lambda Labs | yes | yes | Type II ✓ | ✓ | — |
 | Hetzner | yes | yes (DE/FI) | ISO 27001 | ✓ default | — |
 | Genesis Cloud | yes | EU-native | ✓ | ✓ | — |
 
-**برای کاربر اروپایی** (داده‌های حساس): RunPod EU region یا Hetzner.
-**Vast.ai مناسب نیست** برای داده‌های حساس به دلیل تنوع host.
+**For EU users with sensitive data**: RunPod EU region or Hetzner.
+**Vast.ai is not suitable** for sensitive data due to heterogeneous
+hosts.
 
 ---
 
-## ۱۰. UX رقبا — چه‌کاری می‌کنند
+## 10. Competitor UX — what they do
 
-**MacWhisper Pro** (مرجع طلایی):
-- صفحه‌ای در تنظیمات با نام "Cloud Transcription"
-- کاربر کلید API ارائه‌دهنده‌ی انتخابی را paste می‌کند
-- اعتبارنامه‌ها در macOS Keychain
-- جریان: paste-key → toggle on → drag audio → done
+**MacWhisper Pro** (the gold standard):
+- A "Cloud Transcription" page in Settings
+- Paste the chosen provider's API key
+- Credentials are kept in macOS Keychain
+- Flow: paste-key → toggle on → drag audio → done
 
-**Sonix**: B2B SaaS، نه desktop. self-hosted GPU ندارد. Skip.
+**Sonix**: B2B SaaS, not desktop. Doesn't offer self-hosted GPU. Skip.
 
-**Whispering, Aqua Voice**: عمدتاً local + Groq/ElevenLabs fallback.
+**Whispering, Aqua Voice**: mostly local + Groq / ElevenLabs fallback.
 
-**نتیجه**: یک toggle "Use cloud GPU" + Windows Credential Manager
-storage + تخمین هزینه قبل از submit کافی است.
+**Conclusion**: a "Use cloud GPU" toggle + Windows Credential Manager
+storage + cost estimate before submit is enough.
 
 ---
 
-## ۱۱. ابزارهای کلیدی برای پیاده‌سازی
+## 11. Key Python libraries for implementation
 
-- `paramiko` — SSH + SFTP, MIT licensed
+- `paramiko` — SSH + SFTP, MIT-licensed
 - `keyring` — Windows Credential Manager (DPAPI) integration
-- `runpod` — Python SDK رسمی، MIT
-- `vastai` — CLI + SDK در یک package
-- `replicate` — Python SDK رسمی برای HTTP API
-- `tailscale` — Python package روی PyPI برای ephemeral nodes (اختیاری
-  برای NAT'd home servers)
+- `runpod` — official RunPod Python SDK, MIT
+- `vastai` — CLI + SDK in one package
+- `replicate` — official Python SDK for the HTTP API
+- `tailscale` — Python package on PyPI for ephemeral nodes (optional,
+  for NAT'd home servers)
 
 ---
 
-## ۱۲. تخمین تلاش + cut-down v0.9
+## 12. Effort estimate + cut-down v0.9
 
-**M-L scale**: ۴-۶ هفته مهندس تمام‌وقت برای v0.9 کامل.
+**M-L scale**: 4-6 weeks of full-time engineer for a full v0.9.
 
-**شکست هفته‌به‌هفته**:
+**Week-by-week breakdown**:
 
-- هفته ۱: Paramiko + SFTP + sessionful execution
-- هفته ۲: bootstrap idempotent + systemd + version detection
-- هفته ۳: UX wizard ۵ مرحله‌ای + Windows Credential Manager
-- هفته ۴: handling قطع شدن، resume، تست end-to-end با Hetzner واقعی
-- هفته ۵-۶: managed path روی RunPod + Replicate fallback
+- Week 1: Paramiko + SFTP + sessionful execution
+- Week 2: idempotent bootstrap + systemd + version detection
+- Week 3: 5-step UX wizard + Windows Credential Manager
+- Week 4: connection-drop handling, resume, end-to-end test on a real
+  Hetzner box
+- Weeks 5-6: managed path on RunPod + Replicate fallback
 
-**کوچک‌ترین MVP** (۲۰٪ کار، ۸۰٪ ارزش): **فقط BYO + password + SSH
-key auto-push**.
+**Smallest MVP** (20% effort, 80% value): **BYO + password + SSH key
+auto-push only**.
 
-- کاربر host + رمز می‌دهد
-- اپ کلید SSH می‌سازد و push می‌کند
-- bootstrap idempotent اجرا می‌شود
-- transcription با همان JSON-stdio روی `ssh exec` می‌رود
-- **هیچ Tailscale، هیچ managed cloud، هیچ REST**
-- ۲ هفته کار
+- User enters host + password
+- App generates an SSH key and pushes it
+- Idempotent bootstrap runs
+- Transcription runs over `ssh exec` with the existing JSON-stdio
+- **No Tailscale, no managed cloud, no REST**
+- 2 weeks of work
 
-**مسیر پیشنهادی تکاملی**:
+**Evolutionary roadmap**:
 
-1. **v0.8**: BYO mode فقط (۲ هفته)
-2. **v0.9**: Managed RunPod اضافه (۴ هفته)
-3. **v1.0**: Tailscale overlay برای NAT'd home servers (۲ هفته)
-4. **هرگز**: managed Modal + multi-cloud abstraction layer
+1. **v0.8**: BYO mode only (2 weeks)
+2. **v0.9**: add Managed RunPod (4 weeks)
+3. **v1.0**: add Tailscale overlay for NAT'd home servers (2 weeks)
+4. **Never**: managed Modal + multi-cloud abstraction layer
    (over-engineering)
 
-این مسیر، پروژه را از «یک Whisper desktop tool» به «desktop +
-burst-compute on demand» تبدیل می‌کند بدون اینکه نقطه قوت offline +
-privacy-first را از دست بدهد.
+This path turns the project from "a Whisper desktop tool" into
+"desktop + burst-compute on demand" without sacrificing the offline +
+privacy-first edge.
 
 ---
 
-## ۱۳. مراجع کلیدی (~۴۰ منبع جمع شد، انتخاب مهم‌ترین‌ها)
+## 13. Key references (~40 sources gathered, key ones below)
 
 ### Cloud providers
 - [RunPod Pricing](https://www.runpod.io/pricing)
@@ -355,7 +360,7 @@ privacy-first را از دست بدهد.
 - [RunPod Python SDK on GitHub](https://github.com/runpod/runpod-python)
 - [runpod-workers/worker-faster_whisper](https://github.com/runpod-workers/worker-faster_whisper)
 - [RunPod Security & Compliance](https://docs.runpod.io/references/security-and-compliance)
-- [RunPod SOC 2 Type II Announcement](https://www.runpod.io/blog/runpod-achieves-soc-2-type-ii-certification)
+- [RunPod SOC 2 Type II announcement](https://www.runpod.io/blog/runpod-achieves-soc-2-type-ii-certification)
 - [Vast.ai Pricing](https://vast.ai/pricing)
 - [Vast.ai Python SDK Quickstart](https://docs.vast.ai/sdk/python/quickstart)
 - [Vast.ai CLI on GitHub](https://github.com/vast-ai/vast-cli)
@@ -364,39 +369,39 @@ privacy-first را از دست بدهد.
 - [Hetzner GEX131 — RTX PRO 6000 Blackwell](https://www.hetzner.com/dedicated-rootserver/gex131/)
 - [Modal Pricing](https://modal.com/pricing)
 - [Replicate WhisperX (victor-upmeet)](https://replicate.com/victor-upmeet/whisperx)
-- [SaladCloud Whisper Large V3 Cost Study](https://blog.salad.com/whisper-large-v3/)
+- [SaladCloud Whisper Large V3 cost study](https://blog.salad.com/whisper-large-v3/)
 
 ### Architecture references
 - [VS Code Remote Development using SSH](https://code.visualstudio.com/docs/remote/ssh)
 - [JetBrains Gateway Remote Development](https://www.jetbrains.com/help/idea/remote-development-a.html)
 - [Tailscale Auth Keys](https://tailscale.com/kb/1085/auth-keys)
 - [Tailscale Ephemeral Nodes](https://tailscale.com/docs/features/ephemeral-nodes)
-- [tailscale Python package on PyPI](https://pypi.org/project/tailscale/)
+- [`tailscale` Python package on PyPI](https://pypi.org/project/tailscale/)
 - [Paramiko SSH client API](https://docs.paramiko.org/en/stable/api/client.html)
 - [Paramiko SFTP API](https://docs.paramiko.org/en/stable/api/sftp.html)
-- [Paramiko Key handling](https://docs.paramiko.org/en/stable/api/keys.html)
+- [Paramiko key handling](https://docs.paramiko.org/en/stable/api/keys.html)
 - [Paramiko reverse-tunnel demo](https://github.com/paramiko/paramiko/blob/main/demos/rforward.py)
 - [Paramiko ControlMaster limitation — issue 852](https://github.com/paramiko/paramiko/issues/852)
 - [Deploy SSH public key with paramiko (29a.ch)](https://29a.ch/2010/9/8/deploy-ssh-public-key-multiple-servers-python-paramiko)
 
 ### Credential storage
-- [Python keyring package on PyPI](https://pypi.org/project/keyring/)
+- [`keyring` Python package on PyPI](https://pypi.org/project/keyring/)
 
 ### UX references
-- [MacWhisper Cloud Transcription Setup](https://macwhisper.helpscoutdocs.com/article/18-cloud-transcription)
+- [MacWhisper Cloud Transcription setup](https://macwhisper.helpscoutdocs.com/article/18-cloud-transcription)
 - [Sonix API](https://sonix.ai/api)
-- [Syncthing Introducer Configuration](https://docs.syncthing.net/users/introducer.html)
+- [Syncthing Introducer configuration](https://docs.syncthing.net/users/introducer.html)
 
 ### Performance / benchmarks
-- [Whisper Performance on RTX 4090 (Wehrens)](https://owehrens.com/whisper-performance-on-nvidia-rtx-4090/)
-- [SynpixCloud 2026 GPU Pricing Comparison](https://www.synpixcloud.com/blog/cloud-gpu-pricing-comparison-2026)
-- [Spheron 2026 GPU Cloud Pricing](https://www.spheron.network/blog/gpu-cloud-pricing-comparison-2026/)
+- [Whisper performance on RTX 4090 (Wehrens)](https://owehrens.com/whisper-performance-on-nvidia-rtx-4090/)
+- [SynpixCloud 2026 GPU pricing comparison](https://www.synpixcloud.com/blog/cloud-gpu-pricing-comparison-2026)
+- [Spheron 2026 GPU cloud pricing](https://www.spheron.network/blog/gpu-cloud-pricing-comparison-2026/)
 - [Linuxconfig — faster-whisper on Ubuntu + GPU + systemd](https://linuxconfig.org/how-to-use-openai-whisper-voice-to-text-with-gpu-on-debian-ubuntu)
 - [Hugging Face Inference Providers](https://huggingface.co/docs/inference-providers/index)
 
 ---
 
-## ۱۴. وابستگی‌های لازم برای v0.9
+## 14. Required dependencies for v0.9
 
 ```toml
 # pyproject.toml additions for the "remote" optional group:
@@ -414,36 +419,38 @@ remote_tailscale = [
 ]
 ```
 
-نکته: نگه داشتن aspectsهای remote در optional groups مهم است — کاربر
-local-only هیچ ضرری نمی‌بیند.
+Keep all remote bits in optional groups so local-only users see no
+penalty.
 
 ---
 
-## ۱۵. آیتم‌های آینده / "Worth investigating"
+## 15. Worth-investigating future items
 
-- **Multi-server load balancing**: کاربر چند سرور دارد، اپ خودکار کار
-  را بین آن‌ها تقسیم می‌کند. نیاز به work-stealing queue. M-L effort.
-- **Hybrid mode**: کارهای کوچک local، کارهای بزرگ remote. سیاست
-  decision در config. S-M effort.
-- **Cost guardrails**: کاربر سقف ماهانه می‌گذارد، اپ قبل از تجاوز هشدار
-  می‌دهد یا متوقف می‌کند. S effort.
-- **Provider abstraction layer**: مشترک بین RunPod / Vast.ai / Replicate
-  / Hetzner. **Over-engineering ریسک** — بهتر است هر provider در یک
-  module جداگانه باشد.
-- **Audit log روی remote**: همه‌ی job ها در سرور log می‌شوند، کاربر
-  می‌تواند verify کند داده‌اش drift نکرده. M effort.
+- **Multi-server load balancing**: user has several servers; the app
+  auto-shards work across them. Needs a work-stealing queue. M-L
+  effort.
+- **Hybrid mode**: small jobs local, big jobs remote. Decision policy
+  in config. S-M effort.
+- **Cost guardrails**: monthly cap; app warns or pauses before
+  exceeding. S effort.
+- **Provider abstraction layer**: common over RunPod / Vast.ai /
+  Replicate / Hetzner. **Over-engineering risk** — better to keep each
+  provider in its own module.
+- **Audit log on the remote**: all jobs logged on the server so the
+  user can verify no drift. M effort.
 
 ---
 
-## ۱۶. وابستگی این تحقیق به v0.8
+## 16. Dependency on v0.8
 
-این فاز (remote-mode) **بعد از** Track 1-3 از v0.8 منطقی است:
+This phase (remote-mode) makes sense **after** Tracks 1-3 of v0.8:
 
-- اگر Track 1 (Live mic) باشد، remote mode می‌تواند streaming را هم به
-  remote بفرستد — یک طراحی پیچیده‌تر.
-- اگر Track 2 (Local LLM) باشد، چالش جدیدی پیش می‌آید: آیا LLM روی
-  remote اجرا شود یا local؟ پاسخ: روی remote اگر GPU است (سریع‌تر +
-  cheap)، روی local اگر CPU است.
-- اگر Track 3 (Hardware wizard) باشد، خوبست. وابستگی ندارد.
+- If Track 1 (Live mic) ships, remote mode can stream to the remote
+  too — a more complex design.
+- If Track 2 (Local LLM) ships, a new question arises: should the LLM
+  run on the remote or local? Answer: remote if GPU available
+  (faster + cheap), local otherwise.
+- If Track 3 (Hardware wizard) ships, no dependency.
 
-**توصیه**: v0.8 = features، v0.9 = remote-mode. ترتیب درست است.
+**Recommended order**: v0.8 = features, v0.9 = remote-mode. The order
+matters.
