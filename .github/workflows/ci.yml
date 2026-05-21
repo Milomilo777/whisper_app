@@ -11,9 +11,9 @@ name: CI
 
 on:
   push:
-    branches: [master, "release/**", "feature/**"]
+    branches: [master, "release/**", "feature/**", "chore/**"]
   pull_request:
-    branches: [master, "release/**"]
+    branches: [master, "release/**", "chore/**"]
 
 jobs:
   unit-tests:

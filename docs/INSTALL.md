@@ -15,13 +15,13 @@ This guide is for someone who doesn't know Python or programming and just wants 
 
 ## Install — pick one of three methods
 
-v0.7.1 ships three independent installers. Pick the one that fits.
+v1.0.0 ships three independent installers. Pick the one that fits.
 
 | Method | File | Size | What it is |
 |---|---|---|---|
-| **Portable** | [`WhisperProject-v0.7.1-Portable.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Portable.exe) | 447 MB | A single file. Double-click and it runs. Nothing is installed; no shortcut, no Start Menu entry. Best for USB sticks or one-off use. |
-| **Compact** | [`WhisperProject-v0.7.1-Setup-Compact.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Compact.exe) | 326 MB | An installer that unpacks the app to Program Files, adds a Start Menu shortcut and an Add/Remove Programs entry, and runs noticeably faster on startup. Best for everyday Windows users. |
-| **Standard** | [`WhisperProject-v0.7.1-Setup-Standard.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v0.7.1/WhisperProject-v0.7.1-Setup-Standard.exe) | 349 MB | Same shape as Compact but ships a full Python interpreter on disk so the entire source tree is browsable after install. Best for users who want transparency for debugging. |
+| **Portable** | [`WhisperProject-v1.0.0-Portable.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v1.0.0/WhisperProject-v1.0.0-Portable.exe) | 447 MB | A single file. Double-click and it runs. Nothing is installed; no shortcut, no Start Menu entry. Best for USB sticks or one-off use. |
+| **Compact** | [`WhisperProject-v1.0.0-Setup-Compact.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v1.0.0/WhisperProject-v1.0.0-Setup-Compact.exe) | 326 MB | An installer that unpacks the app to Program Files, adds a Start Menu shortcut and an Add/Remove Programs entry, and runs noticeably faster on startup. Best for everyday Windows users. |
+| **Standard** | [`WhisperProject-v1.0.0-Setup-Standard.exe`](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/download/v1.0.0/WhisperProject-v1.0.0-Setup-Standard.exe) | 349 MB | Same shape as Compact but ships a full Python interpreter on disk so the entire source tree is browsable after install. Best for users who want transparency for debugging. |
 
 All three transcribe a real video end-to-end on a clean Windows 10/11 x64 machine.
 
@@ -30,7 +30,7 @@ All three transcribe a real video end-to-end on a clean Windows 10/11 x64 machin
 
 ### If you picked Portable
 
-Move `WhisperProject-v0.7.1-Portable.exe` anywhere convenient
+Move `WhisperProject-v1.0.0-Portable.exe` anywhere convenient
 (`C:\Apps\`, your Desktop, a USB stick). Double-click to launch.
 The first launch unpacks to a temporary folder under `%TEMP%`
 (takes about 5–10 seconds). Subsequent launches feel about the

@@ -46,21 +46,22 @@ When a build is about to start (PyInstaller / Inno Setup):
 
 ## Permitted operations on this branch
 
-The current working branch is `release/v0.7.0-installer-3-options`.
-The following are pre-authorised for all future hands-off sessions:
+The current working branch is `chore/cleanup-hardening`. It carries
+the v1.0.0 release. The following are pre-authorised:
 
-  - `git push origin release/v0.7.0-installer-3-options`
-  - `git tag -fa v0.7.0 …` + `git push --force origin refs/tags/v0.7.0`
-  - `gh release upload v0.7.0 dist/*.exe dist_installer/*.exe --clobber`
-  - `gh release edit v0.7.0 --notes-file docs/RELEASE_NOTES_v0.7.0.md`
+  - `git push origin chore/cleanup-hardening`
+  - `git tag -a vX.Y.Z …` + `git push origin vX.Y.Z`
+  - `gh release create vX.Y.Z dist/*.exe dist_installer/*.exe`
+  - `gh release edit vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md`
 
-The following remain forbidden unless the user explicitly
-asks for them in the current session:
+Forbidden unless explicitly asked:
 
   - Any operation on `master` (checkout, merge, push, …)
   - Code-signing the exe
   - Editing `.git/config`
-  - `git push --force` against anything except the v0.7.0 tag
+  - `git push --force` against anything (the v1.0.0 release is
+    already public — force-push would invalidate the user's
+    downloaded artefacts)
 
 ## Style & scope
 
@@ -82,11 +83,11 @@ asks for them in the current session:
 
 ## Handoff file
 
-`docs/HANDOFF_NEXT_SESSION.md` is the source of truth for what's
+`docs/SESSION_HANDOFF_NEXT.md` is the source of truth for what's
 left. Read it on session start, update it at session end.
 
-## The 2-line restart prompt
+## The 1-line restart prompt
 
 ```
-ادامه برنچ release/v0.7.0-installer-3-options را پیش ببر طبق docs/HANDOFF_NEXT_SESSION.md — همه آیتم‌های "Remaining work" را به ترتیب با کیفیت بالا پیاده کن، تست واقعی بگیر، کامیت و پوش کن، رلیز را آپدیت کن. هیچ سوالی از من نپرس، تا انتها هندزفری پیش برو.
+Read docs/SESSION_HANDOFF_NEXT.md first, then continue on the chore/cleanup-hardening branch. Don't touch master. Don't force-push (v1.0.0 is public).
 ```
