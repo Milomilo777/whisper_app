@@ -61,6 +61,69 @@ def normalise_hub_path(raw: str | Path) -> str:
     return str(Path(str(raw).strip()).expanduser().resolve())
 
 
+# System directories that should never be a hub folder. The download
+# would either fail with a confusing PermissionError (the app does
+# not have elevation) or, worse, succeed and pollute a system folder
+# with 3 GB of model files (audit P1-19).
+_FORBIDDEN_HUB_ROOTS: tuple[str, ...] = (
+    r"c:\\windows",
+    r"c:\\program files",
+    r"c:\\program files (x86)",
+    r"c:\\programdata",
+    "/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/system",  # macOS / generic
+    "/private",
+)
+
+
+def validate_hub_path(raw: str | Path) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for a candidate hub folder.
+
+    Rejects:
+
+    * Empty / whitespace-only input.
+    * Paths under system directories (``C:\\Windows``, ``C:\\Program
+      Files``, ``/etc``, ``/usr``, ...). These aren't writable
+      without elevation and pollute the OS install if they were.
+    * The Windows install root itself (``C:\\``, ``D:\\``).
+
+    Used by the hub-setup dialog at OK time so the user gets a
+    clear message instead of a downstream PermissionError half an
+    hour into the download.
+    """
+    if not raw:
+        return False, "Please pick a folder."
+    try:
+        resolved = Path(str(raw).strip()).expanduser().resolve()
+    except (OSError, ValueError) as e:
+        return False, f"That path isn't valid: {e}"
+
+    text = str(resolved)
+    lowered = text.lower().replace("/", os.sep)
+
+    # Top-level drive on Windows — refuse.
+    if os.name == "nt":
+        if len(text) <= 3 and text.endswith(":\\"):
+            return False, (
+                "Don't pick a drive root — create or pick a sub-folder."
+            )
+
+    for bad in _FORBIDDEN_HUB_ROOTS:
+        # Normalise comparison on case-insensitive Windows.
+        bad_norm = bad.lower().replace("/", os.sep).replace("\\\\", "\\")
+        if lowered == bad_norm or lowered.startswith(bad_norm + os.sep):
+            return False, (
+                f"That folder ({bad}) is a system directory and isn't "
+                "safe for a 3 GB model cache. Pick a folder in your "
+                "user profile (Documents, Desktop, an external drive, "
+                "etc) instead."
+            )
+    return True, ""
+
+
 def model_folder_for(
     hub_folder: str | Path | None,
     model_name: str,

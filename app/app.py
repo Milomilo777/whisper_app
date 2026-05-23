@@ -809,7 +809,14 @@ class App:
         self.row_map.pop(iid, None)
 
     def _stop_worker(self) -> None:
-        """Structured shutdown — shutdown msg → terminate → kill."""
+        """Structured shutdown — shutdown msg → terminate → kill.
+
+        The shutdown JSON is best-effort: when the worker has
+        already closed its end of stdin (or the pipe is broken for
+        any reason), the write raises and we fall through to
+        ``proc.wait()`` → ``terminate()`` → ``kill()`` without
+        leaking a daemon thread (audit P1-13).
+        """
         worker = self.worker
         if worker is None:
             return
@@ -818,27 +825,42 @@ class App:
             self.worker = None
             return
 
-        # 1. Send {"action":"shutdown"} via stdin in a daemon thread so
-        #    a full pipe never blocks the Tk main thread.
-        def _async_shutdown() -> None:
-            try:
-                if proc.stdin:
-                    proc.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
-                    proc.stdin.flush()
-            except Exception:
-                logger.debug("stop_worker stdin shutdown failed", exc_info=True)
-        threading.Thread(
-            target=_async_shutdown, name="worker-shutdown", daemon=True,
-        ).start()
+        # 1. Try the shutdown command synchronously, but tolerate a
+        #    closed pipe. The write is microseconds when it works
+        #    and OSError-immediate when it doesn't; there's no
+        #    realistic scenario where blocking the Tk thread for
+        #    "long enough to matter" comes from this single small
+        #    JSON write. The previous fire-and-forget daemon thread
+        #    leaked one thread per cancel/transcribe cycle when the
+        #    worker had stdin closed.
+        try:
+            if proc.stdin:
+                proc.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
+                proc.stdin.flush()
+        except (OSError, BrokenPipeError, ValueError):
+            # Worker's stdin already closed (graceful or otherwise).
+            # Fall through to proc.wait — the worker is already
+            # winding down, the wait below will reap it shortly.
+            logger.debug("stop_worker stdin shutdown failed", exc_info=True)
 
-        # 2. Wait briefly.
+        # 2. Always close our end of stdin too — sending EOF makes
+        #    the worker's ``_read_command_line`` return None on the
+        #    very next iteration, which is its alternate graceful
+        #    shutdown path.
+        try:
+            if proc.stdin:
+                proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+        # 3. Wait briefly.
         try:
             proc.wait(timeout=3.0)
             self.worker = None
             return
         except subprocess.TimeoutExpired:
             logger.info("Worker ignored shutdown; terminating")
-        # 3. terminate.
+        # 4. terminate.
         try:
             proc.terminate()
         except Exception:
@@ -849,7 +871,7 @@ class App:
             return
         except subprocess.TimeoutExpired:
             logger.warning("Worker ignored terminate; killing")
-        # 4. kill.
+        # 5. kill.
         try:
             proc.kill()
         except Exception:

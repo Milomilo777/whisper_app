@@ -134,6 +134,12 @@ def install_excepthook(
 ) -> None:
     """Install a ``sys.excepthook`` that shows a CrashDialog.
 
+    Also installs the same handler as Tk's
+    ``report_callback_exception`` when ``get_root()`` returns a live
+    root, so exceptions raised inside ``command=`` callbacks
+    (and ``after()`` callbacks) get the same friendly crash dialog
+    rather than being silently dumped to stderr by Tk (audit P1-12).
+
     Parameters
     ----------
     get_root:
@@ -145,11 +151,12 @@ def install_excepthook(
 
     previous = sys.excepthook
 
-    def _hook(
+    def _report(
         exc_type: "type[BaseException]",
         exc_value: BaseException,
         tb: object,
     ) -> None:
+        """Unified handler used by both sys.excepthook AND Tk callbacks."""
         try:
             logger.error(
                 "UNHANDLED %s: %s", exc_type.__name__, exc_value,
@@ -177,4 +184,24 @@ def install_excepthook(
             # traceback in stderr.
             previous(exc_type, exc_value, tb)  # type: ignore[arg-type]
 
-    sys.excepthook = _hook
+    sys.excepthook = _report
+
+    # Wire Tk's per-callback exception hook to the same handler.
+    # Tk passes the live root; report_callback_exception is a method
+    # with signature (exc, val, tb) when called by Tk itself.
+    def _tk_callback_exception(
+        _self: "tk.Misc", exc: "type[BaseException]", val: BaseException, tb: object,
+    ) -> None:
+        _report(exc, val, tb)
+
+    # Patch the class-level hook so EVERY Tk widget in the process
+    # routes its callback errors through us. Tk uses the bound
+    # method, so this needs to live on tk.Tk (and Misc — Tk dispatches
+    # via Misc.report_callback_exception in CPython >= 3.10).
+    try:
+        tk.Tk.report_callback_exception = _tk_callback_exception  # type: ignore[assignment,method-assign]
+        tk.Misc.report_callback_exception = _tk_callback_exception  # type: ignore[assignment,method-assign]
+    except (AttributeError, TypeError):
+        # Older / patched Tk builds may forbid this — fall back to
+        # the per-instance assignment in the App if needed.
+        logger.debug("Could not install Tk callback exception hook")

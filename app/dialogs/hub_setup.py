@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
 from core import hub as _hub
@@ -148,7 +148,16 @@ class HubSetupDialog(tk.Toplevel):
         self._on_ok()
 
     def _on_ok(self) -> None:
-        path = _hub.normalise_hub_path(self._path_var.get())
+        raw = (self._path_var.get() or "").strip()
+        ok, reason = _hub.validate_hub_path(raw)
+        if not ok:
+            messagebox.showerror(
+                "Pick a different folder",
+                reason,
+                parent=self,
+            )
+            return
+        path = _hub.normalise_hub_path(raw)
         self._chosen_path = path
         self._config["hub_folder"] = path
         # Clear model_path so the runtime fallback re-derives it from
