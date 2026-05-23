@@ -13,13 +13,15 @@ twice. Phase 2a additions:
 """
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from faster_whisper import WhisperModel
 
@@ -609,6 +611,7 @@ def _run_post_pipeline(
                     task.file_path,
                     segments_data,
                     language=detected_lang or None,
+                    log_cb=log_cb,
                 )
                 if ok:
                     log("Word alignment refined.", log_cb)
@@ -765,6 +768,76 @@ def _apply_runtime_overrides(task: "TranscriptionTask") -> dict[str, Any]:
     return runtime_cfg
 
 
+@contextmanager
+def _runtime_overrides_scope(
+    task: "TranscriptionTask",
+) -> Iterator[dict[str, Any]]:
+    """Apply per-folder ``.whisperproject.json`` overrides for one
+    file, then restore ``config`` to its pre-override state.
+
+    The worker subprocess is long-lived: it transcribes many files
+    in sequence reusing the module-level ``config`` dict. Before
+    this scope existed, ``_apply_runtime_overrides`` would mutate
+    ``config`` in place with the keys from a file's nearest project
+    file — and those mutations leaked into every later file the
+    worker handled. Example: file A in ``/A`` sets
+    ``diarization_enabled=true`` via its project file; file B in
+    ``/B`` (no project file) then inherited diarisation silently.
+    Same shape for any other key an override can set
+    (``output_formats``, ``transcribe_language``, ``whisper_model``,
+    …) — audit P0-6.
+
+    The fix: snapshot exactly the keys the override is about to
+    write (read from disk before applying), then on exit put each
+    one back to its pre-override value. Keys that didn't exist in
+    ``config`` before the override are removed on exit. We snapshot
+    ONLY the keys the override touches — not the whole ``config`` —
+    so the restore is precise and doesn't fight with the
+    unconditional diarisation-default block at the tail of
+    ``_apply_runtime_overrides``.
+
+    Yields the freshly-loaded ``runtime_cfg`` so callers don't have
+    to call ``load_config()`` a second time.
+    """
+    from .config import load_project_overrides
+
+    snapshot: dict[str, Any] = {}
+    added_keys: set[str] = set()
+    try:
+        try:
+            overrides = load_project_overrides(task.file_path)
+        except Exception:  # noqa: BLE001
+            # ``_apply_runtime_overrides`` has its own try/except for
+            # the same call; mirror it so a corrupt project file never
+            # blocks a transcription. Empty overrides means no
+            # snapshot and no restore needed.
+            logger.exception(
+                "project-overrides snapshot raised for %s", task.file_path,
+            )
+            overrides = {}
+
+        for key in overrides:
+            if key in config:
+                value = config[key]
+                if isinstance(value, dict):
+                    # Deep-copy nested dicts so a later
+                    # ``_deep_merge_dict`` on ``config[key]`` doesn't
+                    # also mutate our snapshot value (same dict id).
+                    snapshot[key] = copy.deepcopy(value)
+                else:
+                    snapshot[key] = value
+            else:
+                added_keys.add(key)
+
+        runtime_cfg = _apply_runtime_overrides(task)
+        yield runtime_cfg
+    finally:
+        for key, value in snapshot.items():
+            config[key] = value
+        for key in added_keys:
+            config.pop(key, None)
+
+
 def _build_transcribe_kwargs(task: "TranscriptionTask") -> dict[str, Any]:
     """Assemble the kwargs dict passed to WhisperModel.transcribe.
 
@@ -803,133 +876,137 @@ def transcribe(
     # call (including the alt-backend dispatcher) inherits the
     # prefix without each call site having to manage it.
     log_cb = _with_task_prefix(log_cb, task)
-    # Backend dispatch — when the user has chosen a non-default
-    # engine via config["transcribe_backend"], delegate to a backend
-    # implementation. The original faster_whisper code below remains
-    # the default path so the existing unit + smoke tests keep
-    # working without monkeypatch churn.
-    runtime_cfg = _apply_runtime_overrides(task)
-
-    backend_name = (
-        str(config.get("transcribe_backend")
-            or runtime_cfg.get("transcribe_backend")
-            or "faster_whisper").strip().lower()
-    )
-    logger.info(
-        "transcribe_backend=%s file=%s",
-        backend_name, task.file_path,
-    )
-    if backend_name and backend_name != "faster_whisper":
-        _transcribe_via_alt_backend(
-            backend_name, task, progress_cb, log_cb, language_cb
+    # Wrap the per-file work in ``_runtime_overrides_scope`` so any
+    # ``.whisperproject.json`` mutation of the module-level ``config``
+    # is reverted before the next file runs (audit P0-6). The scope
+    # also returns the freshly-loaded ``runtime_cfg`` so the backend
+    # dispatch below can read it without a second ``load_config``.
+    with _runtime_overrides_scope(task) as runtime_cfg:
+        # Backend dispatch — when the user has chosen a non-default
+        # engine via config["transcribe_backend"], delegate to a backend
+        # implementation. The original faster_whisper code below remains
+        # the default path so the existing unit + smoke tests keep
+        # working without monkeypatch churn.
+        backend_name = (
+            str(config.get("transcribe_backend")
+                or runtime_cfg.get("transcribe_backend")
+                or "faster_whisper").strip().lower()
         )
-        return
-
-    global MODEL
-    while not MODEL_READY:
-        if MODEL_ERROR:
-            raise RuntimeError(MODEL_ERROR)
-        time.sleep(0.5)
-
-    # Optional Demucs vocal-separation pre-process (v0.8 Phase 2).
-    # Returns the input path unchanged when demucs isn't installed or
-    # the feature is off, so this is safe to always call.
-    audio_path = task.file_path
-    if config.get("demucs_enabled", False):
-        try:
-            from . import separator as _sep
-            audio_path = _sep.separate_vocals(
-                task.file_path,
-                enabled=True,
-                log=log_cb,
+        logger.info(
+            "transcribe_backend=%s file=%s",
+            backend_name, task.file_path,
+        )
+        if backend_name and backend_name != "faster_whisper":
+            _transcribe_via_alt_backend(
+                backend_name, task, progress_cb, log_cb, language_cb
             )
-        except Exception as e:  # noqa: BLE001
-            log(f"Demucs separation failed (using original audio): {e}", log_cb)
-            audio_path = task.file_path
-
-    duration = get_duration(audio_path)
-    start = time.time()
-    log(f"Processing: {audio_path}", log_cb)
-
-    assert MODEL is not None
-    want_words = bool(config.get("word_timestamps", False))
-
-    transcribe_kwargs = _build_transcribe_kwargs(task)
-    runner = PIPELINE if PIPELINE is not None else MODEL
-    if PIPELINE is not None:
-        transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
-
-    segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
-
-    if getattr(info, "language", None):
-        lang_code = str(info.language)
-        lang_prob = float(getattr(info, "language_probability", 0.0))
-        # Audit B10: warn the user when language detection was a
-        # low-confidence guess. Whisper has been known to return
-        # "Welsh" at 5 % confidence for ambient noise; downstream
-        # tools then tag the SRT with the wrong language code.
-        if lang_prob < 0.5:
-            log(
-                f"WARN: detected language={lang_code} with low confidence "
-                f"({lang_prob:.0%}). The output language tag may be wrong.",
-                log_cb,
-            )
-            logger.warning(
-                "language_detection_low_confidence file=%s language=%s "
-                "probability=%.3f",
-                task.file_path, lang_code, lang_prob,
-            )
-        if language_cb:
-            try:
-                language_cb(lang_code, lang_prob)
-            except Exception:
-                logger.exception("language_cb raised")
-        if hasattr(task, "detected_language"):
-            task.detected_language = lang_code
-            task.language_probability = lang_prob
-
-    base = os.path.splitext(task.file_path)[0]
-
-    segments_data: list[dict[str, Any]] = []
-    for seg in segments:
-        if task.cancelled:
-            log("Task cancelled", log_cb)
             return
-        while task.paused and not task.cancelled:
-            time.sleep(0.2)
 
-        percent = min(100, int((seg.end / duration) * 100)) if duration else 0
-        msg = f"[{percent}%] {fmt(seg.start)} --> {fmt(seg.end)} | {(seg.text or '').strip()}"
-        log(msg, log_cb)
+        global MODEL
+        while not MODEL_READY:
+            if MODEL_ERROR:
+                raise RuntimeError(MODEL_ERROR)
+            time.sleep(0.5)
+
+        # Optional Demucs vocal-separation pre-process (v0.8 Phase 2).
+        # Returns the input path unchanged when demucs isn't installed or
+        # the feature is off, so this is safe to always call.
+        audio_path = task.file_path
+        if config.get("demucs_enabled", False):
+            try:
+                from . import separator as _sep
+                audio_path = _sep.separate_vocals(
+                    task.file_path,
+                    enabled=True,
+                    log=log_cb,
+                )
+            except Exception as e:  # noqa: BLE001
+                log(f"Demucs separation failed (using original audio): {e}", log_cb)
+                audio_path = task.file_path
+
+        duration = get_duration(audio_path)
+        start = time.time()
+        log(f"Processing: {audio_path}", log_cb)
+
+        assert MODEL is not None
+        want_words = bool(config.get("word_timestamps", False))
+
+        transcribe_kwargs = _build_transcribe_kwargs(task)
+        runner = PIPELINE if PIPELINE is not None else MODEL
+        if PIPELINE is not None:
+            transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
+
+        segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
+
+        if getattr(info, "language", None):
+            lang_code = str(info.language)
+            lang_prob = float(getattr(info, "language_probability", 0.0))
+            # Audit B10: warn the user when language detection was a
+            # low-confidence guess. Whisper has been known to return
+            # "Welsh" at 5 % confidence for ambient noise; downstream
+            # tools then tag the SRT with the wrong language code.
+            if lang_prob < 0.5:
+                log(
+                    f"WARN: detected language={lang_code} with low confidence "
+                    f"({lang_prob:.0%}). The output language tag may be wrong.",
+                    log_cb,
+                )
+                logger.warning(
+                    "language_detection_low_confidence file=%s language=%s "
+                    "probability=%.3f",
+                    task.file_path, lang_code, lang_prob,
+                )
+            if language_cb:
+                try:
+                    language_cb(lang_code, lang_prob)
+                except Exception:
+                    logger.exception("language_cb raised")
+            if hasattr(task, "detected_language"):
+                task.detected_language = lang_code
+                task.language_probability = lang_prob
+
+        base = os.path.splitext(task.file_path)[0]
+
+        segments_data: list[dict[str, Any]] = []
+        for seg in segments:
+            if task.cancelled:
+                log("Task cancelled", log_cb)
+                return
+            while task.paused and not task.cancelled:
+                time.sleep(0.2)
+
+            percent = min(100, int((seg.end / duration) * 100)) if duration else 0
+            msg = f"[{percent}%] {fmt(seg.start)} --> {fmt(seg.end)} | {(seg.text or '').strip()}"
+            log(msg, log_cb)
+
+            if progress_cb:
+                progress_cb(percent)
+
+            segments_data.append(_segment_to_dict(seg, want_words))
+
+        # Speaker diarization (opt-in) + word-level alignment (opt-in).
+        detected_lang = str(getattr(info, "language", "") or "")
+        speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb, progress_cb)
+
+        written = _write_outputs(
+            base,
+            segments_data,
+            task.file_path,
+            lang=detected_lang,
+            speaker_count=speaker_count,
+        )
+        chapters_attr = getattr(task, "_chapters_for_writer", None) or []
+        chapter_path = _write_chapter_sidecar(base, chapters_attr)
+        if chapter_path:
+            written.append(chapter_path)
+        log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
+            log_cb)
 
         if progress_cb:
-            progress_cb(percent)
+            progress_cb(100)
 
-        segments_data.append(_segment_to_dict(seg, want_words))
-
-    # Speaker diarization (opt-in) + word-level alignment (opt-in).
-    detected_lang = str(getattr(info, "language", "") or "")
-    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb, progress_cb)
-
-    written = _write_outputs(
-        base,
-        segments_data,
-        task.file_path,
-        lang=detected_lang,
-        speaker_count=speaker_count,
-    )
-    chapters_attr = getattr(task, "_chapters_for_writer", None) or []
-    chapter_path = _write_chapter_sidecar(base, chapters_attr)
-    if chapter_path:
-        written.append(chapter_path)
-    log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
-        log_cb)
-
-    if progress_cb:
-        progress_cb(100)
-
-    elapsed = time.time() - start
-    log(f"Done in {elapsed:.2f}s", log_cb)
+        elapsed = time.time() - start
+        log(f"Done in {elapsed:.2f}s", log_cb)
 
 
 def _transcribe_via_alt_backend(
