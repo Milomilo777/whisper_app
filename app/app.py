@@ -54,6 +54,19 @@ logger = logging.getLogger(__name__)
 RECENT_LIMIT = 5
 LOG_PANEL_LINES = 200
 
+# Language picker — (display_label, faster-whisper ISO code or empty
+# string for auto-detect). Kept deliberately short: auto-detect works
+# on 99 languages out of the box; this list is just for the cases
+# where the user wants to *force* a language because auto-detect
+# guesses wrong on the first second or two of audio (common with
+# music intros).
+LANGUAGE_CHOICES: list[tuple[str, str]] = [
+    ("Auto-detect", ""),
+    ("English", "en"),
+    ("Chinese", "zh"),
+    ("Vietnamese", "vi"),
+]
+
 
 def _resolve_entry_file() -> str:
     """Path used as the worker's command-line target."""
@@ -121,6 +134,21 @@ class App:
         ttk.Button(
             actions, text="Browse…", command=self._browse,
         ).pack(side="left")
+        # Language picker — small dropdown so the user can force a
+        # language when auto-detect picks wrong. Kept intentionally
+        # short (the four the collaborator actually transcribes);
+        # everything else falls back to auto-detect, which works on
+        # 99 languages.
+        ttk.Label(actions, text="Language:").pack(side="left", padx=(14, 4))
+        self.language_var = tk.StringVar(value=LANGUAGE_CHOICES[0][0])
+        self.language_combo = ttk.Combobox(
+            actions,
+            textvariable=self.language_var,
+            values=[label for label, _code in LANGUAGE_CHOICES],
+            state="readonly",
+            width=18,
+        )
+        self.language_combo.pack(side="left")
         self.transcribe_btn = ttk.Button(
             actions, text="Transcribe", command=self._on_transcribe_click,
             style="Accent.TButton",
@@ -475,7 +503,19 @@ class App:
         self._update_tree_row(task)
         self.status_var.set(f"Transcribing {os.path.basename(task.file_path)}…")
         self.pb["value"] = 0
-        cmd = {"action": "transcribe", "file_path": task.file_path}
+        # Resolve the language picker selection to a faster-whisper
+        # code; empty string means "auto-detect", which the worker
+        # treats as no language override.
+        lang_label = self.language_var.get()
+        lang_code = next(
+            (code for label, code in LANGUAGE_CHOICES if label == lang_label),
+            "",
+        )
+        cmd: dict[str, Any] = {
+            "action": "transcribe", "file_path": task.file_path,
+        }
+        if lang_code:
+            cmd["language"] = lang_code
         try:
             proc.stdin.write(json.dumps(cmd) + "\n")
             proc.stdin.flush()
