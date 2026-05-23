@@ -257,9 +257,20 @@ class HardwareWizard(tk.Toplevel):
         except Exception as e:  # noqa: BLE001
             err = str(e)
         self._benchmark_rtf = rtf
-        self.after(
-            0, lambda: self._benchmark_done(tier, rtf, err)
-        )
+        # Bounce back to the Tk main thread via the App's main-thread
+        # queue. Calling self.after(0, ...) directly from this daemon
+        # thread raises RuntimeError on Python 3.14 (and is undefined
+        # behaviour on earlier 3.x).
+        if self.app is not None:
+            self.app.post_to_main(lambda: self._benchmark_done(tier, rtf, err))
+        else:
+            # No App reference (rare; only happens when the wizard is
+            # opened standalone, e.g. from a test). Fall back to the
+            # legacy after() hop — works on CPython 3.13 and earlier.
+            try:
+                self.after(0, lambda: self._benchmark_done(tier, rtf, err))
+            except Exception:  # noqa: BLE001
+                logger.exception("Benchmark done callback failed to schedule")
 
     def _benchmark_done(self, tier: _hw.Tier, rtf: float | None, err: str | None) -> None:
         try:

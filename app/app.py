@@ -6,9 +6,9 @@ import os
 import sys
 import time
 import tkinter as tk
-from queue import Queue
+from queue import Empty, Full, Queue
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
 import sv_ttk
 
@@ -245,10 +245,22 @@ class App(tk.Tk):
         # background thread; on Python 3.14 calling self.after()
         # from a non-main thread raises RuntimeError. Routing
         # through this queue lets us bounce safely.
+        #
+        # Sibling queue: _main_thread_calls (below) — same idea, but
+        # for arbitrary callables coming from ANY background thread
+        # (burn-subs worker, hardware-wizard benchmark, tray clicks).
+        # _watched_path_queue is filesystem-watcher → main thread;
+        # _main_thread_calls is any-thread → main thread.
         self._watched_path_queue: Queue = Queue(maxsize=2000)
+        # Background threads (burn-subs worker, hardware-wizard benchmark,
+        # tray clicks, …) can't call self.after() directly on Python 3.14
+        # (RuntimeError; undefined on earlier 3.x). They push callables
+        # here; _drain_main_calls() runs them on the Tk main thread.
+        self._main_thread_calls: Queue = Queue(maxsize=2000)
         self._install_tray()
         self._restart_watched_folder()
         self.after(250, self._drain_watched_paths)
+        self.after(50, self._drain_main_calls)
 
         # Auto-resume after crash: history.mark_interrupted() above
         # flipped rows from running → interrupted. If any of those
@@ -431,8 +443,10 @@ class App(tk.Tk):
         def worker() -> None:
             try:
                 burn_subs.burn(task.file_path, srt_path, out_path)
-                # Tk methods touched from a thread → post via after()
-                self.after(0, lambda: self._burn_subs_done(out_path))
+                # Tk methods touched from a thread → route via the
+                # main-thread queue (self.after(0, ...) from a worker
+                # raises RuntimeError on Python 3.14).
+                self.post_to_main(lambda: self._burn_subs_done(out_path))
             except Exception as e:  # noqa: BLE001
                 # Audit B3: log the stack trace before the lossy
                 # UI string-conversion so postmortem diagnosis is
@@ -442,7 +456,7 @@ class App(tk.Tk):
                     task.file_path, out_path,
                 )
                 msg = str(e)
-                self.after(0, lambda: self._burn_subs_failed(msg))
+                self.post_to_main(lambda: self._burn_subs_failed(msg))
 
         from core._threads import safe_thread
         safe_thread(worker, name="burn-subs")
@@ -1552,6 +1566,49 @@ class App(tk.Tk):
                 self.after(250, self._drain_watched_paths)
             except Exception:  # noqa: BLE001
                 pass
+
+    def _drain_main_calls(self) -> None:
+        """Drain the cross-thread queue of main-thread callables.
+
+        Runs on the Tk main thread (scheduled via after()). Any
+        background thread that needs to touch widgets pushes a
+        zero-arg callable into ``_main_thread_calls`` via
+        :meth:`post_to_main`; this method dequeues and runs each on
+        the Tk thread. Bounded to 64 calls per tick so a flood from
+        a misbehaving thread can't stall the Tk loop.
+        """
+        if self._closing:
+            return
+        drained = 0
+        while drained < 64:  # bound to keep the Tk loop responsive
+            try:
+                fn = self._main_thread_calls.get_nowait()
+            except Empty:
+                break
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                logger.exception("Main-thread call raised")
+            drained += 1
+        if not self._closing:
+            try:
+                self.after(50, self._drain_main_calls)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def post_to_main(self, fn: Callable[[], None]) -> None:
+        """Schedule ``fn`` on the Tk main thread from any thread.
+
+        Safe to call from worker / background threads where
+        ``self.after(0, fn)`` would either raise (Python 3.14) or
+        silently no-op (older 3.x with off-thread Tk calls). The
+        callable is drained by :meth:`_drain_main_calls` on the
+        next Tk tick (≤ 50 ms).
+        """
+        try:
+            self._main_thread_calls.put_nowait(fn)
+        except Full:
+            logger.warning("Main-thread call queue full; dropping callback")
 
     def _enqueue_watched_file(self, path: str) -> None:
         """Auto-enqueue a media file dropped into the watched folder.

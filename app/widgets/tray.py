@@ -80,8 +80,10 @@ class TrayController:
     """Wraps a pystray ``Icon`` running on a daemon thread.
 
     The Tk main loop owns all widget calls; tray-thread events (menu
-    clicks) are bounced back to the Tk thread via ``app.after(0, ...)``
-    so we don't touch widgets from a foreign thread.
+    clicks) are bounced back to the Tk thread via ``app.post_to_main``
+    so we don't touch widgets from a foreign thread. ``after(0, ...)``
+    used to work here on CPython 3.13 but raises ``RuntimeError`` on
+    Python 3.14 — the queue hop is the portable fix.
     """
 
     def __init__(self, app: "App") -> None:
@@ -126,7 +128,9 @@ class TrayController:
                     # the rest of the app stops dispatching to us.
                     self._icon = None
                     try:
-                        self.app.after(0, lambda: setattr(self.app, "tray", None))
+                        self.app.post_to_main(
+                            lambda: setattr(self.app, "tray", None)
+                        )
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -146,8 +150,8 @@ class TrayController:
         # Wait briefly for the daemon thread to exit so any in-flight
         # menu-callback bounce to Tk completes BEFORE on_exit's
         # destroy(). Without this join, a tray click that landed
-        # right as the user clicked exit could fire its
-        # ``self.app.after(0, ...)`` on a destroyed Tcl interpreter.
+        # right as the user clicked exit could push its callback
+        # into the main-thread queue on a destroyed Tcl interpreter.
         thread = self._thread
         if thread is not None and thread.is_alive():
             try:
@@ -185,8 +189,14 @@ class TrayController:
     # -- menu actions (run on Tk thread) ---------------------------------
 
     def _post(self, fn: Any) -> None:
+        # pystray fires menu callbacks from its own daemon thread;
+        # post_to_main hops back to the Tk main thread via the App's
+        # main-thread queue. Calling self.app.after(0, fn) here used
+        # to silently no-op on older 3.x and now raises RuntimeError
+        # on Python 3.14 — both modes meant every tray click did
+        # nothing for the user.
         try:
-            self.app.after(0, fn)
+            self.app.post_to_main(fn)
         except Exception:  # noqa: BLE001
             pass
 
