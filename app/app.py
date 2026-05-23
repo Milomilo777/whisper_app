@@ -24,7 +24,7 @@ import threading
 import time
 import tkinter as tk
 import uuid
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
@@ -53,6 +53,14 @@ logger = logging.getLogger(__name__)
 
 RECENT_LIMIT = 5
 LOG_PANEL_LINES = 200
+
+# Events whose loss would leave the UI in a stuck state ("running"
+# forever, no error dialog, etc). Worker_events.put on these uses an
+# unbounded block; high-volume events (``progress``, ``log``,
+# ``heartbeat``) drop when the queue is saturated.
+_LIFECYCLE_EVENTS: frozenset[str] = frozenset({
+    "ready", "startup_error", "done", "error", "worker_exit",
+})
 
 # Language picker — (display_label, faster-whisper ISO code or empty
 # string for auto-detect). Kept deliberately short: auto-detect works
@@ -470,12 +478,11 @@ class App:
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         event = {"event": "log", "message": line}
-                    try:
-                        self.worker_events.put(event, timeout=5.0)
-                    except Exception:
-                        logger.warning("worker_events.put dropped event %r", event)
+                    self._enqueue_worker_event(event)
                 rc = process.wait()
-                self.worker_events.put(
+                # Lifecycle event — block until the parent drains
+                # space rather than risk losing it to a Full queue.
+                self._enqueue_worker_event(
                     {"event": "worker_exit", "return_code": rc, "_token": token},
                 )
             except Exception:
@@ -544,6 +551,27 @@ class App:
 
     # ------------------------------------------------------------ events
 
+    def _enqueue_worker_event(self, event: dict[str, Any]) -> None:
+        """Put one event onto the worker_events queue.
+
+        Lifecycle events (``done``, ``error``, ``worker_exit``,
+        ``startup_error``, ``ready``) MUST NOT be dropped — they
+        drive UI state machines. For those we block until the Tk
+        poll loop drains the queue. High-volume events
+        (``progress``, ``log``, ``heartbeat``) are best-effort:
+        attempt a non-blocking put and log on overflow.
+        """
+        name = event.get("event")
+        if name in _LIFECYCLE_EVENTS:
+            # No timeout — the Tk poll loop runs every 100 ms and
+            # drains the queue in bulk, so blocking is bounded.
+            self.worker_events.put(event)
+            return
+        try:
+            self.worker_events.put_nowait(event)
+        except Full:
+            logger.warning("worker_events.put_nowait dropped event %r", event)
+
     def _poll_worker_events(self) -> None:
         try:
             while True:
@@ -598,11 +626,30 @@ class App:
             return
         if name == "worker_exit":
             rc = event.get("return_code")
-            logger.info("Worker exited (rc=%s)", rc)
+            had_task = bool(self.worker and self.worker.get("task") is not None)
+            logger.info("Worker exited (rc=%s, had_task=%s)", rc, had_task)
             # If the current task was still running, mark it errored.
-            if self.worker and self.worker.get("task") is not None:
+            if had_task:
+                assert self.worker is not None
                 t = self.worker["task"]
                 self._on_task_error(t, f"Worker exited unexpectedly (rc={rc}).")
+            else:
+                # No task was running — usually a clean shutdown. But
+                # if there are waiting tasks the worker silently
+                # vanished (parent stdin closed by an OS hook, AV,
+                # etc), and the queue would otherwise sit at
+                # "waiting" forever. Surface that as a status hint
+                # so the next Transcribe click respawns and picks
+                # them up.
+                waiting = [
+                    t for t in self.queue
+                    if t.status == "waiting" and not t.cancelled
+                ]
+                if waiting and rc not in (0, None):
+                    self.status_var.set(
+                        f"Worker exited unexpectedly (rc={rc}). "
+                        "Click Transcribe to resume."
+                    )
             self.worker = None
             return
 

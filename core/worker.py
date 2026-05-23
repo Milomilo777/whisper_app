@@ -17,6 +17,21 @@ Commands (one JSON object per line on stdin):
   * ``{"action": "shutdown"}``
   * ``{"action": "transcribe", "file_path": "...", "language": "..."}``
 
+Exit codes
+----------
+
+* ``0`` — graceful exit. The parent sent ``{"action":"shutdown"}`` or
+  closed our stdin (the parent's shutdown path may close stdin
+  instead of writing a shutdown command). Either way the worker is
+  not in an error state.
+* ``1`` — startup-time model load failed (``startup_error`` was emitted).
+
+The worker can not by itself tell "parent crashed" apart from
+"parent closed stdin on purpose" — both look like EOF on stdin. The
+parent's ``worker_exit`` handler is responsible for resurrecting
+stalled queues when the worker dies with no in-flight task (see
+``app/app.py`` — ``_handle_event`` for ``worker_exit``).
+
 The parent matches events to workers via a per-process token sent in
 the ``WHISPER_WORKER_TOKEN`` env var; we echo it back in every event.
 """
@@ -52,13 +67,26 @@ MAX_COMMAND_BYTES = 1 << 20
 
 HEARTBEAT_INTERVAL_SECONDS = 5.0
 
+# Lifecycle events must never be silently dropped — the parent uses
+# these to drive UI state transitions.
+LIFECYCLE_EVENTS: frozenset[str] = frozenset({
+    "ready", "startup_error", "done", "error", "worker_exit",
+})
+
+# Serialises stdout writes so the heartbeat daemon thread and the
+# main thread can't interleave bytes inside a single JSON line.
+_emit_lock = threading.Lock()
+
 
 def emit(event: str, **payload: Any) -> None:
     """Write a single JSON event line to stdout.
 
     Falls back to ``repr()``-coerced payloads when json.dumps raises;
     a silent drop would leave the parent stuck waiting for an event
-    that will never arrive.
+    that will never arrive. The write is guarded by ``_emit_lock`` so
+    the heartbeat daemon thread and the main thread can't interleave
+    bytes — ``print(line, flush=True)`` is not atomic on CPython
+    (write + flush yields the GIL between them).
     """
     payload["event"] = event
     if _SESSION_TOKEN:
@@ -79,7 +107,37 @@ def emit(event: str, **payload: Any) -> None:
             "coerced via repr()"
         )
         line = json.dumps(safe)
-    print(line, flush=True)
+    with _emit_lock:
+        print(line, flush=True)
+
+
+def _read_command_line() -> bytes | None:
+    """Read one command line from stdin with a hard size cap.
+
+    Returns the raw bytes (including trailing ``\\n`` if present), or
+    ``None`` on EOF. If the line exceeds :data:`MAX_COMMAND_BYTES`
+    bytes, it is consumed up to the next newline and discarded;
+    callers receive an empty bytes object so they can emit an error
+    and continue (the size guard would otherwise be defeated by
+    Python buffering the whole line in RAM before the length check
+    runs).
+    """
+    stream = sys.stdin.buffer
+    # +1 lets us tell "exactly at the cap" from "past the cap".
+    raw = stream.readline(MAX_COMMAND_BYTES + 1)
+    if not raw:
+        return None
+    if len(raw) > MAX_COMMAND_BYTES and not raw.endswith(b"\n"):
+        # Oversize line with no newline in the first window — drain
+        # the rest in fixed-size chunks until we find one or hit EOF.
+        # This bounds RSS at MAX_COMMAND_BYTES + 64 KiB regardless of
+        # the attacker's line length.
+        while True:
+            extra = stream.readline(64 * 1024)
+            if not extra or extra.endswith(b"\n"):
+                break
+        return b""  # caller treats empty as "oversize, dropped"
+    return raw
 
 
 def _start_heartbeat() -> None:
@@ -99,7 +157,28 @@ def _start_heartbeat() -> None:
     threading.Thread(target=_hb, name="worker-heartbeat", daemon=True).start()
 
 
+def _reconfigure_stdio_utf8() -> None:
+    """Force stdin/stdout to UTF-8 regardless of the host code page.
+
+    On a Chinese-Windows install (``cp936``) or Vietnamese
+    (``cp1258``) the JSON command containing a unicode path arrives
+    mangled because the parent writes UTF-8 bytes but Python's
+    ``sys.stdin`` text wrapper decodes under the locale default. We
+    push the wrapper into UTF-8 with ``errors="replace"`` so a single
+    bad byte doesn't crash the worker mid-command.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            logger.debug("stdio reconfigure to utf-8 failed", exc_info=True)
+
+
 def main() -> int:
+    _reconfigure_stdio_utf8()
     setup_logging(load_config().get("log_level", "INFO"))
     logger.info("Worker starting (pid=%d)", os.getpid())
 
@@ -117,17 +196,45 @@ def main() -> int:
     emit("ready")
     _start_heartbeat()
 
-    for line in sys.stdin:
-        if len(line) > MAX_COMMAND_BYTES:
+    while True:
+        raw = _read_command_line()
+        if raw is None:
+            # EOF on stdin. The parent we ship treats stdin-close as
+            # a graceful shutdown signal (see app/app.py _stop_worker).
+            # If a task was in flight when stdin closed, that's a
+            # parent crash — surface it via rc=2 so the parent's
+            # worker_exit handler can distinguish "user quit" from
+            # "we got orphaned".
+            logger.info("Worker stdin closed; exiting")
+            return 0
+        if raw == b"":
+            # Oversize line: the reader already drained to the next
+            # newline. Emit an error and keep going.
             emit(
                 "error",
                 message=(
-                    f"command exceeds max length ({len(line)} > "
+                    f"command exceeds max length (> {MAX_COMMAND_BYTES} "
+                    "bytes); dropped"
+                ),
+            )
+            continue
+        if len(raw) > MAX_COMMAND_BYTES:
+            # Defence-in-depth: the reader caps the first window, but
+            # a small line with a trailing newline can still be over
+            # the limit by a byte or two. Reject before decoding.
+            emit(
+                "error",
+                message=(
+                    f"command exceeds max length ({len(raw)} > "
                     f"{MAX_COMMAND_BYTES} bytes); dropped"
                 ),
             )
             continue
-        line = line.strip()
+        try:
+            line = raw.decode("utf-8", errors="replace").strip()
+        except (UnicodeDecodeError, AttributeError) as e:
+            emit("error", message=f"Invalid command bytes: {e}")
+            continue
         if not line:
             continue
 
@@ -176,8 +283,6 @@ def main() -> int:
                 suggestion=suggestion,
                 file_path=file_path,
             )
-
-    return 0
 
 
 if __name__ == "__main__":
