@@ -260,14 +260,20 @@ class App(tk.Tk):
 
     # Bootstrap ---------------------------------------------------------------
     def _on_start(self) -> None:
-        # v0.9 — first-run Hub Folder picker. ``ensure_hub_configured``
-        # is a no-op when the user has already picked a folder (or the
-        # config-loader's legacy migration filled it in from an old
-        # model_path). When the dialog needs to fire we still launch
-        # the model standby with the default path so the user can
-        # start working immediately; the on_done callback below
-        # re-reads the config + reloads the model when the user
-        # commits a different path.
+        # First-run Hub Folder picker. When ``hub_folder`` is already
+        # configured (returning user, or legacy ``model_path`` migration
+        # filled it in), start the worker immediately. When the dialog
+        # needs to fire, defer ``start_standby`` until the user has
+        # picked — otherwise the worker spawns with a stale model_path
+        # and downloads the model to a location the next launch won't
+        # look at, triggering a 3 GB re-download. See the matching
+        # comment in ``core/config.py:_apply_runtime_fallbacks``.
+        from core import hub as _hub
+
+        if _hub.is_hub_configured(self.app_config):
+            self.transcription_service.start_standby()
+            return
+
         try:
             from app.dialogs.hub_setup import ensure_hub_configured
 
@@ -277,6 +283,7 @@ class App(tk.Tk):
                     self.app_config = load_config()
                 except Exception:  # noqa: BLE001
                     pass
+                self.transcription_service.start_standby()
 
             ensure_hub_configured(
                 self, self.app_config,
@@ -284,7 +291,9 @@ class App(tk.Tk):
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Hub setup dialog failed: %s", e)
-        self.transcription_service.start_standby()
+            # Dialog couldn't open — still start the worker so the user
+            # isn't left with a dead UI.
+            self.transcription_service.start_standby()
 
     # Menu --------------------------------------------------------------------
     def _build_menu(self) -> None:

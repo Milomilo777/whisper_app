@@ -212,3 +212,34 @@ def test_apply_runtime_fallbacks_uses_hub_when_model_path_blank(tmp_path):
     assert out["model_path"] == str(
         tmp_path / "models--Systran--faster-whisper-large-v3"
     )
+
+
+def test_apply_runtime_fallbacks_empty_hub_matches_dialog_default(monkeypatch, tmp_path):
+    """When hub_folder is empty, the resolved model_path must sit
+    under default_hub_folder() — the same path the first-run dialog
+    suggests as its default. If these diverge, the worker downloads
+    the model into the wrong directory and the next launch (with
+    hub_folder now saved) re-downloads it. Regression for the
+    "3 GB re-download on every launch" bug.
+    """
+    from core import config as cfg_mod
+    from core import hub as _hub
+
+    # Pin default_hub_folder() to a tmp path so the assertion is
+    # stable regardless of where the test runs from.
+    monkeypatch.setattr(_hub, "default_hub_folder", lambda: tmp_path / "hub")
+
+    cfg = {
+        "hub_folder": "",
+        "model_path": "",
+        "model": {"name": "faster-whisper-large-v3"},
+        "download_folder": "",
+    }
+    out = cfg_mod._apply_runtime_fallbacks(cfg)
+    expected = str(
+        tmp_path / "hub" / "models--Systran--faster-whisper-large-v3"
+    )
+    assert out["model_path"] == expected, (
+        f"empty hub_folder must resolve under default_hub_folder() "
+        f"({expected}), got {out['model_path']}"
+    )

@@ -215,14 +215,25 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
             )
 
     # Compute model_path on the fly when it's missing or unreachable,
-    # using the hub folder when configured. This is the v0.8
-    # resolution order: explicit model_path wins → hub_folder +
-    # model_name → user_cache_dir fallback.
+    # using the hub folder when configured. Resolution order:
+    # explicit model_path wins → hub_folder + model_name → the same
+    # default_hub_folder() value the first-run dialog suggests.
+    #
+    # Using default_hub_folder() (not user_cache_dir) as the empty-
+    # hub fallback fixes a re-download race: the hub-setup dialog is
+    # asynchronous, so the worker subprocess starts before the user
+    # has clicked OK. If the worker downloads to user_cache_dir and
+    # the user then accepts the dialog's <app_dir>/hub default, the
+    # next launch resolves model_path to <app_dir>/hub and triggers
+    # a full re-download. Aligning the fallback with the dialog
+    # default means "accept default" is a no-op for the model
+    # location.
     if not model_path or not _drive_is_mounted(model_path):
         model_name = (config.get("model") or {}).get("name") or "whisper-model"
-        source = "hub_folder" if hub_folder else "user_cache_fallback"
+        effective_hub = hub_folder or str(_hub.default_hub_folder())
+        source = "hub_folder" if hub_folder else "default_hub_fallback"
         try:
-            fallback = _hub.model_folder_for(hub_folder or None, model_name)
+            fallback = _hub.model_folder_for(effective_hub, model_name)
         except ValueError:
             fallback = user_cache_dir() / "models" / "whisper-model"
             source = "cache_fallback_unnamed"
