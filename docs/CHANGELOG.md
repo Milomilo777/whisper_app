@@ -4,6 +4,93 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-05-23
+
+Reliability + UX release. Closes the long-uptime + multi-hour-file
+gaps the 2026-05-23 stability audit catalogued, and lands the
+resume-from-cancellation feature.
+
+### Added
+
+- **Resume from cancellation / pause / crash.** The transcribe
+  loop now writes a periodic checkpoint
+  (`%LOCALAPPDATA%/WhisperProject/partials/<sha1>.json`) every 10
+  segments or 20 s. Cancelling, pausing or crashing keeps the
+  checkpoint on disk; a new Resume command on cancelled rows
+  slices the source audio from the last segment boundary,
+  transcribes only the remainder, merges with the already-done
+  segments, and runs the post-pipeline (diarisation, chapters,
+  alignment, voiceprint) on the full merged result. faster-whisper
+  backend only; whisper.cpp and Parakeet fall back to a fresh
+  re-run with a clear log line. Validates source mtime/size and a
+  config fingerprint before resuming, so a changed file or model
+  silently starts fresh instead of producing garbage.
+- **Pause command in the queue right-click menu** for running
+  tasks. The engine already supported `task.paused`; the menu
+  entry was the only missing UI surface.
+- **About dialog feature inventory.** The previous one-line
+  `messagebox.showinfo` is replaced by a scrollable Toplevel
+  listing every capability of the app grouped into nine
+  sections — Transcription engine, Output formats,
+  Post-processing, Video download, Transcript viewer, Workflow
+  + system integration, Search + statistics, Keyboard shortcuts,
+  Privacy. Many capabilities ship enabled by default but live
+  behind the Advanced dialog with no main-UI surface; this
+  dialog is the canonical "what does this app actually do"
+  reference.
+
+### Fixed
+
+- **3 GB re-download on the launch after the first-run hub picker.**
+  (Originally fixed in v1.0.1; carried forward.) The hub-folder
+  dialog was asynchronous and the worker spawned with an empty
+  `hub_folder`, downloading the model to a path the next launch
+  wouldn't resolve to. Aligned the empty-hub fallback in
+  `_apply_runtime_fallbacks` with the dialog's default and
+  deferred `start_standby()` until the dialog answers.
+- **Worker liveness watchdog kills diarisation on long files.**
+  `_run_post_pipeline` now plumbs `progress_cb` into
+  `diarization.diarize`, mapping sherpa-onnx's 0..1 tick into the
+  90..99 percent slot. Bumped `LIVENESS_TIMEOUT_S` from 30 s to
+  120 s as defence in depth.
+- **Same watchdog pattern in four more silent C calls.** New
+  `core/_liveness_tick.py` context manager wraps
+  `stable_ts.model.align(...)`, the Demucs CLI subprocess, the
+  Parakeet `decode_stream(...)` call, and the whisper.cpp
+  `model.transcribe(...)` call. Without this, every alt-backend
+  transcription and every alignment / Demucs run on slow CPU was
+  one watchdog tick away from a mid-flight kill.
+- **`.whisperproject.json` overrides leak across files.**
+  `_apply_runtime_overrides` mutated the module-level config in
+  place. The long-lived worker carried a folder-A override into
+  folder-B's files. Now wrapped in `_runtime_overrides_scope`
+  which snapshots and restores touched keys around each file —
+  with eight regression tests.
+- **`tk.after(0, ...)` from background threads.** On Python 3.14
+  this raises `RuntimeError`; on earlier 3.x it's undefined and
+  the existing `try/except: pass` blocks silently dropped the
+  callback. Added an `App._main_thread_calls` queue + drainer +
+  `post_to_main(fn)` helper; rerouted burn-subs, hardware-wizard
+  benchmark, and tray-click callbacks through it.
+- **Demucs temp-directory leak.** `tempfile.mkdtemp(...)` in
+  `core/separator.py` was never removed on the success path,
+  leaking 30–50 MB per separation. Cleanup now lives in a
+  `finally:`.
+
+### Documentation
+
+- `docs/STABILITY_AUDIT_2026-05-23.md` — 26-item audit driven by
+  the diarisation-watchdog bug. 7 P0 / 9 P1 / 10 P2 with
+  file:line + symptom + suggested fix. P0s plus the
+  highest-leverage P1 are closed in this release; the rest are
+  the next-session punch list.
+
+### Shipped artefacts
+
+This release skips the Setup-Compact installer (Portable +
+Setup-Standard cover the same audiences). Two EXEs uploaded to
+the v1.0.2 release page.
+
 ## [1.0.1] — 2026-05-23
 
 First stable release. Marks the project as feature-complete + freeze-ready
