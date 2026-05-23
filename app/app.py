@@ -514,19 +514,247 @@ class App(tk.Tk):
             self.log(f"Could not save preference: {e}")
 
     def _show_about(self) -> None:
-        """A more informative About dialog than the previous one-word "Whisper".
+        """A full feature inventory in a scrollable Toplevel.
 
-        Shows the project version, the GitHub URL, and a one-line
-        description of what the app does. ``parent=self`` so the
-        Toplevel centers on the app window (Session 9 audit fix).
+        Many capabilities ship enabled-by-default but live behind
+        the Advanced dialog or have no surface in the main UI; this
+        dialog is the canonical "what does this app actually do"
+        reference and is intentionally exhaustive.
         """
-        body = (
-            "Whisper Project v0.7.1\n\n"
-            "Offline transcription + video downloader for Windows.\n"
-            "Built on faster-whisper and yt-dlp.\n\n"
-            "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+        dlg = tk.Toplevel(self)
+        dlg.title("About Whisper Project")
+        dlg.transient(self)
+        dlg.geometry("680x620")
+        dlg.minsize(560, 480)
+
+        header = ttk.Frame(dlg, padding=(16, 14, 16, 8))
+        header.pack(fill="x")
+        ttk.Label(
+            header,
+            text="Whisper Project — v1.0.1",
+            font=("TkDefaultFont", 13, "bold"),
+        ).pack(anchor="w")
+        ttk.Label(
+            header,
+            text=(
+                "A local, offline Windows desktop app that turns audio "
+                "and video into subtitles. Powered by OpenAI Whisper "
+                "via faster-whisper. No cloud, no API key, no upload."
+            ),
+            wraplength=640,
+            justify="left",
+            foreground="#666",
+        ).pack(anchor="w", pady=(4, 0))
+
+        body_frame = ttk.Frame(dlg, padding=(16, 4, 16, 8))
+        body_frame.pack(fill="both", expand=True)
+        text = tk.Text(
+            body_frame, wrap="word", borderwidth=0, highlightthickness=0,
+            font=("TkDefaultFont", 9), padx=4, pady=4,
         )
-        messagebox.showinfo("About Whisper Project", body, parent=self)
+        scroll = ttk.Scrollbar(body_frame, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        text.tag_configure(
+            "section", font=("TkDefaultFont", 10, "bold"),
+            spacing1=8, spacing3=2,
+        )
+        text.tag_configure(
+            "subsection", font=("TkDefaultFont", 9, "bold"),
+            lmargin1=14, lmargin2=14, spacing1=4,
+        )
+        text.tag_configure(
+            "bullet", lmargin1=28, lmargin2=42, spacing1=1, spacing3=1,
+        )
+
+        sections: list[tuple[str, list[tuple[str, list[str]]]]] = [
+            ("Transcription engine", [
+                ("Input", [
+                    "Any audio or video file ffmpeg can read",
+                    "Drag-and-drop one or many files onto the window",
+                    "Browse… (Ctrl+O) for single or multi-select",
+                    "Recent-files submenu (last 10 from history)",
+                ]),
+                ("Models", [
+                    "Whisper Large v3 (default, ~3 GB)",
+                    "Whisper Large v3 Turbo (~5× faster, ~1.6 GB)",
+                    "Distil Large v3.5 (fastest English-only, ~1.5 GB)",
+                    "Picker lives in the Advanced dialog",
+                ]),
+                ("Backends (pluggable)", [
+                    "faster-whisper (CTranslate2, default)",
+                    "whisper.cpp via pywhispercpp (quantised ggml)",
+                    "Parakeet TDT v3 via sherpa-onnx",
+                    "Switch in the Advanced dialog",
+                ]),
+                ("Hardware", [
+                    "Autodetect at first launch (CUDA / NPU / DirectML / CPU)",
+                    "Choice persisted in hardware.json",
+                    "Manual override in the Advanced dialog",
+                ]),
+                ("Quality controls", [
+                    "Voice Activity Detection (Silero VAD), tunable",
+                    "Word-level timestamps (opt-in)",
+                    "Optional stable-ts word-alignment refinement",
+                    "Optional Demucs vocal-separation pre-processing",
+                ]),
+            ]),
+            ("Output formats", [
+                ("Files written next to your source", [
+                    "SubRip — .srt",
+                    "WebVTT — .vtt",
+                    "Whisper JSON — .json (segments + word-level data)",
+                    "Plain text — .txt",
+                    "Tab-separated — .tsv",
+                    "LRC lyrics — .lrc",
+                    "Markdown — .md",
+                    "Microsoft Word — .docx",
+                    "PDF — via reportlab",
+                ]),
+                ("Round-trip", [
+                    "oTranscribe import (.otr → .srt)",
+                    "oTranscribe export (.srt → .otr) for manual editing",
+                ]),
+                ("Templating", [
+                    "output_filename_template config key with tokens "
+                    "{base} {ext} {lang} {date} {speaker_count}",
+                    "Sibling subdirectories created on the fly",
+                ]),
+            ]),
+            ("Post-processing", [
+                ("Per-file extras", [
+                    "Speaker diarisation (sherpa-onnx, no HF token)",
+                    "Cross-file speaker voiceprint matching",
+                    "Auto-chapter markers (long-silence heuristic)",
+                    "Hallucination detector — flags suspect segments "
+                    "in the viewer (red rows)",
+                ]),
+                ("Optional local LLM", [
+                    "Qwen2.5-1.5B-Instruct, download-on-first-use",
+                    "Summaries, Q&A, AI-generated chapter titles",
+                    "Off by default; opt in from the Advanced dialog",
+                ]),
+            ]),
+            ("Video download", [
+                ("Sources", [
+                    "Any URL yt-dlp supports (YouTube, Vimeo, …)",
+                    "Supreme Master TV episode pages "
+                    "(multi-quality + article text + series parts)",
+                ]),
+                ("Pipeline options", [
+                    "Format/quality picker per URL",
+                    "Audio-only mode (MP3 / m4a / opus)",
+                    "Subtitle download + burn-in to video",
+                    "SponsorBlock category skipping",
+                    "Auto-transcribe after download",
+                ]),
+            ]),
+            ("Transcript viewer", [
+                ("Open via", [
+                    "Help → Open transcript viewer…",
+                    "Last-Result card → View transcript",
+                ]),
+                ("Editing", [
+                    "Find / replace (Ctrl+F), case-insensitive default",
+                    "Speaker rename — rewrites every same-labelled segment",
+                    "Remove fillers — strips uh/um/er… with whole-word regex",
+                    "Atomic save (Ctrl+S)",
+                ]),
+                ("Playback", [
+                    "Embedded VLC when python-vlc + libvlc are installed",
+                    "Click-to-seek on any segment",
+                    "Karaoke — active word wrapped in [brackets] as VLC plays",
+                ]),
+                ("Display", [
+                    "Word-confidence colour coding "
+                    "(green ≥ 0.85, amber ≥ 0.6, red below)",
+                    "Type-as-you-search filter",
+                ]),
+            ]),
+            ("Workflow + system integration", [
+                ("Queue", [
+                    "Multi-file batch with per-file progress",
+                    "Parallel workers (configurable, default 2)",
+                    "Cancel a running job (Esc)",
+                ]),
+                ("Automation", [
+                    "Watched folder — auto-enqueue files dropped in",
+                    "Windows Explorer right-click "
+                    "\"Transcribe with Whisper Project\" (optional install task)",
+                    "Per-folder .whisperproject.json overrides",
+                ]),
+                ("Desktop", [
+                    "System tray + minimise-to-tray (opt-in)",
+                    "Native Windows toast on completion + chime",
+                    "High-DPI scaling",
+                    "Light / dark / system theme",
+                ]),
+                ("Reliability", [
+                    "Crash-auto-resume — re-enqueues interrupted files",
+                    "Worker subprocess with 5 s heartbeat + 30 s watchdog",
+                    "history.db opens in WAL mode + integrity check",
+                    "--safe-mode CLI flag backs up config and re-runs first-run",
+                ]),
+            ]),
+            ("Search + statistics", [
+                ("History", [
+                    "Every finished job recorded in SQLite history.db",
+                    "File → Recent files (last 10)",
+                    "File → Statistics… — total minutes transcribed, etc.",
+                ]),
+                ("Search", [
+                    "Semantic + FTS5 full-text search across saved transcripts",
+                ]),
+            ]),
+            ("Keyboard shortcuts", [
+                ("Global", [
+                    "Ctrl+O — Browse for files",
+                    "Ctrl+Enter — Transcribe selected",
+                    "Esc — Cancel running job",
+                    "Ctrl+Q — Exit (bypasses minimise-to-tray)",
+                ]),
+                ("Viewer", [
+                    "Ctrl+F — Find / replace",
+                    "Ctrl+S — Save edits",
+                ]),
+            ]),
+            ("Privacy", [
+                ("Default", [
+                    "Everything runs locally; no network call without your action",
+                ]),
+                ("Opt-in telemetry", [
+                    "Anonymous launch ping (config: telemetry_opt_in)",
+                    "Sentry crash reporting (env: SENTRY_DSN + opt-in)",
+                ]),
+            ]),
+        ]
+
+        for section_title, subsections in sections:
+            text.insert("end", section_title + "\n", "section")
+            for sub_title, bullets in subsections:
+                text.insert("end", sub_title + "\n", "subsection")
+                for line in bullets:
+                    text.insert("end", "• " + line + "\n", "bullet")
+
+        text.configure(state="disabled")
+
+        footer = ttk.Frame(dlg, padding=(16, 4, 16, 14))
+        footer.pack(fill="x")
+        ttk.Label(
+            footer,
+            text="Repository: https://github.com/Milomilo777/whisper_project_direct_download_v2",
+            foreground="#666",
+        ).pack(side="left")
+        ttk.Button(footer, text="OK", command=dlg.destroy).pack(side="right")
+
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+        dlg.update_idletasks()
+        try:
+            dlg.grab_set()
+        except tk.TclError:
+            pass
 
     def show_statistics(self) -> None:
         _show_stats(self)
