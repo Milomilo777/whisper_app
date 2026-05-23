@@ -87,6 +87,7 @@ class App:
         self.root.geometry("720x560")
         self.root.minsize(560, 460)
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
+        self._install_icon()
 
         self.config_dict: dict[str, Any] = load_config()
         setup_logging(self.config_dict.get("log_level", "INFO"))
@@ -300,6 +301,25 @@ class App:
         # values without us having to mirror them by hand.
         self.config_dict = load_config()
         logger.info("Hub chosen: %s", path)
+
+    # ------------------------------------------------------------ window chrome
+
+    def _install_icon(self) -> None:
+        """Set the window-title-bar and taskbar icon.
+
+        Looks for ``assets/whisper.ico`` next to the source tree
+        (dev / Setup-Standard install) — silently no-ops if the
+        icon is missing, since the icon is cosmetic and a missing
+        file should not prevent the app from launching.
+        """
+        from .paths_util import asset_path  # local import keeps top tidy
+        ico = asset_path("whisper.ico")
+        if not ico:
+            return
+        try:
+            self.root.iconbitmap(default=str(ico))
+        except tk.TclError as _e:
+            logger.warning("Could not set window icon (%s): %s", ico, _e)
 
     # ------------------------------------------------------------ file intake
 

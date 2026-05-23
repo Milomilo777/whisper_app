@@ -37,12 +37,30 @@ class AboutDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=16)
         body.pack(fill="both", expand=True)
 
+        # Header row: icon (64-ish px PNG) on the left, title +
+        # version text on the right. The icon is cosmetic — if the
+        # PNG file is missing or Tk can't decode it we skip the
+        # icon and just show the text.
+        from app.paths_util import asset_path
+        header = ttk.Frame(body)
+        header.pack(anchor="w", fill="x", pady=(0, 10))
+        png = asset_path("whisper.png")
+        if png is not None:
+            try:
+                self._icon_img = tk.PhotoImage(file=str(png))
+                ttk.Label(header, image=self._icon_img).pack(
+                    side="left", padx=(0, 12),
+                )
+            except tk.TclError:
+                pass
+        text_col = ttk.Frame(header)
+        text_col.pack(side="left", fill="x", expand=True, anchor="w")
         ttk.Label(
-            body, text=APP_NAME, font=("Segoe UI", 14, "bold"),
+            text_col, text=APP_NAME, font=("Segoe UI", 14, "bold"),
         ).pack(anchor="w")
         ttk.Label(
-            body, text=f"Version {APP_VERSION}", foreground="#666",
-        ).pack(anchor="w", pady=(0, 10))
+            text_col, text=f"Version {APP_VERSION}", foreground="#666",
+        ).pack(anchor="w")
         ttk.Label(
             body, text=ABOUT_BODY, justify="left",
         ).pack(anchor="w")
