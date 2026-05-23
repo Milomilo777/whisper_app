@@ -80,3 +80,17 @@ No UI exposes any of these. Editing `config.json` by hand still works — the fi
 A failure surfaces a single `messagebox.showerror` at startup with `"Issue: <X>. Try: <Y>."`.
 
 `core/error_messages.py` is a regex table mapping common Whisper / network / disk exceptions to user-actionable strings. The worker calls `friendly_error()` before emitting the `error` event so the user sees actionable prose, not raw tracebacks.
+
+## Known maintainability debt
+
+`app/app.py` is 840 lines — over the project's 500-line
+per-module target documented in `CONTRIBUTING.md`. It orchestrates
+the Tk root, the in-memory queue, the worker subprocess lifecycle,
+and the event-loop pump in one class. Splitting it on the natural
+seams — `app/app.py` (Tk root + UI build) plus
+`app/controller.py` (queue + worker lifecycle + dispatch) — is
+the right next refactor when the file next needs a non-trivial
+change. It was kept whole on first ship to avoid surface area
+without a concrete trigger.
+
+Everything else in `app/` and `core/` is under 400 lines.

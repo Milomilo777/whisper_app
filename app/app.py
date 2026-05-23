@@ -318,8 +318,8 @@ class App:
             return
         try:
             self.root.iconbitmap(default=str(ico))
-        except tk.TclError as _e:
-            logger.warning("Could not set window icon (%s): %s", ico, _e)
+        except tk.TclError as exc:
+            logger.warning("Could not set window icon (%s): %s", ico, exc)
 
     # ------------------------------------------------------------ file intake
 
