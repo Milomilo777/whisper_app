@@ -46,7 +46,7 @@ When a build is about to start (PyInstaller / Inno Setup):
 ## Permitted operations on this branch
 
 The current working branch is `chore/cleanup-hardening`. It carries
-the v1.0.2 release. The following are pre-authorised for all future
+the v1.0.3 release. The following are pre-authorised for all future
 hands-off sessions:
 
   - `git push origin chore/cleanup-hardening`
@@ -60,7 +60,7 @@ asks for them in the current session:
   - Any operation on `master` (checkout, merge, push, …)
   - Code-signing the exe
   - Editing `.git/config`
-  - `git push --force` against anything (v1.0.2 is already public —
+  - `git push --force` against anything (v1.0.3 is already public —
     force-push would invalidate the user's downloaded artefacts)
 
 ## Style & scope
@@ -82,7 +82,7 @@ asks for them in the current session:
     `E:\3029-NWN-Daily-Scroll-2m_0002.mp4`, a live network for
     SMTV E2E). Skip via env vars when those aren't present.
   - Pyright must report 0 errors on `app/` and `core/` before
-    every commit. The v1.0.2 baseline is 0 errors / 0 warnings /
+    every commit. The v1.0.3 baseline is 0 errors / 0 warnings /
     0 informations — protect it.
 
 ## Handoff file
@@ -93,5 +93,5 @@ left. Read it on session start, update it at session end.
 ## The 1-line restart prompt
 
 ```
-Read docs/SESSION_HANDOFF_NEXT.md first, then continue on the chore/cleanup-hardening branch. Don't touch master. Don't force-push (v1.0.2 is public).
+Read docs/SESSION_HANDOFF_NEXT.md first, then continue on the chore/cleanup-hardening branch. Don't touch master. Don't force-push (v1.0.3 is public).
 ```

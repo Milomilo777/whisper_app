@@ -30,7 +30,7 @@ fits into one of four buckets:
 ## Release notes
 
 - [RELEASE_NOTES_v0.7.0.md](RELEASE_NOTES_v0.7.0.md)
-- [RELEASE_NOTES_v1.0.1.md](RELEASE_NOTES_v1.0.1.md)
+- [RELEASE_NOTES_v1.0.3.md](RELEASE_NOTES_v1.0.3.md)
 
 ## Development state
 

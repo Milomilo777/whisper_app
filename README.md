@@ -12,8 +12,8 @@ Two deliverables for two audiences:
 
 | Method | Asset | Size | Best for |
 |---|---|---|---|
-| **Portable** | `WhisperProject-v1.0.2-Portable.exe` | ~450 MB | one file, no install, USB-stick friendly |
-| **Standard** | `WhisperProject-v1.0.2-Setup-Standard.exe` | ~350 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
+| **Portable** | `WhisperProject-v1.0.3-Portable.exe` | ~450 MB | one file, no install, USB-stick friendly |
+| **Standard** | `WhisperProject-v1.0.3-Setup-Standard.exe` | ~350 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
 
 Download from the latest release:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
@@ -147,12 +147,12 @@ sequence.
 
 ## Status
 
-Stable at v1.0.2. The full audit + freeze-readiness review is in
+Stable at v1.0.3. The full audit + freeze-readiness review is in
 [docs/FINAL_FREEZE_AUDIT_2026-05-21.md](docs/FINAL_FREEZE_AUDIT_2026-05-21.md);
 the multi-day stability audit is in
 [docs/STABILITY_AUDIT_2026-05-23.md](docs/STABILITY_AUDIT_2026-05-23.md).
 
-Quality bars at v1.0.2:
+Quality bars at v1.0.3:
 
 - pyright `app/ core/` — 0 errors, 0 warnings, 0 informations
 - unit + integration suite — 551 tests passing
