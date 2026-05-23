@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -140,6 +141,80 @@ def _read_command_line() -> bytes | None:
     return raw
 
 
+# ---------------------------------------------------------- shutdown plumbing
+#
+# Stdin is read by a daemon thread (``_start_command_reader``) so a
+# shutdown command can arrive even while the main thread is sitting
+# inside ``transcribe()``. The reader sets ``_shutting_down`` and, if
+# a task is in flight, sets ``_active_task.cancelled = True`` so the
+# segment loop bails on the next iteration instead of waiting for the
+# full file to finish (runtime-probe WARN #15).
+
+_pending_commands: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=64)
+_active_task: TranscriptionTask | None = None
+_shutting_down: threading.Event = threading.Event()
+
+
+def _start_command_reader() -> None:
+    def _loop() -> None:
+        while True:
+            raw = _read_command_line()
+            if raw is None:
+                # Parent closed stdin — treat as shutdown.
+                _shutting_down.set()
+                _pending_commands.put(None)
+                return
+            if raw == b"":
+                emit(
+                    "error",
+                    message=(
+                        f"command exceeds max length (> {MAX_COMMAND_BYTES} "
+                        "bytes); dropped"
+                    ),
+                )
+                continue
+            if len(raw) > MAX_COMMAND_BYTES:
+                emit(
+                    "error",
+                    message=(
+                        f"command exceeds max length ({len(raw)} > "
+                        f"{MAX_COMMAND_BYTES} bytes); dropped"
+                    ),
+                )
+                continue
+            try:
+                line = raw.decode("utf-8", errors="replace").strip()
+            except (UnicodeDecodeError, AttributeError) as exc:
+                emit("error", message=f"Invalid command bytes: {exc}")
+                continue
+            if not line:
+                continue
+            try:
+                command = json.loads(line)
+            except json.JSONDecodeError as exc:
+                emit("error", message=f"Invalid worker command: {exc}")
+                continue
+
+            # Honour shutdown immediately, regardless of whether a task
+            # is in flight — this is the whole point of moving the
+            # reader off the main thread.
+            if command.get("action") == "shutdown":
+                _shutting_down.set()
+                if _active_task is not None:
+                    _active_task.cancelled = True
+                _pending_commands.put(None)
+                return
+
+            try:
+                _pending_commands.put(command, timeout=5.0)
+            except queue.Full:
+                emit("error", message="Worker command queue full; dropped")
+
+    threading.Thread(
+        target=_loop, name="worker-stdin-reader", daemon=True,
+    ).start()
+
+
 def _start_heartbeat() -> None:
     """Spawn a daemon thread that emits a tick every 5 s.
 
@@ -203,58 +278,22 @@ def main() -> int:
         return 1
 
     emit("ready")
+    _start_command_reader()
 
+    global _active_task
     while True:
-        raw = _read_command_line()
-        if raw is None:
-            # EOF on stdin. The parent we ship treats stdin-close as
-            # a graceful shutdown signal (see app/app.py _stop_worker).
-            # If a task was in flight when stdin closed, that's a
-            # parent crash — surface it via rc=2 so the parent's
-            # worker_exit handler can distinguish "user quit" from
-            # "we got orphaned".
-            logger.info("Worker stdin closed; exiting")
+        try:
+            command = _pending_commands.get(timeout=1.0)
+        except queue.Empty:
+            if _shutting_down.is_set():
+                logger.info("Worker shutting down")
+                return 0
+            continue
+        if command is None or _shutting_down.is_set():
+            logger.info("Worker shutting down")
             return 0
-        if raw == b"":
-            # Oversize line: the reader already drained to the next
-            # newline. Emit an error and keep going.
-            emit(
-                "error",
-                message=(
-                    f"command exceeds max length (> {MAX_COMMAND_BYTES} "
-                    "bytes); dropped"
-                ),
-            )
-            continue
-        if len(raw) > MAX_COMMAND_BYTES:
-            # Defence-in-depth: the reader caps the first window, but
-            # a small line with a trailing newline can still be over
-            # the limit by a byte or two. Reject before decoding.
-            emit(
-                "error",
-                message=(
-                    f"command exceeds max length ({len(raw)} > "
-                    f"{MAX_COMMAND_BYTES} bytes); dropped"
-                ),
-            )
-            continue
-        try:
-            line = raw.decode("utf-8", errors="replace").strip()
-        except (UnicodeDecodeError, AttributeError) as e:
-            emit("error", message=f"Invalid command bytes: {e}")
-            continue
-        if not line:
-            continue
-
-        try:
-            command = json.loads(line)
-        except json.JSONDecodeError as e:
-            emit("error", message=f"Invalid worker command: {e}")
-            continue
 
         action = command.get("action")
-        if action == "shutdown":
-            return 0
         if action != "transcribe":
             emit("error", message=f"Unknown worker command: {action}")
             continue
@@ -271,6 +310,10 @@ def main() -> int:
                 # Stash on the task; transcriber reads getattr(task,
                 # "language", None) when building kwargs.
                 setattr(task, "language", forced_lang)
+            # Expose the active task to the stdin reader so a
+            # shutdown command can flip task.cancelled and the
+            # segment loop bails on the next iteration.
+            _active_task = task
             emit("started", file_path=file_path)
 
             def language_cb(lang: str, prob: float) -> None:
@@ -291,6 +334,8 @@ def main() -> int:
                 suggestion=suggestion,
                 file_path=file_path,
             )
+        finally:
+            _active_task = None
 
 
 if __name__ == "__main__":

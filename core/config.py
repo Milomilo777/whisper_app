@@ -177,6 +177,19 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
         or not _drive_is_mounted(model_path)
     )
     if needs_recompute and model_name:
+        # When the saved hub_folder itself is on a dead drive,
+        # treating it as "the user's pick" would just recompute
+        # the fallback on the same dead drive and we'd hit
+        # startup_error anyway. Probe the hub too and reach for
+        # the default-hub when the configured one is unreachable
+        # (runtime-probe WARN #24).
+        if hub_folder and not _drive_is_mounted(hub_folder):
+            logger.warning(
+                "hub_folder %r is on an unmounted drive; "
+                "falling back to default hub",
+                hub_folder,
+            )
+            hub_folder = ""
         effective_hub = hub_folder or str(_hub.default_hub_folder())
         try:
             fallback = _hub.model_folder_for(effective_hub, model_name)
