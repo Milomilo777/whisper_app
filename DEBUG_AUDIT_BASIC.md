@@ -910,3 +910,14 @@ Top 5 P0s by title:
 3. Worker silently exits on parent stdin close; tasks stuck at "waiting"
 4. `model_manager._download_zip` mis-handles non-Range server reply (appends)
 5. `_dispatch_next` double-click race attributes events to wrong task
+
+---
+
+## Disposition (post-fix pass)
+
+All P0 (1-7) and the critical P1 set (1-7, 10-20) are fixed in the
+five hardening commits on `main` (worker IPC, model-load races,
+download hardening, UI safety, lower-impact cleanups).
+
+Deferred — not fixed in this pass, kept here for the next round:
+**P2-1, P2-3, P2-4, P2-5, P2-7, P2-8, P2-10, P2-11**.

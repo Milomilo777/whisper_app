@@ -343,6 +343,12 @@ class App:
         if paths:
             self._on_files_added(list(paths))
 
+    # Debounce window for save_config after a burst of file-added
+    # callbacks. 250 ms is short enough that a power cut between
+    # add and save won't surprise anyone, and long enough that a
+    # rapid 100-file drop collapses to a single save (audit P1-9).
+    _SAVE_DEBOUNCE_MS = 250
+
     def _on_files_added(self, files: list[str]) -> None:
         added = 0
         for f in files:
@@ -356,14 +362,30 @@ class App:
             # Update recent list.
             add_recent_file(self.config_dict, task.file_path, limit=RECENT_LIMIT)
         if added:
-            try:
-                save_config(self.config_dict)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("save_config (recent files) failed: %s", e)
             self._rebuild_recent_menu()
             self.status_var.set(
                 f"Added {added} file(s). Click Transcribe to begin."
             )
+            self._schedule_save_config()
+
+    def _schedule_save_config(self) -> None:
+        """Coalesce a burst of save requests into one disk write."""
+        existing = getattr(self, "_save_timer_id", None)
+        if existing is not None:
+            try:
+                self.root.after_cancel(existing)
+            except tk.TclError:
+                pass
+        self._save_timer_id = self.root.after(
+            self._SAVE_DEBOUNCE_MS, self._flush_save_config,
+        )
+
+    def _flush_save_config(self) -> None:
+        self._save_timer_id = None
+        try:
+            save_config(self.config_dict)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("save_config (debounced) failed: %s", e)
 
     def _add_tree_row(self, task: TranscriptionTask) -> str:
         return self.tree.insert(
@@ -742,14 +764,18 @@ class App:
         messagebox.showerror("Transcription failed", full, parent=self.root)
         self.status_var.set(f"Error: {os.path.basename(task.file_path)}")
 
+    # Hard cap for the console Text widget. Trimmed AGGRESSIVELY
+    # (down to half the cap) so the trim doesn't fire on every line
+    # once the cap is reached (audit P1-8).
+    CONSOLE_LINE_CAP = 5000
+
     def _append_console(self, message: str) -> None:
         self.console.configure(state="normal")
         self.console.insert("end", message + "\n")
-        # Trim to a few thousand lines so the widget stays responsive
-        # on multi-hour transcribes.
         line_count = int(self.console.index("end-1c").split(".")[0])
-        if line_count > 4000:
-            self.console.delete("1.0", f"{line_count - 2000}.0")
+        if line_count > self.CONSOLE_LINE_CAP:
+            keep = self.CONSOLE_LINE_CAP // 2
+            self.console.delete("1.0", f"{line_count - keep}.0")
         self.console.see("end")
         self.console.configure(state="disabled")
 

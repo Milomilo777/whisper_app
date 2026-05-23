@@ -19,9 +19,12 @@ def test_bin_dir_under_resource_base() -> None:
 def test_bundled_binary_returns_absolute_when_present() -> None:
     path = _p.bundled_binary("ffmpeg")
     # ffmpeg is bundled in this repo so the path should resolve to a file.
+    assert path is not None
     assert os.path.isfile(path)
 
 
-def test_bundled_binary_falls_back_to_name_when_missing() -> None:
+def test_bundled_binary_returns_none_when_missing() -> None:
     out = _p.bundled_binary("nonexistent-binary-xyzzy")
-    assert out == "nonexistent-binary-xyzzy"
+    # Contract is "None when not bundled" so callers can fall back
+    # to shutil.which() explicitly (audit P1-11).
+    assert out is None

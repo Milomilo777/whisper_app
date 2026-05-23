@@ -40,34 +40,33 @@ CheckFn = Callable[[], CheckResult]
 
 
 def _check_ffmpeg() -> CheckResult:
+    # bundled_binary returns None when nothing's in bin/. Fall back
+    # to a real PATH lookup (with a clear log so a user can tell
+    # which ffmpeg is being used — bundled vs system).
     path = bundled_binary("ffmpeg")
-    if not os.path.isfile(path):
-        # bundled_binary returns the bare name when not found, which
-        # may or may not resolve on PATH.
-        resolved = shutil.which(path) or ""
-        if not resolved:
+    if path is None:
+        path = shutil.which("ffmpeg.exe" if os.name == "nt" else "ffmpeg") or ""
+        if not path:
             return CheckResult(
                 "ffmpeg",
                 False,
                 "ffmpeg binary not found in bin/ or on PATH.",
                 "Reinstall the app — the bundled binary should sit in bin/ffmpeg.exe.",
             )
-        path = resolved
     return CheckResult("ffmpeg", True, f"found at {path}")
 
 
 def _check_ffprobe() -> CheckResult:
     path = bundled_binary("ffprobe")
-    if not os.path.isfile(path):
-        resolved = shutil.which(path) or ""
-        if not resolved:
+    if path is None:
+        path = shutil.which("ffprobe.exe" if os.name == "nt" else "ffprobe") or ""
+        if not path:
             return CheckResult(
                 "ffprobe",
                 False,
                 "ffprobe binary not found in bin/ or on PATH.",
                 "Reinstall the app — the bundled binary should sit in bin/ffprobe.exe.",
             )
-        path = resolved
     # Smoke: it should -version cleanly.
     try:
         kwargs: dict[str, Any] = {

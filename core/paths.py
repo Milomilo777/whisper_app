@@ -30,12 +30,20 @@ def bin_dir() -> str:
     return os.path.join(resource_base(), "bin")
 
 
-def bundled_binary(name: str) -> str:
-    """Absolute path to a bundled binary; falls back to PATH lookup name.
+def bundled_binary(name: str) -> str | None:
+    """Absolute path to a bundled binary, or ``None`` if not bundled.
 
     On Windows we append ``.exe`` to the lookup name; on POSIX the
-    name is used verbatim.
+    name is used verbatim. Previously this returned the bare name
+    on miss, which made callers feed an unresolved PATH-relative
+    name into ``os.path.isfile`` (always False) and ``subprocess.run``
+    (relies on PATH lookup with confusing error if absent). The
+    contract is now explicit: ``None`` means "use shutil.which() at
+    the call site, you decide whether PATH-fallback is acceptable"
+    (audit P1-11).
     """
     exe = f"{name}.exe" if os.name == "nt" else name
     candidate = os.path.join(bin_dir(), exe)
-    return candidate if os.path.isfile(candidate) else name
+    if os.path.isfile(candidate):
+        return candidate
+    return None

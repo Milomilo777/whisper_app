@@ -15,6 +15,7 @@ import os
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -146,9 +147,30 @@ def _segment_to_dict(seg: Any) -> dict[str, Any]:
     }
 
 
+def _resolve_ffprobe() -> str:
+    """Return the absolute path to ffprobe (bundled or on PATH).
+
+    Raises ``RuntimeError`` with a clear message when neither is
+    available — better than ``FileNotFoundError: 'ffprobe'`` which
+    is what subprocess.run would have raised on a bare-name fallback.
+    """
+    bundled = bundled_binary("ffprobe")
+    if bundled:
+        return bundled
+    import shutil as _sh
+    resolved = _sh.which("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if resolved:
+        logger.info("Using system ffprobe at %s (bundle missing)", resolved)
+        return resolved
+    raise RuntimeError(
+        "ffprobe not found — neither bundled in bin/ nor on PATH. "
+        "Reinstall the app."
+    )
+
+
 def get_duration(path: str) -> float:
     """Call bundled ffprobe to read the container duration in seconds."""
-    ffprobe = bundled_binary("ffprobe")
+    ffprobe = _resolve_ffprobe()
     kwargs: dict[str, Any] = {
         "capture_output": True,
         "text": True,
@@ -210,9 +232,21 @@ def _write_outputs(
     A mid-write crash leaves either the previous (intact) file or
     nothing — never a half-written SRT some downstream tool will
     silently mis-parse.
+
+    On per-format failure we delete only the failing ``.part`` and
+    re-raise; previously-successful formats from THIS batch are
+    kept. Wiping them was a data-loss footgun: if SRT writes fine
+    and JSON fails with PermissionError (editor has the .json
+    open), the user loses the perfectly-good SRT for an unrelated
+    reason (audit P1-14).
+
+    The ``.part`` filename now embeds a uuid4 suffix so two workers
+    targeting the same output dir (e.g. dev tree + installed exe
+    pointed at the same source file) can't collide (audit P1-15).
     """
     formats = list(config.get("output_formats") or ["srt", "json", "txt"])
     written: list[str] = []
+    errors: list[tuple[str, BaseException]] = []
     available = supported_formats()
     requested_known = [f for f in formats if f in available]
     if formats and not requested_known:
@@ -225,25 +259,37 @@ def _write_outputs(
             continue
         ext = "json" if fmt_name == "json" else fmt_name
         path = f"{base}.{ext}"
-        part_path = f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+        # uuid4 hex avoids collisions across workers / processes;
+        # pid + tid was unique only within one process.
+        part_path = (
+            f"{path}.{os.getpid()}-{threading.get_ident()}-"
+            f"{uuid.uuid4().hex[:8]}.part"
+        )
         try:
             payload = get_writer(fmt_name)(segments_data, audio_path)
             with open(part_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(payload)
             os.replace(part_path, path)
-        except Exception:
+            written.append(path)
+        except Exception as e:  # noqa: BLE001
             try:
                 os.unlink(part_path)
             except OSError:
                 pass
-            # Roll back any files we already wrote during this batch.
-            for prior in written:
-                try:
-                    os.unlink(prior)
-                except OSError:
-                    pass
-            raise
-        written.append(path)
+            errors.append((fmt_name, e))
+            logger.exception("Failed to write %s output", fmt_name)
+    if errors:
+        # Report ALL failing formats in one error, with the formats
+        # that DID make it through preserved on disk.
+        failures = ", ".join(f"{n} ({type(e).__name__})" for n, e in errors)
+        if written:
+            kept = ", ".join(os.path.basename(p) for p in written)
+            raise RuntimeError(
+                f"Failed to write: {failures}. Kept successful outputs: "
+                f"{kept}."
+            )
+        # No format succeeded — propagate the first exception cleanly.
+        raise errors[0][1]
     return written
 
 
@@ -295,19 +341,33 @@ def transcribe(
 
     base = os.path.splitext(task.file_path)[0]
     segments_data: list[dict[str, Any]] = []
+    skipped = 0
     for seg in segments:
         if task.cancelled:
             _log("Task cancelled", log_cb)
             return
-        percent = min(100, int((seg.end / duration) * 100)) if duration else 0
-        _log(
-            f"[{percent}%] {_fmt(seg.start)} --> {_fmt(seg.end)} | "
-            f"{(seg.text or '').strip()}",
-            log_cb,
-        )
-        if progress_cb:
-            progress_cb(percent)
-        segments_data.append(_segment_to_dict(seg))
+        try:
+            percent = (
+                min(100, int((seg.end / duration) * 100)) if duration else 0
+            )
+            _log(
+                f"[{percent}%] {_fmt(seg.start)} --> {_fmt(seg.end)} | "
+                f"{(seg.text or '').strip()}",
+                log_cb,
+            )
+            if progress_cb:
+                progress_cb(percent)
+            segments_data.append(_segment_to_dict(seg))
+        except Exception as e:  # noqa: BLE001
+            # One bad segment (weird unicode, missing attribute,
+            # division-by-zero on duration=0) used to crash the
+            # entire job. Skip the segment and keep going (audit
+            # P1-16) — the user gets a slightly-shorter SRT instead
+            # of a full failure.
+            skipped += 1
+            logger.exception("Skipping bad segment: %s", e)
+    if skipped:
+        _log(f"WARN: skipped {skipped} bad segment(s)", log_cb)
 
     written = _write_outputs(base, segments_data, task.file_path)
     _log(

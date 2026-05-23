@@ -25,6 +25,8 @@ from typing import Any
 
 import platformdirs
 
+from . import hub as _hub_module
+
 # Module-level lock serialises concurrent save_config calls — on
 # Windows os.replace fails with PermissionError when another thread
 # is mid-replace on the same path. The lock collapses the race.
@@ -94,12 +96,41 @@ def _drive_is_mounted(path: str | Path) -> bool:
     if not p.drive:
         return True
     drive = p.drive
-    # UNC paths can stall on disconnected shares for ~30 s if probed
-    # via exists(); treat as available and let downstream I/O surface
-    # the real error.
+    # UNC paths used to be assumed-available, which made an app
+    # pointed at a stale ``\\dead-server\share\model`` hang for ~30 s
+    # at WhisperModel construction time. Probe with a 1-second
+    # threaded ``exists()`` so a dead share fails fast (audit P1-17).
     if drive.startswith("\\\\") or drive.startswith("//"):
-        return True
+        return _bounded_exists(p, timeout_seconds=1.0)
     return Path(drive + os.sep).exists()
+
+
+def _bounded_exists(p: Path, *, timeout_seconds: float) -> bool:
+    """Like ``Path.exists()`` but capped at ``timeout_seconds``.
+
+    Used to probe UNC shares without blocking the caller for the
+    SMB protocol's default ~30 s timeout. If the probe doesn't
+    return in time, we return False (the caller then triggers the
+    fallback path and surfaces a clear error instead of hanging).
+    """
+    result: dict[str, bool] = {"ok": False}
+
+    def _probe() -> None:
+        try:
+            result["ok"] = p.exists()
+        except OSError:
+            result["ok"] = False
+
+    t = threading.Thread(target=_probe, name="drive-probe", daemon=True)
+    t.start()
+    t.join(timeout=timeout_seconds)
+    if t.is_alive():
+        logger.warning(
+            "Drive probe timed out after %.1fs for %s — treating as unmounted",
+            timeout_seconds, p,
+        )
+        return False
+    return result["ok"]
 
 
 def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
@@ -120,7 +151,10 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     low-level traceback for what is fundamentally "your saved
     config is corrupt; we restored defaults" (audit P0-7).
     """
-    from . import hub as _hub  # local import to avoid bootstrap cycle
+    # ``_hub_module`` is now a top-level import; the original
+    # bootstrap cycle that motivated the lazy import is resolved
+    # (audit P1-18).
+    _hub = _hub_module
 
     model = config.get("model")
     if not isinstance(model, dict):
@@ -250,10 +284,18 @@ def add_recent_file(config: dict[str, Any], file_path: str, *, limit: int = 5) -
 
     Mutates ``config`` in place. The caller is responsible for calling
     :func:`save_config` afterwards.
+
+    Validates that ``file_path`` is a non-empty string and the
+    existing ``recent_files`` value is a list — a hand-edited config
+    that violates either would otherwise raise mid-flow (audit
+    P1-10).
     """
-    if not file_path:
+    if not isinstance(file_path, str) or not file_path:
         return
-    recent = list(config.get("recent_files") or [])
+    raw = config.get("recent_files")
+    if not isinstance(raw, list):
+        raw = []
+    recent = list(raw)
     # Case-insensitive de-dupe on Windows.
     if sys.platform == "win32":
         key = file_path.casefold()
