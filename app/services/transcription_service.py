@@ -16,15 +16,33 @@ from queue import Empty
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    import tkinter as tk
+
     from app.app import App
+    from app.dialogs.model_loading import ModelLoadingDialog
 
 
 logger = logging.getLogger(__name__)
 
 
+# How long the headless ensure_worker_ready path (crash-resume, watched
+# folder) will wait for a freshly-spawned worker to emit its ``ready``
+# event before giving up and aborting the enqueue. Generous — a cold
+# faster-whisper load on CPU is ~10–15 s; on slow disks loading a
+# 3 GB model can stretch past 60 s.
+HEADLESS_READY_TIMEOUT_S = 120.0
+
+
 class TranscriptionService:
     def __init__(self, app: "App") -> None:
         self.app = app
+        # Set by ensure_worker_ready while the modal is up; cleared
+        # in poll() once a ``ready`` event is observed for the
+        # awaited worker. Used to route ready events back to the
+        # right dialog instance via the App's main-thread queue.
+        self._pending_load_worker_id: int | None = None
+        self._pending_load_dialog: "ModelLoadingDialog | None" = None
+        self._pending_load_event: threading.Event | None = None
 
     # Queries -----------------------------------------------------------------
     def active_workers(self) -> list[dict[str, Any]]:
@@ -48,9 +66,136 @@ class TranscriptionService:
 
     # Lifecycle ---------------------------------------------------------------
     def start_standby(self) -> None:
+        """DEPRECATED: kept only for callers / tests that still poke it.
+
+        Historically the App spawned a "standby" worker at launch so
+        the first transcribe was instant. That cost ~1.5 GB of idle
+        RAM and a CPU spike during startup even for users who never
+        clicked Transcribe. v1.0.3 moves the load to first-transcribe
+        via :meth:`ensure_worker_ready` so the trade-off is explicit.
+
+        New code should NOT call this. It's preserved (a) so any
+        third-party test still calling it doesn't blow up, and
+        (b) so a future maintainer can rip it out in one obvious
+        commit once the rest of the codebase is confirmed clean.
+        """
         if not self.active_workers():
             self.start_worker(temporary=False)
         self.update_model_state()
+
+    def ensure_worker_ready(
+        self,
+        parent_widget: "tk.Tk | tk.Toplevel",
+        headless: bool = False,
+    ) -> bool:
+        """Make sure at least one worker is alive AND ready before dispatch.
+
+        Replaces the v1.0.2 "preload at startup" behaviour. The
+        worker is now spawned lazily on the first transcribe request.
+
+        Parameters
+        ----------
+        parent_widget:
+            Tk widget to parent the modal to (typically ``self.app``).
+            Ignored when ``headless=True``.
+        headless:
+            False (default) — interactive path. If no ready worker
+            exists, spawn one + show :class:`ModelLoadingDialog` and
+            wait for either a ``ready`` event (return True) or the
+            user clicking Cancel (kill the worker, return False).
+
+            True — automation path (crash-resume, watched-folder).
+            Same spawn behaviour but WITHOUT a modal. Wait
+            synchronously up to :data:`HEADLESS_READY_TIMEOUT_S`
+            for the ready event; on timeout, return False so the
+            caller can abort the enqueue cleanly.
+
+        Returns
+        -------
+        bool
+            True when at least one worker is ready to receive a
+            transcribe command. False when the user cancelled
+            (interactive) or the wait timed out (headless).
+        """
+        # Fast path: already have a ready worker.
+        if self.ready_workers():
+            return True
+
+        # Spawn a fresh worker. start_worker bumps next_worker_id
+        # internally; capture the id we just created so the event
+        # loop can route the ready event back to us specifically
+        # (a parallel worker could go ready first if one was
+        # already loading).
+        before_ids = {w["id"] for w in self.app.workers}
+        self.start_worker(temporary=False)
+        after_ids = {w["id"] for w in self.app.workers}
+        new_ids = after_ids - before_ids
+        if not new_ids:
+            # start_worker is a no-op when an alive worker already
+            # exists for the supplied dict — but we passed
+            # worker=None, so this shouldn't happen. Defend anyway.
+            return bool(self.ready_workers())
+        new_id = next(iter(new_ids))
+
+        # Coordinate with poll(): when it sees the ready event for
+        # `new_id`, it should set this Event AND (interactive only)
+        # destroy the dialog.
+        ready_event = threading.Event()
+        self._pending_load_worker_id = new_id
+        self._pending_load_event = ready_event
+
+        if headless:
+            # Background path — no UI. wait() yields the Tk thread
+            # while we wait, but watched-folder + crash-resume
+            # callers already run on background threads / are tolerant
+            # of a blocking wait on the main thread for ~10s.
+            self._pending_load_dialog = None
+            try:
+                ok = ready_event.wait(timeout=HEADLESS_READY_TIMEOUT_S)
+            finally:
+                self._pending_load_worker_id = None
+                self._pending_load_event = None
+            if not ok:
+                logger.warning(
+                    "ensure_worker_ready (headless): worker %s did not "
+                    "become ready within %.0fs; aborting enqueue.",
+                    new_id, HEADLESS_READY_TIMEOUT_S,
+                )
+                # Tear the dud worker down so we don't leak it.
+                for w in list(self.app.workers):
+                    if w["id"] == new_id:
+                        self.retire_worker(w)
+                        break
+                return False
+            return True
+
+        # Interactive path — show the modal and pump the Tk loop
+        # until either the ready event arrives (poll() destroys the
+        # dialog) or the user clicks Cancel.
+        from app.dialogs.model_loading import ModelLoadingDialog
+
+        dialog = ModelLoadingDialog(parent_widget)
+        self._pending_load_dialog = dialog
+        try:
+            self.app.wait_window(dialog)
+        finally:
+            self._pending_load_worker_id = None
+            self._pending_load_dialog = None
+            self._pending_load_event = None
+
+        if dialog.success:
+            return True
+
+        # User cancelled — kill the just-spawned worker.
+        logger.info(
+            "ensure_worker_ready: user cancelled; tearing down worker %s",
+            new_id,
+        )
+        for w in list(self.app.workers):
+            if w["id"] == new_id:
+                self.retire_worker(w)
+                break
+        return False
 
     def start_worker(self, worker: dict[str, Any] | None = None, temporary: bool = False) -> None:
         app = self.app
@@ -287,6 +432,27 @@ class TranscriptionService:
             elif event_type == "ready":
                 worker["ready"] = True
                 self.update_model_state()
+                # If this is the worker an ensure_worker_ready()
+                # call is awaiting, signal the waiting code.
+                # Interactive path: post a main-thread callable that
+                # marks the dialog success + destroys it.
+                # Headless path: setting the Event unblocks the
+                # synchronous wait().
+                pending_id = self._pending_load_worker_id
+                if pending_id is not None and worker["id"] == pending_id:
+                    pending_dialog = self._pending_load_dialog
+                    pending_event = self._pending_load_event
+                    if pending_event is not None:
+                        pending_event.set()
+                    if pending_dialog is not None:
+                        # We're already on the Tk main thread inside
+                        # poll(), so we could call directly — but
+                        # routing via post_to_main keeps the contract
+                        # uniform and protects against any future
+                        # off-thread caller.
+                        self.app.post_to_main(
+                            pending_dialog.mark_success_and_close
+                        )
             elif event_type == "startup_error":
                 worker["ready"] = False
                 app.log(event.get("message", "Existing model failed to load."))

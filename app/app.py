@@ -80,6 +80,11 @@ class App(tk.Tk):
     # Download tab
     download_url_var: tk.StringVar
     download_folder_var: tk.StringVar
+    # v1.0.3 — optional time-range slice on the Download tab. Both
+    # vars are created by tabs.build_download_tab and are per-job
+    # (DownloadService clears them after enqueue, no config save).
+    download_start_time_var: tk.StringVar
+    download_end_time_var: tk.StringVar
     download_mode_var: tk.StringVar
     download_mode_combo: "ttk.Combobox"
     audio_format_var: tk.StringVar
@@ -272,18 +277,26 @@ class App(tk.Tk):
 
     # Bootstrap ---------------------------------------------------------------
     def _on_start(self) -> None:
-        # First-run Hub Folder picker. When ``hub_folder`` is already
-        # configured (returning user, or legacy ``model_path`` migration
-        # filled it in), start the worker immediately. When the dialog
-        # needs to fire, defer ``start_standby`` until the user has
-        # picked — otherwise the worker spawns with a stale model_path
-        # and downloads the model to a location the next launch won't
-        # look at, triggering a 3 GB re-download. See the matching
-        # comment in ``core/config.py:_apply_runtime_fallbacks``.
+        # First-run Hub Folder picker.
+        #
+        # v1.0.3 — lazy model load.
+        # We used to call ``transcription_service.start_standby()`` here
+        # (and in the hub-setup callbacks) so the Whisper model was
+        # already in RAM when the user clicked Transcribe. That cost
+        # ~1.5 GB of idle memory + a CPU spike on EVERY launch, even
+        # for sessions where the user never transcribed (e.g. opened
+        # the app just to browse history or download a video).
+        #
+        # The worker now spawns on the first transcribe request via
+        # ``TranscriptionService.ensure_worker_ready``, which shows a
+        # short modal "Loading Whisper model…" dialog. Do NOT re-add
+        # the standby calls here — the trade-off is intentional.
+        #
+        # The hub-setup dialog still fires on first launch so the user
+        # picks where models live; we just don't preload the model.
         from core import hub as _hub
 
         if _hub.is_hub_configured(self.app_config):
-            self.transcription_service.start_standby()
             return
 
         try:
@@ -295,7 +308,6 @@ class App(tk.Tk):
                     self.app_config = load_config()
                 except Exception:  # noqa: BLE001
                     pass
-                self.transcription_service.start_standby()
 
             ensure_hub_configured(
                 self, self.app_config,
@@ -303,9 +315,6 @@ class App(tk.Tk):
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("Hub setup dialog failed: %s", e)
-            # Dialog couldn't open — still start the worker so the user
-            # isn't left with a dead UI.
-            self.transcription_service.start_standby()
 
     # Menu --------------------------------------------------------------------
     def _build_menu(self) -> None:
@@ -1000,8 +1009,14 @@ class App(tk.Tk):
         self.wait_window(dialog)
         self.model_setup_running = False
         if dialog.success:
-            self.log("Model downloaded. Starting standby worker.")
-            self.transcription_service.start_standby()
+            # v1.0.3 — lazy model load.
+            # Used to call ``transcription_service.start_standby()``
+            # here to spawn a worker the moment the model bytes
+            # finished downloading. We no longer preload — the worker
+            # spawns on the first transcribe via
+            # ``ensure_worker_ready``, which puts up its own modal.
+            # Just log that the bytes are ready.
+            self.log("Model downloaded.")
             return True
         self.model_ready = False
         self.status_var.set("Model is required")
@@ -1036,9 +1051,16 @@ class App(tk.Tk):
         if not self.fv.get():
             self.log("Pick a file first — use the Browse button on the Transcribe tab.")
             return
-        if not self.model_ready:
-            if self.model_loading:
-                self.log("Model is still loading — please wait a moment, then try again.")
+        # First-transcribe gating:
+        #   1. If the model bytes are not on disk → download dialog.
+        #   2. Then call ensure_worker_ready to lazy-load the model
+        #      into a worker subprocess. v1.0.3: was previously
+        #      preloaded at startup; deferring it here saves ~1.5 GB
+        #      of idle RAM in sessions where the user never clicks
+        #      Transcribe.
+        if not self._model_bytes_present():
+            if self.model_setup_running:
+                self.log("Model download already in progress — please wait.")
                 return
             if not messagebox.askyesno(
                 "Whisper model required",
@@ -1051,6 +1073,9 @@ class App(tk.Tk):
             if not self.ensure_model_with_modal():
                 self.log("Transcription cancelled: the Whisper model is not ready.")
                 return
+        if not self.transcription_service.ensure_worker_ready(self):
+            self.log("Transcription cancelled: model load was cancelled")
+            return
         # Per-task language override. The picker shows "Auto" for the
         # default Whisper auto-detect; any other value is a language
         # name that maps to a known code via app.domain.languages.
@@ -1072,8 +1097,38 @@ class App(tk.Tk):
         self.log(f"Queued: {os.path.basename(self.fv.get())}")
         self.refresh()
 
+    def _model_bytes_present(self) -> bool:
+        """True when the Whisper model files are already on disk.
+
+        Cheap probe used by the lazy-load enqueue gate to decide
+        whether to surface the ~3 GB download dialog. Just checks
+        that the configured ``model_path`` exists; the worker's
+        load step will surface any deeper corruption via a
+        ``startup_error`` event.
+        """
+        try:
+            from pathlib import Path
+            mp = self.app_config.get("model_path") or ""
+            return bool(mp) and Path(mp).exists()
+        except Exception:  # noqa: BLE001
+            return False
+
     def enqueue_transcription_from_download(self, file_path: str, language: str) -> None:
-        """Auto-transcribe-after-download wiring: push a task without the modal."""
+        """Auto-transcribe-after-download wiring: push a task without the modal.
+
+        v1.0.3 — lazy model load. Spawning a worker / waiting for the
+        ``ready`` event happens via the headless path of
+        ``ensure_worker_ready`` so the user isn't surprised by a
+        modal popping up while they were watching the download
+        progress. If the load times out, we log + drop the task on
+        the floor rather than push a task that will never run.
+        """
+        if not self.transcription_service.ensure_worker_ready(self, headless=True):
+            self.log(
+                f"Auto-transcribe skipped: model load timed out for "
+                f"{os.path.basename(file_path)}"
+            )
+            return
         task = TranscriptionTask(file_path)
         if hasattr(task, "language"):
             setattr(task, "language", language)
@@ -1164,6 +1219,11 @@ class App(tk.Tk):
         _open_folder_helper(folder, parent=self)
 
     def _rerun_task(self, task: TranscriptionTask) -> None:
+        # Right-click re-run is an interactive action: show the
+        # lazy-load modal if no worker is alive yet.
+        if not self.transcription_service.ensure_worker_ready(self):
+            self.log("Re-run cancelled: model load was cancelled")
+            return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
@@ -1183,6 +1243,10 @@ class App(tk.Tk):
         turns out to be stale at validation time, so the user always
         gets an output.
         """
+        # Interactive — surface the lazy-load modal if needed.
+        if not self.transcription_service.ensure_worker_ready(self):
+            self.log("Resume cancelled: model load was cancelled")
+            return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
@@ -1711,6 +1775,17 @@ class App(tk.Tk):
                         return
                 except Exception:  # noqa: BLE001
                     continue
+            # v1.0.3 — lazy model load. The watched-folder path runs
+            # without a user at the keyboard, so we use the headless
+            # ensure_worker_ready path (no modal, synchronous wait
+            # with timeout). If the wait fails we log + drop the
+            # file rather than enqueue a task that will never run.
+            if not self.transcription_service.ensure_worker_ready(self, headless=True):
+                self.log(
+                    f"Watched: skipped {os.path.basename(path)} — "
+                    f"model load timed out"
+                )
+                return
             task = TranscriptionTask(path)
             self.queue.append(task)
             self.refresh()
@@ -1771,6 +1846,18 @@ class App(tk.Tk):
             from core.transcriber import has_resumable_checkpoint
         except Exception:  # noqa: BLE001
             has_resumable_checkpoint = lambda _p: False  # type: ignore[assignment]
+        # v1.0.3 — lazy model load. Crash-resume runs without a user
+        # at the keyboard (it fires from a startup after()), so we
+        # use the headless ensure_worker_ready path. If the load
+        # times out, we don't enqueue: the rows stay flagged
+        # interrupted in history.db and the user can manually drag
+        # the file in later.
+        if not self.transcription_service.ensure_worker_ready(self, headless=True):
+            self.log(
+                f"Crash-resume skipped: model load timed out "
+                f"({n} task(s) not re-enqueued)"
+            )
+            return
         resumed = 0
         for r in unique:
             task = TranscriptionTask(r["file_path"])
