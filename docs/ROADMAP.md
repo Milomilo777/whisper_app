@@ -646,7 +646,7 @@ Phase 1 establishes infra. Goal: 80% on `core/`, 50% on `app/services/`, smoke t
 
 ### 7.3 GitHub release workflow
 
-`v1.0.0` tag triggers an Actions workflow that:
+A release tag (`vX.Y.Z`) triggers an Actions workflow that:
 - Builds the PyInstaller bundle
 - Verifies the SHA256 of bundled binaries
 - Uploads the ZIP and an installer to the release

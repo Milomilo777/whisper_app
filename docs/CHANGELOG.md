@@ -6,6 +6,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [1.0.1] — 2026-05-23
 
+First stable release. Marks the project as feature-complete + freeze-ready
+after an audit-driven hardening sweep (~62 of 72 audit items closed, the
+rest deferred with documented rationale), plus a pre-ship fix for a
+fresh-install model re-download race caught during verification.
+
 ### Fixed
 
 - **3 GB re-download on the launch after the first-run hub picker.**
@@ -27,12 +32,6 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
       dialog's `on_done` callback fires, so the worker starts with
       the user's actual choice even when they pick a custom folder.
   Regression test added in `tests/core/test_hub.py`.
-
-## [1.0.0] — 2026-05-21
-
-First stable release. Marks the project as feature-complete + freeze-ready
-after an audit-driven hardening sweep (~62 of 72 audit items closed, the
-rest deferred with documented rationale).
 
 ### Added — v0.8 Phase 1 (Shards A + B)
 
@@ -84,10 +83,10 @@ rest deferred with documented rationale).
 
 ### Tests
 
-534 unit + integration tests (+259 from 0.7.x baseline of 275).
+535 unit + integration tests (+260 from 0.7.x baseline of 275).
 10/10 real-file end-to-end against the SMTV reference clip. 7/7
 smoke + end-to-end against the real Whisper model. pyright `app/
-core/` 0 errors, 0 warnings.
+core/` 0 errors, 0 warnings, 0 informations.
 
 ### Documentation
 
