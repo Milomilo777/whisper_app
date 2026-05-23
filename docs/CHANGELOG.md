@@ -4,6 +4,52 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-05-23
+
+UX + memory release. Adds the optional time-range download
+collaborators asked for and changes the model-load policy so
+idle launches don't pay for ~2 GB of RAM the user may never use.
+
+### Added
+
+- **Time-range video download.** New optional Start / End fields
+  on the Download tab. Fill either (or both) in `H:MM:SS`,
+  `MM:SS`, or seconds, and yt-dlp's `--download-sections`
+  fetches only that slice. The Queue row label shows a
+  `trim 0:51 → 1:25` badge so it's obvious which jobs are
+  partial. The transcribe step naturally runs proportionally
+  faster — most of the savings come from the smaller audio,
+  not the smaller download. Supreme Master TV URLs are not
+  sliced in this release (the SMTV scraper has no slicing path);
+  one clear WARN log line + a known-limitation note in
+  `docs/integrations/smtv-brief.md`.
+- **Lazy Whisper-model load.** The app no longer preloads the
+  3 GB Whisper model on launch. Idle RAM drops by ~2 GB.
+  The first transcribe of a session shows a modal "Loading
+  Whisper model…" dialog with an indeterminate progressbar; the
+  worker spawns and loads, the dialog dismisses, the transcribe
+  proceeds. Subsequent transcribes reuse the alive worker — only
+  the first one pays the load. Crash-resume and watched-folder
+  enqueues go through the same gate without showing a modal
+  (headless mode, 120 s timeout).
+
+### Changed
+
+- `App._on_start` no longer calls `start_standby()`. The method
+  is kept as a deprecated proxy for backwards compatibility with
+  any test that still calls it.
+
+### Documentation
+
+- `docs/integrations/smtv-brief.md` — added the time-range
+  limitation note.
+
+### Shipped artefacts
+
+Same shape as v1.0.2: Portable + Setup-Standard only. The
+Compact pipeline still exists in the repo + still builds, but no
+Compact EXE is published.
+
 ## [1.0.2] — 2026-05-23
 
 Reliability + UX release. Closes the long-uptime + multi-hour-file
