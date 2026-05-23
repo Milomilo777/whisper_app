@@ -5,33 +5,42 @@ this repo. Read this file before anything else.
 
 ---
 
-## 1. Current state (2026-05-22)
+## 1. Current state (2026-05-23)
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` (carries v1.0.0; pushed to origin) |
-| Last commit | `62883f5` — post-release cleanup (stale refs, CI, doc versions) |
+| Branch | `chore/cleanup-hardening` (carries v1.0.1; pushed to origin) |
+| Last commit | `c110a27` — release: bump to v1.0.1 |
 | Default GitHub branch | `master` (untouched) — separate from this branch |
-| Release tag | `v1.0.0` on GitHub with all three EXEs uploaded |
+| Latest release tag | `v1.0.1` on GitHub with all three EXEs uploaded |
+| Previous release | `v1.0.0` (still public; do not force-push or retag) |
 | Archive tag | `archive/release-v0.7-baseline` — pre-orphan snapshot |
 | Working tree | clean |
-| Unit suite | 534 passing |
+| Unit suite | 535 passing (one regression test added in v1.0.1) |
 | Real-file E2E | 10/10 PASS (`tests/core/test_v08_real_file_e2e.py`) |
 | Pyright basic | 0 errors, 0 warnings, 0 informations |
 | Smoke + end-to-end | 7/7 PASS against real SMTV clip |
 
 ## 2. Three deliverables
 
-All three live on GitHub as assets of the v1.0.0 release:
+All three live on GitHub as assets of the v1.0.1 release:
 
 | Asset | Local path | Size |
 |---|---|---|
-| Portable | `dist/WhisperProject-v1.0.0-Portable.exe` | 447 MB |
-| Setup-Compact | `dist_installer/WhisperProject-v1.0.0-Setup-Compact.exe` | 326 MB |
-| Setup-Standard | `dist_installer/WhisperProject-v1.0.0-Setup-Standard.exe` | 349 MB |
+| Portable | `dist/WhisperProject-v1.0.1-Portable.exe` | 447 MB |
+| Setup-Compact | `dist_installer/WhisperProject-v1.0.1-Setup-Compact.exe` | 326 MB |
+| Setup-Standard | `dist_installer/WhisperProject-v1.0.1-Setup-Standard.exe` | 349 MB |
 
 Download from:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
+
+### What changed in v1.0.1
+
+Single-fix patch release for a re-download race: a fresh-install
+worker spawned before the user clicked OK on the first-run hub
+picker, downloading the model to a path the next launch wouldn't
+look at — triggering a full 3 GB re-download. See
+`docs/RELEASE_NOTES_v1.0.1.md` and commits `c419b6e` + `c110a27`.
 
 ## 3. What's pending
 
@@ -45,8 +54,9 @@ clean install.
 
 ```
 origin/master                       (historical, untouched)
-origin/chore/cleanup-hardening      ← v1.0.0 lives here
-  tag v1.0.0                        ← the release commit
+origin/chore/cleanup-hardening      ← v1.0.0 + v1.0.1 live here
+  tag v1.0.1                        ← latest release commit (c110a27)
+  tag v1.0.0                        ← prior release (still public)
   tag archive/release-v0.7-baseline ← pre-orphan snapshot (recovery aid)
   tag v0.7.1, v0.7.0                ← historical releases
 ```
@@ -93,6 +103,7 @@ Expected: 534 tests pass, pyright 0/0, working tree clean.
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Process model + threading |
 | [docs/CONFIG.md](CONFIG.md) | Every config key documented |
 | [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) | How to ship the next release |
+| [docs/RELEASE_NOTES_v1.0.1.md](RELEASE_NOTES_v1.0.1.md) | v1.0.1 user-facing notes (latest) |
 | [docs/RELEASE_NOTES_v1.0.0.md](RELEASE_NOTES_v1.0.0.md) | v1.0.0 user-facing notes |
 | [docs/CHANGELOG.md](CHANGELOG.md) | Full version history |
 | [CLAUDE.md](../CLAUDE.md) | Durable rules for any Claude Code session |
