@@ -21,6 +21,7 @@ how it plugs into the Download tab.
 from __future__ import annotations
 
 import html as _html
+import logging
 import os
 import re
 import urllib.error
@@ -28,6 +29,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------- regexes --
@@ -485,3 +488,26 @@ def _strip_tags(html_text: str) -> str:
     parser.feed(html_text)
     parser.close()
     return parser.value()
+
+
+# ---------------------------------------------------------------- limits --
+
+
+def warn_time_range_unsupported(url: str) -> None:
+    """Log a single WARN explaining that SMTV ignores time-range slicing.
+
+    The Download tab in v1.0.3 lets the user enter Start/End times to
+    request only a slice of the source video. yt-dlp implements that
+    via ``--download-sections``, but the SMTV scraper here downloads
+    over plain HTTP from the CDN — no server-side slicing is
+    available. The downloader still proceeds; this warning makes sure
+    the user is told why they got the full clip.
+
+    Documented in ``docs/integrations/smtv-brief.md`` under "Known
+    limitations".
+    """
+    logger.warning(
+        "Time-range download is not supported for Supreme Master TV URLs "
+        "in this release; downloading the full clip. (url=%s)",
+        url,
+    )

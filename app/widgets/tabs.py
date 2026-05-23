@@ -333,6 +333,38 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     )
     app.output_format_combo.grid(row=5, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
 
+    # --- Optional time-range slice (v1.0.3) -------------------------------
+    # Two short Entry widgets inside a LabelFrame, plus a tiny hint
+    # label below. Both vars are per-job (no config persistence) and
+    # the DownloadService clears them after the task is queued.
+    app.download_start_time_var = tk.StringVar(value="")
+    app.download_end_time_var = tk.StringVar(value="")
+    trim_frame = ttk.LabelFrame(top, text="Time range (optional)", padding=(8, 4))
+    trim_frame.grid(
+        row=5, column=2, sticky="ew", padx=(12, 0), pady=(8, 0)
+    )
+    ttk.Label(trim_frame, text="Start").grid(row=0, column=0, sticky="w")
+    start_entry = ttk.Entry(
+        trim_frame, textvariable=app.download_start_time_var, width=12
+    )
+    start_entry.grid(row=0, column=1, sticky="w", padx=(4, 8))
+    ttk.Label(trim_frame, text="0:00:00", foreground="#888").grid(
+        row=0, column=2, sticky="w"
+    )
+    ttk.Label(trim_frame, text="End").grid(row=1, column=0, sticky="w", pady=(2, 0))
+    end_entry = ttk.Entry(
+        trim_frame, textvariable=app.download_end_time_var, width=12
+    )
+    end_entry.grid(row=1, column=1, sticky="w", padx=(4, 8), pady=(2, 0))
+    ttk.Label(trim_frame, text="0:00:00", foreground="#888").grid(
+        row=1, column=2, sticky="w", pady=(2, 0)
+    )
+    ttk.Label(
+        trim_frame,
+        text="e.g. 0:00:51 to 0:01:25 - leave blank for full video",
+        foreground="#888",
+    ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
     ttk.Label(top, text="Subtitles").grid(row=6, column=0, sticky="w", pady=(8, 0))
     sub_frame = ttk.Frame(top)
     sub_frame.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))

@@ -69,6 +69,113 @@ def _content_length_or_none(resp: Any) -> int | None:
         return None
 
 
+# --- timecode helpers (v1.0.3 — optional --download-sections slice) ------------
+
+_MAX_TIMECODE_SECONDS = 86_400.0  # 24h sanity cap
+
+
+def _parse_timecode(raw: str | None) -> float | None:
+    """Parse a user-typed timecode into seconds.
+
+    Accepted shapes (whitespace-tolerant):
+
+      * ``H:MM:SS[.ms]`` — e.g. ``"1:23:45"``, ``"0:00:51"``
+      * ``MM:SS[.ms]``   — e.g. ``"5:30"``, ``"1:25.5"``
+      * ``SS[.ms]``      — e.g. ``"90"``, ``"7.25"``
+
+    Returns ``None`` for ``None``, empty string, pure whitespace,
+    negative values, values above the 24-hour sanity cap, or any
+    string the parser can't make sense of (so the caller can treat
+    "garbled input" the same as "left blank").
+    """
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    parts = s.split(":")
+    if len(parts) > 3:
+        return None
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        return None
+    if any(n < 0 for n in nums):
+        return None
+    # Reject sub-positions >= 60 in MM:SS / H:MM:SS shapes — that
+    # would normally be a typo. SS-only is allowed to exceed 60
+    # because the user might legitimately type "90" for 90 seconds.
+    if len(nums) >= 2:
+        if any(n >= 60 for n in nums[1:]):
+            return None
+    if len(parts) == 3:
+        h, m, sec = nums
+        total = h * 3600 + m * 60 + sec
+    elif len(parts) == 2:
+        m, sec = nums
+        total = m * 60 + sec
+    else:
+        total = nums[0]
+    if total < 0 or total > _MAX_TIMECODE_SECONDS:
+        return None
+    return total
+
+
+def _fmt_timecode(seconds: float) -> str:
+    """Format seconds back into yt-dlp's preferred ``H:MM:SS.SS``."""
+    if seconds < 0:
+        seconds = 0.0
+    total = int(seconds)
+    frac = seconds - total
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    base = f"{hours}:{minutes:02d}:{secs:02d}"
+    # Preserve sub-second precision only when the user supplied any —
+    # avoids polluting argv with .00 for whole-second inputs.
+    if frac > 0:
+        # 2-decimal fractional, drop trailing zeros + dot.
+        suffix = f"{frac:.2f}".lstrip("0").rstrip("0").rstrip(".")
+        if suffix:
+            base = f"{base}{suffix}"
+    return base
+
+
+def _download_sections_arg(
+    start: float | None, end: float | None
+) -> str | None:
+    """Build the ``--download-sections`` value, or ``None`` if both bounds unset."""
+    if start is None and end is None:
+        return None
+    start_str = _fmt_timecode(start) if start is not None else ""
+    end_str = _fmt_timecode(end) if end is not None else ""
+    return f"*{start_str}-{end_str}"
+
+
+def _time_range_badge(
+    start: float | None, end: float | None
+) -> str | None:
+    """Short ``MM:SS -> MM:SS`` badge for the Queue row title.
+
+    Mirrors :meth:`VideoDownloadTask.time_range_label` but is exposed
+    here so the enqueue path can decorate the title before any task
+    instance exists.
+    """
+    if start is None and end is None:
+        return None
+
+    def _fmt(seconds: float | None, *, fallback: str) -> str:
+        if seconds is None:
+            return fallback
+        total = int(seconds)
+        hours, rem = divmod(total, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        return f"{minutes}:{secs:02d}"
+
+    return f"{_fmt(start, fallback='start')} -> {_fmt(end, fallback='end')}"
+
+
 # Module-level pure builders (tested in tests/test_download_command.py) ---------
 
 
@@ -140,6 +247,17 @@ def build_download_command(
         command.extend(
             ["-f", f"{video_selector}+{audio_selector}/best", "--merge-output-format", output_format]
         )
+
+    # Optional --download-sections slice (v1.0.3). Only emitted when
+    # the user supplied a start and/or end in the Download tab fields
+    # and the task carries the parsed values. yt-dlp accepts the same
+    # ``*start-end`` shape regardless of audio-only vs muxed mode.
+    section_start = getattr(task, "section_start", None)
+    section_end = getattr(task, "section_end", None)
+    sections_arg = _download_sections_arg(section_start, section_end)
+    if sections_arg is not None:
+        command.extend(["--download-sections", sections_arg])
+
     command.append(task.url)
     return command
 
@@ -316,12 +434,63 @@ class DownloadService:
             format_info["episode"] = smtv_episode
             format_label = f"SMTV {audio_label if mode == 'Audio' else video_label}"
 
+        # Optional time-range slice (v1.0.3). Read both Start/End
+        # entry vars, parse with the strict timecode parser, and pin
+        # the result onto the task. Either bound may stay None (open-
+        # ended on that side). When the URL is SMTV the slice is
+        # ignored at run-time (smtv path streams the full CDN file)
+        # — the warning is logged by core.integrations.smtv when the
+        # download begins so the user sees it in the same console.
+        raw_start = ""
+        raw_end = ""
+        start_var = getattr(app, "download_start_time_var", None)
+        end_var = getattr(app, "download_end_time_var", None)
+        if start_var is not None:
+            try:
+                raw_start = start_var.get()
+            except Exception:  # noqa: BLE001
+                raw_start = ""
+        if end_var is not None:
+            try:
+                raw_end = end_var.get()
+            except Exception:  # noqa: BLE001
+                raw_end = ""
+        section_start = _parse_timecode(raw_start)
+        section_end = _parse_timecode(raw_end)
+        any_range = section_start is not None or section_end is not None
+
+        # Decorate the visible title with the trim badge so the
+        # Queue tab's File column shows the user what slice is
+        # being downloaded — matches the spec's "trim 0:51 -> 1:25".
+        decorated_title = title
+        if any_range:
+            badge = _time_range_badge(section_start, section_end)
+            if badge:
+                decorated_title = f"{title}  -  trim {badge}"
+
+        if any_range and is_smtv:
+            # The SMTV streamer doesn't honour --download-sections;
+            # warn the user once via the existing log channel so
+            # nobody silently gets a full clip when they asked for
+            # a slice. The actual download is unchanged.
+            smtv_mod.warn_time_range_unsupported(url)
+            app.download_events.put(
+                ("log", None,
+                 "Time-range download is not supported for Supreme Master "
+                 "TV URLs in this release; downloading the full clip.")
+            )
+
         tasks_to_enqueue = [
             VideoDownloadTask(
-                url, folder, format_label, format_info, title,
+                url, folder, format_label, format_info, decorated_title,
                 subtitles_enabled=False if is_smtv else subtitles_enabled,
                 subtitle_lang="" if is_smtv else sub_lang_code,
                 detected_language=app.current_video_language,
+                # SMTV ignores the slice at run-time but we still
+                # store the values so .time_range_label() and any
+                # later inspection see what the user asked for.
+                section_start=section_start,
+                section_end=section_end,
             )
         ]
 
@@ -345,6 +514,23 @@ class DownloadService:
         for t in tasks_to_enqueue:
             app.download_queue.append(t)
         app.refresh_download_queue()
+
+        # Clear the time-range entries so the next URL the user
+        # pastes doesn't accidentally inherit this job's slice. The
+        # spec calls these per-job, not persistent. Done in a try/
+        # except so a missing var (e.g. headless test harness) is
+        # never fatal.
+        if start_var is not None:
+            try:
+                start_var.set("")
+            except Exception:  # noqa: BLE001
+                pass
+        if end_var is not None:
+            try:
+                end_var.set("")
+            except Exception:  # noqa: BLE001
+                pass
+
         self.process_queue()
 
     # Driver

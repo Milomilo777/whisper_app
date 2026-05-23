@@ -281,3 +281,23 @@ def test_sanitise_filename_handles_unsafe_characters(monkeypatch):
     cleaned = smtv._sanitise_filename(ep.title)
     for bad in '<>:"/\\|?*':
         assert bad not in cleaned
+
+
+# ------------------------------------ time-range slicing not supported (v1.0.3)
+
+
+def test_warn_time_range_unsupported_logs_warning(caplog):
+    """warn_time_range_unsupported emits exactly one WARN line."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="core.integrations.smtv")
+    smtv.warn_time_range_unsupported(
+        "https://suprememastertv.com/en1/v/314324511501.html"
+    )
+    matching = [
+        r for r in caplog.records
+        if "Time-range download is not supported" in r.getMessage()
+    ]
+    assert len(matching) == 1
+    assert matching[0].levelno == logging.WARNING
+    assert "314324511501" in matching[0].getMessage()

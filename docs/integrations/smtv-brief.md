@@ -467,6 +467,24 @@ ToS blocker.
 
 ---
 
+## Known limitations
+
+- **Time-range download (v1.0.3).** The Download tab now exposes
+  optional Start/End fields that wire through to
+  `yt-dlp --download-sections "*start-end"` for YouTube / generic
+  URLs. The SMTV path streams the source file straight from the CDN
+  via plain HTTP and does **not** support server-side slicing — there
+  is no equivalent of `--download-sections` on the CDN endpoint, and
+  client-side trimming would require ffmpeg post-processing that
+  defeats the "small clip = small bandwidth" goal of the feature.
+  When a user enters a Start or End value alongside an SMTV URL, the
+  scraper logs a single WARN (`Time-range download is not supported
+  for Supreme Master TV URLs in this release; downloading the full
+  clip.`) via `core.integrations.smtv.warn_time_range_unsupported`
+  and the download proceeds with the full clip. The same line is
+  also posted to the in-app console so the user sees it next to the
+  download progress.
+
 ## Out of scope
 
 Documented now so a future session knows not to scope-creep this one:

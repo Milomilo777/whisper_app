@@ -7,6 +7,10 @@ import types
 import pytest
 
 from app.services.download_service import (
+    _download_sections_arg,
+    _fmt_timecode,
+    _parse_timecode,
+    _time_range_badge,
     build_download_command,
     build_subtitle_command,
     parse_destination_line,
@@ -17,7 +21,9 @@ from app.services.download_service import (
 def _task(folder: str = "/tmp/out", url: str = "https://www.youtube.com/watch?v=abc",
           mode: str = "Audio and video", output: str = "mp4",
           audio_kind: str = "best_audio", audio_id: str = "140",
-          video_kind: str = "best_video", video_id: str = "137"):
+          video_kind: str = "best_video", video_id: str = "137",
+          section_start: float | None = None,
+          section_end: float | None = None):
     return types.SimpleNamespace(
         folder=folder,
         url=url,
@@ -27,6 +33,8 @@ def _task(folder: str = "/tmp/out", url: str = "https://www.youtube.com/watch?v=
             "audio": {"kind": audio_kind, "format_id": audio_id},
             "video": {"kind": video_kind, "format_id": video_id},
         },
+        section_start=section_start,
+        section_end=section_end,
     )
 
 
@@ -171,3 +179,169 @@ def test_parse_destination_line_handles_extract_audio():
 def test_parse_destination_line_returns_none_for_other_lines():
     assert parse_destination_line("[download] 42% of 10MB") is None
     assert parse_destination_line("") is None
+
+
+# --- timecode helpers (v1.0.3 --download-sections) -------------------------
+
+
+def test_parse_timecode_accepts_h_mm_ss():
+    assert _parse_timecode("1:23:45") == pytest.approx(5025.0)
+    assert _parse_timecode("0:00:51") == pytest.approx(51.0)
+
+
+def test_parse_timecode_accepts_mm_ss():
+    assert _parse_timecode("5:30") == pytest.approx(330.0)
+    assert _parse_timecode("0:51") == pytest.approx(51.0)
+
+
+def test_parse_timecode_accepts_bare_seconds():
+    assert _parse_timecode("90") == pytest.approx(90.0)
+    assert _parse_timecode("7.25") == pytest.approx(7.25)
+
+
+def test_parse_timecode_returns_none_for_blank_or_garbage():
+    assert _parse_timecode(None) is None
+    assert _parse_timecode("") is None
+    assert _parse_timecode("   ") is None
+    assert _parse_timecode("not a number") is None
+    assert _parse_timecode("1:2:3:4") is None  # too many colons
+
+
+def test_parse_timecode_rejects_negative_and_overflow():
+    assert _parse_timecode("-5") is None
+    assert _parse_timecode("-1:00") is None
+    # 25 hours == 90000s, above the 86400 sanity cap.
+    assert _parse_timecode("90000") is None
+
+
+def test_parse_timecode_rejects_minute_or_second_overflow_when_colon_form():
+    # When the user gave MM:SS, a sub-position of 60 is a typo.
+    assert _parse_timecode("5:99") is None
+    assert _parse_timecode("1:99:00") is None
+    # But a bare seconds value can exceed 60 — "90s" is fine.
+    assert _parse_timecode("99") == pytest.approx(99.0)
+
+
+def test_fmt_timecode_produces_h_mm_ss():
+    assert _fmt_timecode(51.0) == "0:00:51"
+    assert _fmt_timecode(85.0) == "0:01:25"
+    assert _fmt_timecode(3661.0) == "1:01:01"
+
+
+def test_fmt_timecode_preserves_fraction_when_present():
+    out = _fmt_timecode(85.5)
+    assert out.startswith("0:01:25")
+    assert "5" in out  # ".5" appended
+
+
+def test_download_sections_arg_both_bounds():
+    assert _download_sections_arg(51.0, 85.0) == "*0:00:51-0:01:25"
+
+
+def test_download_sections_arg_open_left():
+    assert _download_sections_arg(None, 85.0) == "*-0:01:25"
+
+
+def test_download_sections_arg_open_right():
+    assert _download_sections_arg(51.0, None) == "*0:00:51-"
+
+
+def test_download_sections_arg_no_bounds_returns_none():
+    assert _download_sections_arg(None, None) is None
+
+
+def test_time_range_badge_short_form():
+    assert _time_range_badge(51.0, 85.0) == "0:51 -> 1:25"
+    assert _time_range_badge(None, 85.0) == "start -> 1:25"
+    assert _time_range_badge(51.0, None) == "0:51 -> end"
+    assert _time_range_badge(None, None) is None
+
+
+# --- build_download_command + --download-sections wiring -------------------
+
+
+def test_build_download_command_omits_sections_by_default():
+    task = _task()
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "--download-sections" not in cmd
+
+
+def test_build_download_command_emits_sections_for_sample_slice():
+    """Spec sample: start=0:00:51 end=0:01:25 -> *0:00:51-0:01:25."""
+    task = _task(section_start=51.0, section_end=85.0)
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "--download-sections" in cmd
+    idx = cmd.index("--download-sections")
+    assert cmd[idx + 1] == "*0:00:51-0:01:25"
+    # Sections flag must come before the URL (yt-dlp accepts either
+    # order but we keep the URL last by convention).
+    assert cmd[-1] == task.url
+
+
+def test_build_download_command_sections_open_left():
+    task = _task(section_start=None, section_end=85.0)
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert cmd[cmd.index("--download-sections") + 1] == "*-0:01:25"
+
+
+def test_build_download_command_sections_open_right():
+    task = _task(section_start=51.0, section_end=None)
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert cmd[cmd.index("--download-sections") + 1] == "*0:00:51-"
+
+
+def test_build_download_command_sections_audio_only_mode():
+    task = _task(mode="Audio", output="mp3", audio_kind="best_audio",
+                 section_start=10.0, section_end=20.0)
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "-x" in cmd
+    assert cmd[cmd.index("--download-sections") + 1] == "*0:00:10-0:00:20"
+
+
+# --- VideoDownloadTask.time_range_label ------------------------------------
+
+
+def test_time_range_label_on_real_task_class():
+    from app.domain.tasks import VideoDownloadTask
+
+    t = VideoDownloadTask(
+        url="https://example.com/v", folder="/tmp", format_label="x",
+        format_info={"mode": "Audio and video", "output": "mp4",
+                     "audio": {"kind": "best_audio"},
+                     "video": {"kind": "best_video"}},
+        section_start=51.0, section_end=85.0,
+    )
+    assert t.time_range_label() == "0:51 -> 1:25"
+    assert t.section_start == 51.0
+    assert t.section_end == 85.0
+
+
+def test_time_range_label_none_when_no_bounds_set():
+    from app.domain.tasks import VideoDownloadTask
+
+    t = VideoDownloadTask(
+        url="https://example.com/v", folder="/tmp", format_label="x",
+        format_info={"mode": "Audio and video", "output": "mp4",
+                     "audio": {"kind": "best_audio"},
+                     "video": {"kind": "best_video"}},
+    )
+    assert t.time_range_label() is None
+    assert t.section_start is None
+    assert t.section_end is None
+
+
+def test_time_range_label_open_bounds():
+    from app.domain.tasks import VideoDownloadTask
+
+    fmt = {"mode": "Audio", "output": "mp3",
+           "audio": {"kind": "best_audio"}, "video": {"kind": "best_video"}}
+    left_open = VideoDownloadTask(
+        url="x", folder="/tmp", format_label="x", format_info=fmt,
+        section_end=85.0,
+    )
+    assert left_open.time_range_label() == "start -> 1:25"
+    right_open = VideoDownloadTask(
+        url="x", folder="/tmp", format_label="x", format_info=fmt,
+        section_start=51.0,
+    )
+    assert right_open.time_range_label() == "0:51 -> end"
