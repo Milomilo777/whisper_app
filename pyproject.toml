@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whisper-project-basic"
+version = "0.1.0"
+description = "Local Whisper desktop app — radically simple: drop a file, get SRT/JSON/TXT subtitles."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Whisper Project authors" }]
+keywords = ["whisper", "transcription", "speech-to-text"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+dependencies = [
+    "faster-whisper>=1.0.3",
+    "requests>=2.31.0",
+    "sv-ttk>=2.6.0",
+    "tkinterdnd2>=0.4.0",
+    "platformdirs>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "responses>=0.25",
+    "pyright>=1.1.350",
+]
+
+[project.scripts]
+whisper-project-basic = "gui:main"
+
+[project.urls]
+Homepage = "https://github.com/Milomilo777/whisper-project"
+Repository = "https://github.com/Milomilo777/whisper-project"
+
+[tool.setuptools.packages.find]
+include = ["app*", "core*"]
+exclude = ["tests*", "build*", "dist*", "docs*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pyright]
+include = ["core", "app"]
+exclude = ["**/__pycache__", "build", "dist", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportMissingTypeStubs = false

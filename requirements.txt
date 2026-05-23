@@ -1,0 +1,8 @@
+# Runtime dependencies — Whisper Project (basic).
+# Tested on Python 3.11+.
+
+faster-whisper>=1.0.3
+requests>=2.31.0
+sv-ttk>=2.6.0
+tkinterdnd2>=0.4.0
+platformdirs>=4.0.0
