@@ -411,6 +411,11 @@ class TranscriptionService:
                 "action": "transcribe",
                 "file_path": t.file_path,
                 "language": getattr(t, "language", None),
+                # Resume-from-cancellation: when the task carries a
+                # ``resume`` flag (set by App.resume_task or by the
+                # crash-resume hook), forward it so the worker calls
+                # ``resume_transcription`` instead of ``transcribe``.
+                "resume": bool(getattr(t, "resume", False)),
             }
             self._dispatch_command_async(worker, t, command)
 

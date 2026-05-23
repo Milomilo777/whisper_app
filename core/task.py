@@ -23,3 +23,9 @@ class TranscriptionTask:
         self.language: str | None = None
         # Phase 3a — primary key in core.history.HistoryDB.transcriptions
         self.history_id: int = 0
+        # Resume-from-cancellation: when True the worker dispatches
+        # ``resume_transcription`` instead of ``transcribe`` so the
+        # partial checkpoint on disk is reused. Falls back to a fresh
+        # transcribe automatically if the partial is stale (different
+        # source mtime, changed model/config, etc.).
+        self.resume: bool = False

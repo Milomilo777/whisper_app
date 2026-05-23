@@ -30,11 +30,19 @@ try:  # 1.0.3+ ships this; older wheels do not
 except ImportError:  # pragma: no cover
     BatchedInferencePipeline = None  # type: ignore[assignment]
 
+from . import _checkpoint
 from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
 from .paths import bundled_binary
 from .task import TranscriptionTask
 from .writers import get_binary_writer, get_writer, is_binary, supported_formats
+
+# Periodic checkpoint cadence. Writing after every segment is wasteful
+# on long files (1 fsync per ~5 s of audio); waiting until completion
+# defeats the point. N+timer-or together so very short segments (busy
+# dialogue) still checkpoint at a steady wall-clock rate.
+_CHECKPOINT_EVERY_N_SEGMENTS = 10
+_CHECKPOINT_EVERY_N_SECONDS = 20.0
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +336,68 @@ def _segment_to_dict(seg: Any, want_words: bool) -> dict[str, Any]:
             for w in words
         ]
     return payload
+
+
+def _current_backend_and_model() -> tuple[str, str]:
+    """Snapshot the (backend, model_name) pair the checkpoint records.
+
+    Reads the module-level ``config`` (which honours runtime overrides
+    via ``_runtime_overrides_scope``). Centralised so the periodic
+    writer and the resume validator agree on what "the current
+    backend / model" means.
+    """
+    backend = (
+        str(config.get("transcribe_backend") or "faster_whisper").strip().lower()
+    )
+    model_info = config.get("model") or {}
+    model_name = ""
+    if isinstance(model_info, dict):
+        model_name = str(model_info.get("name") or "")
+    if not model_name:
+        # Fallback to the model slug if the dict form isn't populated.
+        model_name = str(config.get("whisper_model") or "")
+    return backend, model_name
+
+
+def _write_periodic_checkpoint(
+    task: "TranscriptionTask",
+    segments_data: list[dict[str, Any]],
+    last_end_time: float,
+    detected_language: str,
+    language_probability: float,
+    log_cb: Callable[[str], None] | None,
+) -> None:
+    """Persist a partial checkpoint; never raises — logs and moves on.
+
+    The periodic writer must not interrupt transcription on any error:
+    a full disk or a permissions glitch should not kill a 2-hour run.
+    """
+    backend, model_name = _current_backend_and_model()
+    try:
+        _checkpoint.write_checkpoint(
+            task.file_path,
+            backend=backend,
+            model_name=model_name,
+            language=detected_language or "",
+            language_probability=float(language_probability or 0.0),
+            cfg_fingerprint=_checkpoint.config_fingerprint(config),
+            last_end_time=float(last_end_time),
+            segments=segments_data,
+            checkpoint_time=time.time(),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Periodic checkpoint write failed: %s", e)
+        log(f"WARN: could not write partial checkpoint: {e}", log_cb)
+
+
+def has_resumable_checkpoint(source_path: str) -> bool:
+    """Public helper for the UI: is there a partial on disk for this file?
+
+    Only checks existence; the resume path does the full
+    backend/model/mtime validation later. The UI uses this just to
+    decide whether to surface a "Resume" right-click entry.
+    """
+    return _checkpoint.has_checkpoint(source_path)
 
 
 def _render_filename_template(
@@ -967,9 +1037,31 @@ def transcribe(
 
         base = os.path.splitext(task.file_path)[0]
 
+        # Resume support: periodic checkpoint cadence. Track the
+        # wall-clock time of the last write and the segment count
+        # since the last write; whichever threshold fires first
+        # triggers a new write. See module constants for the values.
+        last_checkpoint_time = time.time()
+        segments_since_checkpoint = 0
+        detected_lang_so_far = str(getattr(info, "language", "") or "")
+        lang_prob_so_far = float(getattr(info, "language_probability", 0.0) or 0.0)
+
         segments_data: list[dict[str, Any]] = []
         for seg in segments:
             if task.cancelled:
+                # Final-flush: persist whatever we have so the user can
+                # resume from this point. If the periodic writer fired
+                # less than a second ago this is essentially a no-op
+                # for the on-disk state.
+                if segments_data:
+                    _write_periodic_checkpoint(
+                        task,
+                        segments_data,
+                        float(segments_data[-1].get("end", 0.0)),
+                        detected_lang_so_far,
+                        lang_prob_so_far,
+                        log_cb,
+                    )
                 log("Task cancelled", log_cb)
                 return
             while task.paused and not task.cancelled:
@@ -983,6 +1075,23 @@ def transcribe(
                 progress_cb(percent)
 
             segments_data.append(_segment_to_dict(seg, want_words))
+            segments_since_checkpoint += 1
+
+            now = time.time()
+            if (
+                segments_since_checkpoint >= _CHECKPOINT_EVERY_N_SEGMENTS
+                or (now - last_checkpoint_time) >= _CHECKPOINT_EVERY_N_SECONDS
+            ):
+                _write_periodic_checkpoint(
+                    task,
+                    segments_data,
+                    float(seg.end),
+                    detected_lang_so_far,
+                    lang_prob_so_far,
+                    log_cb,
+                )
+                last_checkpoint_time = now
+                segments_since_checkpoint = 0
 
         # Speaker diarization (opt-in) + word-level alignment (opt-in).
         detected_lang = str(getattr(info, "language", "") or "")
@@ -1001,6 +1110,11 @@ def transcribe(
             written.append(chapter_path)
         log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
             log_cb)
+
+        # On success the partial is no longer useful — delete it so
+        # the next "Re-run" doesn't accidentally resume from a stale
+        # checkpoint of the previous (now-complete) run.
+        _checkpoint.delete_checkpoint(task.file_path)
 
         if progress_cb:
             progress_cb(100)
@@ -1051,8 +1165,34 @@ def _transcribe_via_alt_backend(
             task.language_probability = lang_info.probability
 
     if task.cancelled:
+        # Alt-backend gives us the segments list as a single return —
+        # if it returned a partial on cancellation, persist what we
+        # got so the user can resume. Same shape as the main path's
+        # final-flush.
+        if segments_data:
+            _write_periodic_checkpoint(
+                task,
+                segments_data,
+                float(segments_data[-1].get("end", 0.0)),
+                str(lang_info.language or ""),
+                float(getattr(lang_info, "probability", 0.0) or 0.0),
+                log_cb,
+            )
         log("Task cancelled", log_cb)
         return
+
+    # Single checkpoint right after the backend returns — covers a
+    # crash during the post-pipeline (diarisation can run for
+    # minutes on long files).
+    if segments_data:
+        _write_periodic_checkpoint(
+            task,
+            segments_data,
+            float(segments_data[-1].get("end", 0.0)),
+            str(lang_info.language or ""),
+            float(getattr(lang_info, "probability", 0.0) or 0.0),
+            log_cb,
+        )
 
     base = os.path.splitext(task.file_path)[0]
     # Defensive str cast: backends may emit None for language when
@@ -1079,7 +1219,276 @@ def _transcribe_via_alt_backend(
         f"{', '.join(os.path.basename(p) for p in written)}",
         log_cb,
     )
+    # Success — drop the partial.
+    _checkpoint.delete_checkpoint(task.file_path)
     if progress_cb:
         progress_cb(100)
     elapsed = time.time() - start
     log(f"Done in {elapsed:.2f}s", log_cb)
+
+
+def _slice_audio_from(
+    source_path: str,
+    start_seconds: float,
+    out_dir: Path,
+) -> str:
+    """Cut ``source_path[start_seconds:end]`` to a temp file via ffmpeg.
+
+    ``-ss`` is placed BEFORE ``-i`` for fast seeking (ffmpeg jumps to
+    the nearest keyframe without decoding everything before). We
+    re-encode to WAV PCM 16 kHz mono so Whisper receives a format it
+    handles consistently regardless of the source container; this
+    matches the resampling pattern ``_prepare_audio_16k_mono`` in
+    ``core/diarization`` already uses with the bundled ffmpeg.
+
+    Returns the path to the slice on disk. Raises ``RuntimeError`` on
+    ffmpeg failure (the caller treats that as "fall back to full
+    re-run").
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sha = _checkpoint.source_key(source_path)
+    # Include pid + thread so two concurrent resume attempts on the
+    # same file don't clobber each other's slice.
+    slice_path = out_dir / f"{sha}.{os.getpid()}-{threading.get_ident()}.slice.wav"
+
+    ffmpeg = bundled_binary("ffmpeg")
+    cmd = [
+        ffmpeg,
+        "-loglevel", "error",
+        "-ss", f"{float(start_seconds):.3f}",
+        "-i", source_path,
+        "-ac", "1",
+        "-ar", "16000",
+        "-f", "wav",
+        "-y",
+        str(slice_path),
+    ]
+    kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        result = subprocess.run(cmd, timeout=600, **kwargs)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"ffmpeg timed out slicing {source_path} from {start_seconds}s"
+        ) from e
+    except (FileNotFoundError, OSError) as e:
+        raise RuntimeError(f"ffmpeg binary not available: {e}") from e
+    if result.returncode != 0:
+        err = (result.stderr or b"").decode("utf-8", "replace").strip()[:400]
+        raise RuntimeError(
+            f"ffmpeg slice failed (exit={result.returncode}): {err or 'no output'}"
+        )
+    return str(slice_path)
+
+
+def resume_transcription(
+    task: TranscriptionTask,
+    progress_cb: Callable[[int], None] | None = None,
+    log_cb: Callable[[str], None] | None = None,
+    language_cb: Callable[[str, float], None] | None = None,
+) -> bool:
+    """Resume a previously-cancelled / paused / crashed transcription.
+
+    Returns True if the resume completed (final outputs written),
+    False if the checkpoint was invalid / stale and a full re-run is
+    required instead. Caller (the worker) handles the False case by
+    falling back to a fresh ``transcribe(task)``.
+
+    Only the default ``faster_whisper`` backend supports resume —
+    alt backends return False so the worker re-runs from scratch.
+    The slicing strategy assumes the WhisperModel.transcribe API
+    surface; backends that don't share it would need their own slicer.
+    """
+    log_cb = _with_task_prefix(log_cb, task)
+    with _runtime_overrides_scope(task) as runtime_cfg:
+        data = _checkpoint.load_checkpoint(task.file_path)
+        if data is None:
+            log("Resume: no checkpoint on disk; falling back to full re-run.", log_cb)
+            return False
+
+        backend, model_name = _current_backend_and_model()
+        # Resume currently supports only the faster_whisper path; alt
+        # backends would need a per-backend slicer. Fall back to a
+        # full re-run rather than guess.
+        backend_for_check = backend
+        if backend and backend != "faster_whisper":
+            log(
+                f"Resume: backend={backend!r} does not support resume; "
+                "falling back to full re-run.",
+                log_cb,
+            )
+            _checkpoint.delete_checkpoint(task.file_path)
+            return False
+
+        cfg_fp = _checkpoint.config_fingerprint(config)
+        reason = _checkpoint.validate_checkpoint(
+            data,
+            backend=backend_for_check,
+            model_name=model_name,
+            cfg_fingerprint=cfg_fp,
+        )
+        if reason:
+            log(f"Resume: checkpoint invalid ({reason}); deleting partial.", log_cb)
+            _checkpoint.delete_checkpoint(task.file_path)
+            return False
+
+        last_end_time = float(data.get("last_end_time") or 0.0)
+        prior_segments = list(data.get("segments") or [])
+        cp_language = str(data.get("language") or "")
+        cp_lang_prob = float(data.get("language_probability") or 0.0)
+        log(
+            f"Resume: continuing from {last_end_time:.2f}s "
+            f"({len(prior_segments)} segment(s) already captured).",
+            log_cb,
+        )
+
+        # Re-announce the detected language so the UI label stays
+        # accurate after the resume.
+        if cp_language and language_cb:
+            try:
+                language_cb(cp_language, cp_lang_prob)
+            except Exception:
+                logger.exception("language_cb raised on resume")
+        if cp_language and hasattr(task, "detected_language"):
+            task.detected_language = cp_language
+            task.language_probability = cp_lang_prob
+
+        # Make sure the model is loaded — same wait as transcribe().
+        global MODEL
+        while not MODEL_READY:
+            if MODEL_ERROR:
+                raise RuntimeError(MODEL_ERROR)
+            time.sleep(0.5)
+
+        # Slice the source audio from last_end_time to end. Slices live
+        # under ``user_data_dir()/partials/`` next to the checkpoint
+        # JSON so a stray temp file is easy to garbage-collect later.
+        slice_dir = _checkpoint.partials_dir()
+        try:
+            slice_path = _slice_audio_from(
+                task.file_path, last_end_time, slice_dir
+            )
+        except RuntimeError as e:
+            log(
+                f"Resume: could not slice source audio ({e}); "
+                "falling back to full re-run.",
+                log_cb,
+            )
+            # Don't delete the checkpoint — the slicer is the failure
+            # mode, not the checkpoint, and the fresh transcribe will
+            # overwrite the partial as it progresses anyway.
+            return False
+
+        start = time.time()
+        log(f"Resume: transcribing tail slice {slice_path}", log_cb)
+
+        try:
+            assert MODEL is not None
+            want_words = bool(config.get("word_timestamps", False))
+
+            # Reuse the standard kwarg builder so VAD / hotwords /
+            # word_timestamps all match the original run. Force the
+            # language so the slice doesn't re-run language detection
+            # (which on a short tail can produce a low-confidence
+            # wrong answer).
+            transcribe_kwargs = _build_transcribe_kwargs(task)
+            if cp_language:
+                transcribe_kwargs["language"] = cp_language
+
+            runner = PIPELINE if PIPELINE is not None else MODEL
+            if PIPELINE is not None:
+                transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
+
+            new_segments_iter, info = runner.transcribe(
+                slice_path, **transcribe_kwargs
+            )
+
+            # Offset each new segment back into the original timeline
+            # before merging with the prior segments. The slice starts
+            # at 0 s; we shift to ``last_end_time``.
+            new_segments_data: list[dict[str, Any]] = []
+            for seg in new_segments_iter:
+                if task.cancelled:
+                    # Cancel during resume — persist the merged
+                    # partial so the user can resume again from the
+                    # new end. Keep the checkpoint on disk.
+                    merged_so_far = prior_segments + new_segments_data
+                    if merged_so_far:
+                        _write_periodic_checkpoint(
+                            task,
+                            merged_so_far,
+                            float(merged_so_far[-1].get("end", last_end_time)),
+                            cp_language,
+                            cp_lang_prob,
+                            log_cb,
+                        )
+                    log("Task cancelled during resume.", log_cb)
+                    return True  # We "handled" the cancel cleanly.
+                while task.paused and not task.cancelled:
+                    time.sleep(0.2)
+
+                d = _segment_to_dict(seg, want_words)
+                d["start"] = float(d.get("start", 0.0)) + last_end_time
+                d["end"] = float(d.get("end", 0.0)) + last_end_time
+                if want_words and isinstance(d.get("words"), list):
+                    for w in d["words"]:
+                        try:
+                            w["start"] = float(w.get("start", 0.0)) + last_end_time
+                            w["end"] = float(w.get("end", 0.0)) + last_end_time
+                        except (TypeError, ValueError):
+                            continue
+                new_segments_data.append(d)
+
+                if progress_cb:
+                    # We can't compute an honest percentage without
+                    # re-running get_duration on the original; this is
+                    # a best-effort tick to keep the watchdog happy
+                    # and the UI moving.
+                    progress_cb(min(99, int(d["end"] / max(d["end"], 1.0) * 99)))
+        finally:
+            # Always clean the slice file — the resume either
+            # succeeded (final outputs written) or fell back, in both
+            # cases the slice is disposable.
+            try:
+                os.unlink(slice_path)
+            except OSError:
+                pass
+
+        final_segments = prior_segments + new_segments_data
+        detected_lang = cp_language or str(getattr(info, "language", "") or "")
+
+        # Post-pipeline must see the full ORIGINAL audio (diarisation,
+        # alignment, chapters all need the whole file). Reuse the
+        # existing helper unchanged.
+        speaker_count = _run_post_pipeline(
+            task, final_segments, detected_lang, log_cb, progress_cb
+        )
+
+        base = os.path.splitext(task.file_path)[0]
+        written = _write_outputs(
+            base,
+            final_segments,
+            task.file_path,
+            lang=detected_lang,
+            speaker_count=speaker_count,
+        )
+        chapters_attr = getattr(task, "_chapters_for_writer", None) or []
+        chapter_path = _write_chapter_sidecar(base, chapters_attr)
+        if chapter_path:
+            written.append(chapter_path)
+        log(
+            f"Resume: wrote {len(written)} output file(s): "
+            f"{', '.join(os.path.basename(p) for p in written)}",
+            log_cb,
+        )
+
+        _checkpoint.delete_checkpoint(task.file_path)
+        if progress_cb:
+            progress_cb(100)
+        elapsed = time.time() - start
+        log(f"Resume: done in {elapsed:.2f}s", log_cb)
+        # runtime_cfg is used implicitly via the scope; reference it
+        # to satisfy the linter without changing behaviour.
+        _ = runtime_cfg
+        return True

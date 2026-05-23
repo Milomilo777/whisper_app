@@ -31,7 +31,12 @@ from typing import Any
 from .config import load_config
 from .logging_setup import setup_logging
 from .task import TranscriptionTask
-from .transcriber import get_model_error, load_existing_model, transcribe
+from .transcriber import (
+    get_model_error,
+    load_existing_model,
+    resume_transcription,
+    transcribe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +165,25 @@ def main() -> int:
             forced_lang = command.get("language")
             if forced_lang:
                 task.language = forced_lang
+            # Resume-from-cancellation: when the parent flagged the
+            # task as a resume, attempt the partial-checkpoint path
+            # first. If it returns False (stale checkpoint, changed
+            # model/config, ffmpeg slice failed, etc.) we fall back to
+            # a full re-transcribe so the user always gets an output
+            # rather than an error.
+            task.resume = bool(command.get("resume", False))
             emit("started", file_path=file_path)
 
             def language_cb(lang: str, prob: float) -> None:
                 emit("language_detected", language=lang, probability=prob, file_path=file_path)
 
-            transcribe(task, progress_cb, log_cb, language_cb=language_cb)
+            did_resume = False
+            if task.resume:
+                did_resume = resume_transcription(
+                    task, progress_cb, log_cb, language_cb=language_cb
+                )
+            if not did_resume:
+                transcribe(task, progress_cb, log_cb, language_cb=language_cb)
             emit("done", file_path=file_path)
         except Exception as e:  # noqa: BLE001
             emit("error", message=str(e), file_path=file_path)

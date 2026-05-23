@@ -1120,6 +1120,23 @@ class App(tk.Tk):
                     command=lambda: self._open_folder(os.path.dirname(task.file_path)),
                 )
                 m.add_separator()
+            # Resume-from-cancellation: if a partial checkpoint
+            # exists for this cancelled task, surface a "Resume"
+            # entry above "Re-run". Only the cancelled path is wired
+            # — for "error" and "finished" we don't want to invite
+            # the user to resume from a stale partial that may have
+            # been produced by a different config.
+            if task.status == "cancelled":
+                try:
+                    from core.transcriber import has_resumable_checkpoint
+                    if has_resumable_checkpoint(task.file_path):
+                        m.add_command(
+                            label="Resume",
+                            command=lambda: self.resume_task(task),
+                        )
+                except Exception:  # noqa: BLE001
+                    # Checkpoint probe must never block the menu.
+                    pass
             m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
             m.add_command(label="Remove", command=lambda: self.remove_task(task))
         m.tk_popup(e.x_root, e.y_root)
@@ -1150,6 +1167,27 @@ class App(tk.Tk):
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
+        self.queue.append(new_task)
+        self.refresh()
+
+    def resume_task(self, task: TranscriptionTask) -> None:
+        """Re-enqueue a cancelled task to resume from its checkpoint.
+
+        We don't try to revive the original task object in place: the
+        cancel path tore down its worker and the row is in a terminal
+        state. A fresh TranscriptionTask carrying ``resume=True`` is
+        clearer for the user (a new Queue row appears) and matches
+        the existing ``_rerun_task`` pattern.
+
+        The worker side falls back to a full re-run if the checkpoint
+        turns out to be stale at validation time, so the user always
+        gets an output.
+        """
+        new_task = TranscriptionTask(task.file_path)
+        if getattr(task, "language", None):
+            new_task.language = task.language
+        new_task.resume = True
+        new_task.cancelled = False
         self.queue.append(new_task)
         self.refresh()
 
@@ -1722,14 +1760,38 @@ class App(tk.Tk):
             parent=self,
         ):
             return
+        # Crash-resume: if a partial checkpoint exists for any of
+        # these interrupted files, flag the new task as a resume so
+        # the worker reuses the on-disk segments instead of starting
+        # over. Worker validation will fall back to a fresh
+        # transcribe if the checkpoint is stale (different model,
+        # mtime drift, etc.) so this is always safe to set when the
+        # partial is present.
+        try:
+            from core.transcriber import has_resumable_checkpoint
+        except Exception:  # noqa: BLE001
+            has_resumable_checkpoint = lambda _p: False  # type: ignore[assignment]
+        resumed = 0
         for r in unique:
             task = TranscriptionTask(r["file_path"])
             lang = r.get("language") or ""
             if lang and hasattr(task, "language"):
                 task.language = lang  # type: ignore[attr-defined]
+            try:
+                if has_resumable_checkpoint(r["file_path"]):
+                    task.resume = True
+                    resumed += 1
+            except Exception:  # noqa: BLE001
+                pass
             self.queue.append(task)
         self.refresh()
-        self.log(f"Re-enqueued {n} interrupted transcription(s)")
+        if resumed:
+            self.log(
+                f"Re-enqueued {n} interrupted transcription(s) "
+                f"({resumed} will resume from checkpoint)"
+            )
+        else:
+            self.log(f"Re-enqueued {n} interrupted transcription(s)")
 
     def _apply_hidpi_scaling(self) -> None:
         """Bump Tk's pt→px scaling on high-DPI displays.

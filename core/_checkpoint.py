@@ -1,0 +1,239 @@
+"""Periodic checkpoint for in-progress transcriptions.
+
+The transcribe loop writes a JSON checkpoint to disk every N segments
+or every X seconds (whichever fires first). On a cancel/pause/crash
+that checkpoint is the only thing standing between the user and a
+re-run from scratch.
+
+Layout:
+  ``user_data_dir() / "partials" / "<sha1(abs_source_path)>.json"``
+
+Atomic writes go through ``<path>.tmp`` + ``os.replace`` so a torn
+file is never observable to the resume path.
+
+This module is intentionally tiny and self-contained: it imports
+nothing from ``core.transcriber`` to keep the dependency direction
+one-way (transcriber -> _checkpoint), and it uses no third-party
+modules so tests can exercise it without faster_whisper installed.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from .config import user_data_dir
+
+logger = logging.getLogger(__name__)
+
+# Wire-format version. Bump only on a breaking change to the on-disk
+# schema (renamed/removed field, type change). Add-only field changes
+# do NOT require a bump; the loader tolerates unknown keys.
+SCHEMA_VERSION = 1
+
+# Keys from the runtime ``config`` dict that materially affect what
+# Whisper produces. A change in any of these between checkpoint write
+# and resume means the new segments would be inconsistent with the
+# already-captured ones, so the resume must refuse and the user must
+# re-transcribe. Order is intentionally deterministic — the
+# fingerprint is a sha1 over a sorted JSON representation, so a
+# different key ordering in ``config`` won't cause a false mismatch.
+_CONFIG_FINGERPRINT_KEYS: tuple[str, ...] = (
+    "alignment",
+    "backend",  # alias seen in some configs; tolerated below
+    "batch_size",
+    "compute_type",
+    "device",
+    "hotwords",
+    "initial_prompt",
+    "model",
+    "transcribe_backend",
+    "vad_enabled",
+    "vad_min_silence_ms",
+    "vad_speech_pad_ms",
+    "vad_threshold",
+    "whisper_model",
+    "word_timestamps",
+)
+
+
+def partials_dir() -> Path:
+    """Folder where checkpoint JSONs live. Created on demand."""
+    p = user_data_dir() / "partials"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def source_key(source_path: str) -> str:
+    """Stable sha1 of the absolute source path."""
+    return hashlib.sha1(os.path.abspath(source_path).encode("utf-8")).hexdigest()
+
+
+def checkpoint_path(source_path: str) -> Path:
+    return partials_dir() / f"{source_key(source_path)}.json"
+
+
+def config_fingerprint(cfg: dict[str, Any]) -> str:
+    """Stable sha1 over the transcription-affecting config keys.
+
+    Only the keys in ``_CONFIG_FINGERPRINT_KEYS`` are included; the
+    user changing e.g. ``theme`` between cancel and resume must not
+    invalidate the partial. Nested dicts (``model``) are serialised
+    with ``sort_keys=True`` so dict-iteration order doesn't change
+    the fingerprint either.
+    """
+    extracted: dict[str, Any] = {}
+    for key in _CONFIG_FINGERPRINT_KEYS:
+        if key in cfg:
+            extracted[key] = cfg[key]
+    blob = json.dumps(extracted, sort_keys=True, default=str)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def write_checkpoint(
+    source_path: str,
+    *,
+    backend: str,
+    model_name: str,
+    language: str,
+    language_probability: float,
+    cfg_fingerprint: str,
+    last_end_time: float,
+    segments: list[dict[str, Any]],
+    checkpoint_time: float,
+) -> Path:
+    """Atomically persist a checkpoint.
+
+    Stat the source file once at write time so the resume path can
+    detect a moved/edited source. Errors are propagated — callers
+    log/swallow them.
+    """
+    import time as _time
+
+    abs_path = os.path.abspath(source_path)
+    try:
+        st = os.stat(abs_path)
+        size = int(st.st_size)
+        mtime = float(st.st_mtime)
+    except OSError:
+        # If we can't stat the source at write time, store zeros — the
+        # resume path will refuse on mismatch anyway. Keep going so
+        # the segments aren't lost.
+        size = 0
+        mtime = 0.0
+
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "source_path": abs_path,
+        "source_size": size,
+        "source_mtime": mtime,
+        "model_name": model_name,
+        "backend": backend,
+        "language": language or "",
+        "language_probability": float(language_probability or 0.0),
+        "config_fingerprint": cfg_fingerprint,
+        "last_end_time": float(last_end_time),
+        "segment_count": len(segments),
+        "segments": segments,
+        "checkpoint_time": float(checkpoint_time or _time.time()),
+    }
+
+    path = checkpoint_path(abs_path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def load_checkpoint(source_path: str) -> dict[str, Any] | None:
+    """Return the on-disk checkpoint dict, or None if missing/corrupt."""
+    path = checkpoint_path(source_path)
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("Corrupt checkpoint at %s: %s", path, e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def delete_checkpoint(source_path: str) -> None:
+    """Remove the checkpoint file for ``source_path``, if any."""
+    path = checkpoint_path(source_path)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.warning("Could not delete checkpoint %s: %s", path, e)
+
+
+def has_checkpoint(source_path: str) -> bool:
+    """True iff a checkpoint JSON exists for the given source path."""
+    return checkpoint_path(source_path).exists()
+
+
+def validate_checkpoint(
+    data: dict[str, Any],
+    *,
+    backend: str,
+    model_name: str,
+    cfg_fingerprint: str,
+) -> str:
+    """Return "" if the checkpoint is usable, else a human reason.
+
+    Caller is responsible for deleting the stale partial when the
+    return value is non-empty.
+    """
+    if not isinstance(data, dict):
+        return "checkpoint payload is not a dict"
+    schema = data.get("schema_version")
+    if schema != SCHEMA_VERSION:
+        return f"checkpoint schema_version {schema!r} != expected {SCHEMA_VERSION}"
+    src = data.get("source_path")
+    if not isinstance(src, str) or not src:
+        return "checkpoint missing source_path"
+    if not os.path.isfile(src):
+        return f"source file no longer exists: {src}"
+    try:
+        st = os.stat(src)
+    except OSError as e:
+        return f"could not stat source: {e}"
+    if int(data.get("source_size") or -1) != int(st.st_size):
+        return "source file size has changed since checkpoint"
+    saved_mtime = float(data.get("source_mtime") or 0.0)
+    # Allow 1 ms slop — filesystem mtime granularity on some volumes
+    # is coarser than Python's float repr suggests.
+    if abs(saved_mtime - float(st.st_mtime)) > 0.001:
+        return "source file mtime has changed since checkpoint"
+    if str(data.get("backend") or "") != backend:
+        return (
+            f"backend changed: checkpoint={data.get('backend')!r} "
+            f"current={backend!r}"
+        )
+    if str(data.get("model_name") or "") != model_name:
+        return (
+            f"model changed: checkpoint={data.get('model_name')!r} "
+            f"current={model_name!r}"
+        )
+    if str(data.get("config_fingerprint") or "") != cfg_fingerprint:
+        return "transcription config changed since checkpoint"
+    segs = data.get("segments")
+    if not isinstance(segs, list):
+        return "checkpoint segments field is not a list"
+    return ""
