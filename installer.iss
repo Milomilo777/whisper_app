@@ -10,11 +10,11 @@
 
 [Setup]
 AppName=SMTV Whisper Project
-AppVersion=1.0.0
+AppVersion=1.0.1
 AppPublisher=smtv.bot@Gmail.com
 DefaultDirName={autopf}\WhisperProject
 DefaultGroupName=Whisper Project
-OutputBaseFilename=WhisperProject-v1.0.0-Setup-Compact
+OutputBaseFilename=WhisperProject-v1.0.1-Setup-Compact
 OutputDir=dist_installer
 Compression=lzma2/ultra
 SolidCompression=yes

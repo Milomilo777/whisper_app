@@ -4,6 +4,30 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-23
+
+### Fixed
+
+- **3 GB re-download on the launch after the first-run hub picker.**
+  On a fresh install the first-run hub-folder dialog was asynchronous:
+  it opened, returned the default path immediately, and `_on_start`
+  fired `start_standby()` while the user was still reading the
+  dialog. The worker then computed `model_path` from an empty
+  `hub_folder` and downloaded the model under
+  `%LOCALAPPDATA%\WhisperProject\Cache\models\`. When the user
+  accepted the dialog default (`<app_dir>\hub`), the next launch
+  resolved `model_path` to a directory the model was never
+  extracted into, triggered a `startup_error`, and re-downloaded
+  the full 3 GB archive. Fixed by:
+    * Aligning the empty-hub fallback in
+      `_apply_runtime_fallbacks` with the dialog's default
+      (`default_hub_folder()`), so accepting the default is a no-op
+      for the model location.
+    * Deferring `start_standby()` in `App._on_start` until the hub
+      dialog's `on_done` callback fires, so the worker starts with
+      the user's actual choice even when they pick a custom folder.
+  Regression test added in `tests/core/test_hub.py`.
+
 ## [1.0.0] — 2026-05-21
 
 First stable release. Marks the project as feature-complete + freeze-ready
