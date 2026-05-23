@@ -1096,6 +1096,7 @@ class App(tk.Tk):
         if task.status == "waiting":
             m.add_command(label="Cancel", command=lambda: self.cancel(task))
         elif task.status == "running":
+            m.add_command(label="Pause", command=lambda: self.pause(task))
             m.add_command(label="Cancel", command=lambda: self.cancel(task))
         elif task.status == "paused":
             m.add_command(label="Resume", command=lambda: self.resume(task))
