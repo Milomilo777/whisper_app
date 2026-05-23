@@ -188,13 +188,21 @@ def main() -> int:
     def progress_cb(percent: float) -> None:
         emit("progress", percent=percent)
 
+    # Start the heartbeat BEFORE load_existing_model. A cold-disk
+    # 3-GB Whisper model can take 15-30 s to mmap on Windows; the
+    # parent's "Loading Whisper model..." dialog wants regular
+    # heartbeats during that wait so any future watchdog can tell
+    # "slow load" from "wedged worker". Doing this after the load
+    # means the parent sees zero heartbeats for the entire load
+    # window — exactly when it most wants them (P0-2).
+    _start_heartbeat()
+
     if not load_existing_model(log_cb):
         detail = get_model_error() or "Model failed to load in worker"
         emit("startup_error", message=detail)
         return 1
 
     emit("ready")
-    _start_heartbeat()
 
     while True:
         raw = _read_command_line()

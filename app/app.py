@@ -400,25 +400,46 @@ class App:
             self.status_var.set("Add a file first.")
             return
 
-        # Lazy: download model if missing → spawn worker → transcribe.
-        cfg = load_config()
-        if not is_model_on_disk(cfg):
-            dialog = ModelDownloadDialog(self.root)
-            self.root.wait_window(dialog)
-            if not dialog.success:
-                self.status_var.set("Model download did not complete.")
-                return
-            # Refresh config snapshot in case model_path was redirected.
-            self.config_dict = load_config()
+        # Re-entrancy guard. ``wait_window`` on the download / loading
+        # dialogs processes Tk events on the main thread, so a fast
+        # double-click on Transcribe would otherwise run two
+        # _dispatch_next paths concurrently and mis-attribute the
+        # first task's progress / done events to the second one
+        # (audit P0-5).
+        if getattr(self, "_transcribe_in_progress", False):
+            return
+        self._transcribe_in_progress = True
+        try:
+            self.transcribe_btn.configure(state="disabled")
+        except tk.TclError:
+            pass
 
-        if self.worker is None or not self._worker_alive():
-            ok = self._spawn_worker_blocking()
-            if not ok:
-                return
+        try:
+            # Lazy: download model if missing → spawn worker → transcribe.
+            cfg = load_config()
+            if not is_model_on_disk(cfg):
+                dialog = ModelDownloadDialog(self.root)
+                self.root.wait_window(dialog)
+                if not dialog.success:
+                    self.status_var.set("Model download did not complete.")
+                    return
+                # Refresh config snapshot in case model_path was redirected.
+                self.config_dict = load_config()
 
-        # Dispatch the next waiting task. The worker handles one at
-        # a time; we re-dispatch on the `done`/`error` events.
-        self._dispatch_next()
+            if self.worker is None or not self._worker_alive():
+                ok = self._spawn_worker_blocking()
+                if not ok:
+                    return
+
+            # Dispatch the next waiting task. The worker handles one at
+            # a time; we re-dispatch on the `done`/`error` events.
+            self._dispatch_next()
+        finally:
+            self._transcribe_in_progress = False
+            try:
+                self.transcribe_btn.configure(state="normal")
+            except tk.TclError:
+                pass
 
     def _worker_alive(self) -> bool:
         if self.worker is None:

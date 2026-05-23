@@ -110,10 +110,31 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     * If the saved ``model_path`` lives on an unmounted drive, fall
       back to the hub-derived value instead of letting downstream
       code see a dead path.
+
+    If ``model.name`` or ``model.url`` is empty / missing, the entire
+    ``model`` dict is restored from defaults. Without this the
+    derived ``model_path`` would point at a fabricated
+    ``models--Systran--whisper-model/`` folder that never exists,
+    and ``ensure_model`` would then dereference an empty URL and
+    raise ``requests.exceptions.MissingSchema`` — a confusing
+    low-level traceback for what is fundamentally "your saved
+    config is corrupt; we restored defaults" (audit P0-7).
     """
     from . import hub as _hub  # local import to avoid bootstrap cycle
 
-    model_name = (config.get("model") or {}).get("name") or ""
+    model = config.get("model")
+    if not isinstance(model, dict):
+        model = {}
+    model_name = (model.get("name") or "").strip() if isinstance(model, dict) else ""
+    model_url = (model.get("url") or "").strip() if isinstance(model, dict) else ""
+    if not model_name or not model_url:
+        logger.warning(
+            "config.model is incomplete (name=%r url=%r); restoring defaults",
+            model.get("name") if isinstance(model, dict) else None,
+            model.get("url") if isinstance(model, dict) else None,
+        )
+        config["model"] = json.loads(json.dumps(DEFAULT_CONFIG["model"]))
+        model_name = config["model"]["name"]
     hub_folder = (config.get("hub_folder") or "").strip()
     model_path = (config.get("model_path") or "").strip()
 
