@@ -37,7 +37,13 @@ from app.dialogs.hub_setup import ensure_hub_configured
 from app.dialogs.model_download import ModelDownloadDialog
 from app.dialogs.model_loading import ModelLoadingDialog
 from app.dialogs.show_log import ShowLogDialog
+from app.domain.tasks import VideoDownloadTask
+from app.services.download_service import (
+    FORMAT_LABELS,
+    DownloadService,
+)
 from app.widgets.dropzone import DropZone
+from core._timecode import parse_timecode
 from core.config import (
     add_recent_file,
     load_config,
@@ -48,6 +54,7 @@ from core.health_check import first_failure, run_all
 from core.logging_setup import open_log_folder, setup_logging
 from core.model_manager import is_model_on_disk
 from core.task import TranscriptionTask
+from core.url_kind import url_kind
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +67,7 @@ LOG_PANEL_LINES = 200
 # ``heartbeat``) drop when the queue is saturated.
 _LIFECYCLE_EVENTS: frozenset[str] = frozenset({
     "ready", "startup_error", "done", "error", "worker_exit",
+    "download_done", "download_error",
 })
 
 # Language picker — (display_label, faster-whisper ISO code or empty
@@ -92,8 +100,10 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Whisper Project — basic")
-        self.root.geometry("720x560")
-        self.root.minsize(560, 460)
+        # Taller default so the new Download Videos section fits
+        # without scrolling on first paint. Width unchanged.
+        self.root.geometry("760x820")
+        self.root.minsize(620, 700)
         self.root.protocol("WM_DELETE_WINDOW", self.on_exit)
         self._install_icon()
 
@@ -105,9 +115,17 @@ class App:
 
         # In-memory queue + worker bookkeeping.
         self.queue: list[TranscriptionTask] = []
+        # Download queue lives alongside the transcribe queue. Each
+        # download is its own VideoDownloadTask. Both queues share
+        # the same Treeview (distinguished by the ``kind`` column)
+        # and the same worker_events queue (distinguished by event
+        # name in ``_handle_event``).
+        self.download_queue: list[VideoDownloadTask] = []
+        self.download_current: VideoDownloadTask | None = None
         self.worker: dict[str, Any] | None = None
         # Bound so a runaway producer can't OOM the parent.
         self.worker_events: Queue = Queue(maxsize=2000)
+        self.download_service = DownloadService(self.worker_events)
         self.model_loading: bool = False
         self.model_loading_dialog: ModelLoadingDialog | None = None
         # Tk StringVar for the status line + recent-files submenu rebuild.
@@ -168,6 +186,11 @@ class App:
             actions, textvariable=self.status_var, foreground="#888",
         ).pack(side="left", padx=(14, 0))
 
+        # Download Videos section — same single screen, just below
+        # the transcribe controls. Builds the per-section state
+        # variables on self so the rest of the App can read them.
+        self._build_download_section(outer)
+
         # Progress bar.
         self.pb = ttk.Progressbar(
             outer, length=600, mode="determinate", maximum=100,
@@ -180,17 +203,19 @@ class App:
         tree_frame = ttk.Frame(outer)
         tree_frame.pack(fill="both", expand=True)
 
-        cols = ("status", "progress", "language")
+        cols = ("kind", "status", "progress", "language")
         self.tree = ttk.Treeview(
             tree_frame, columns=cols, show="tree headings", height=6,
         )
         self.tree.heading("#0", text="File")
+        self.tree.heading("kind", text="Kind")
         self.tree.heading("status", text="Status")
         self.tree.heading("progress", text="Progress")
         self.tree.heading("language", text="Language")
         self.tree.column("#0", width=300, anchor="w")
-        self.tree.column("status", width=100, anchor="w")
-        self.tree.column("progress", width=80, anchor="e")
+        self.tree.column("kind", width=78, anchor="w")
+        self.tree.column("status", width=90, anchor="w")
+        self.tree.column("progress", width=70, anchor="e")
         self.tree.column("language", width=80, anchor="w")
         yscroll = ttk.Scrollbar(
             tree_frame, orient="vertical", command=self.tree.yview,
@@ -205,7 +230,9 @@ class App:
         self.tree.bind("<Button-3>", self._on_tree_right_click)
 
         # Map iid → task for fast lookups during event handling.
-        self.row_map: dict[str, TranscriptionTask] = {}
+        # Values are either TranscriptionTask or VideoDownloadTask;
+        # the App distinguishes them with isinstance() at use sites.
+        self.row_map: dict[str, TranscriptionTask | VideoDownloadTask] = {}
 
         # Collapsible console — start collapsed.
         self.console_visible = tk.BooleanVar(value=False)
@@ -222,6 +249,133 @@ class App:
         )
         self.console.configure(state="disabled")
         # Not packed initially.
+
+    # Default Format / Folder / Auto-transcribe persisted under
+    # these keys in config.json. Centralised so config readers and
+    # writers always agree.
+    _CFG_DOWNLOAD_FOLDER = "download_folder"
+    _CFG_DOWNLOAD_FORMAT = "download_format"
+    _CFG_AUTO_TRANSCRIBE = "auto_transcribe_after_download"
+
+    def _build_download_section(self, outer: ttk.Frame) -> None:
+        """Add the Download Videos LabelFrame to ``outer``.
+
+        Compact ~6-row block. All state is on self so the download
+        service and event handlers can read it without poking at
+        widget IDs.
+        """
+        frame = ttk.LabelFrame(
+            outer, text="Download Videos (optional)", padding=8,
+        )
+        frame.pack(fill="x", pady=(8, 0))
+
+        # Row 1: URL header.
+        ttk.Label(
+            frame,
+            text="URLs (one per line):",
+            foreground="#888",
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        # Row 2: URL text box.
+        self.download_urls = tk.Text(
+            frame, height=3, wrap="none", font=("Segoe UI", 9),
+        )
+        self.download_urls.grid(
+            row=1, column=0, columnspan=4, sticky="ew", pady=(2, 6),
+        )
+
+        # Row 3: Folder.
+        ttk.Label(frame, text="Folder:").grid(row=2, column=0, sticky="w")
+        # Default folder: user's Downloads folder, persisted to config.
+        default_folder = self.config_dict.get(
+            self._CFG_DOWNLOAD_FOLDER,
+        ) or self._default_download_folder()
+        self.download_folder_var = tk.StringVar(value=default_folder)
+        ttk.Entry(
+            frame, textvariable=self.download_folder_var,
+        ).grid(row=2, column=1, columnspan=2, sticky="ew", padx=(4, 4))
+        ttk.Button(
+            frame, text="…", width=3,
+            command=self._on_pick_download_folder,
+        ).grid(row=2, column=3, sticky="w")
+
+        # Row 4: Format combobox.
+        ttk.Label(frame, text="Format:").grid(
+            row=3, column=0, sticky="w", pady=(6, 0),
+        )
+        labels = list(FORMAT_LABELS.values())
+        saved_format = self.config_dict.get(
+            self._CFG_DOWNLOAD_FORMAT, "best",
+        )
+        # Convert saved key to label; fall back to "Best video+audio".
+        initial_label = FORMAT_LABELS.get(
+            saved_format if isinstance(saved_format, str) else "best",
+            labels[0],
+        )
+        self.download_format_var = tk.StringVar(value=initial_label)
+        ttk.Combobox(
+            frame, textvariable=self.download_format_var,
+            values=labels, state="readonly", width=22,
+        ).grid(row=3, column=1, sticky="w", padx=(4, 0), pady=(6, 0))
+
+        # Row 5: Time range (optional).
+        ttk.Label(frame, text="Time range (optional):").grid(
+            row=4, column=0, sticky="w", pady=(6, 0),
+        )
+        time_frame = ttk.Frame(frame)
+        time_frame.grid(
+            row=4, column=1, columnspan=3, sticky="w",
+            padx=(4, 0), pady=(6, 0),
+        )
+        ttk.Label(time_frame, text="Start").pack(side="left")
+        self.download_start_var = tk.StringVar()
+        ttk.Entry(
+            time_frame, textvariable=self.download_start_var, width=10,
+        ).pack(side="left", padx=(4, 12))
+        ttk.Label(time_frame, text="End").pack(side="left")
+        self.download_end_var = tk.StringVar()
+        ttk.Entry(
+            time_frame, textvariable=self.download_end_var, width=10,
+        ).pack(side="left", padx=(4, 0))
+
+        # Row 6: Auto-transcribe checkbox + Download button.
+        bottom = ttk.Frame(frame)
+        bottom.grid(
+            row=5, column=0, columnspan=4, sticky="ew", pady=(8, 0),
+        )
+        self.auto_transcribe_var = tk.BooleanVar(
+            value=bool(self.config_dict.get(self._CFG_AUTO_TRANSCRIBE, False)),
+        )
+        ttk.Checkbutton(
+            bottom, text="Auto-transcribe after download",
+            variable=self.auto_transcribe_var,
+        ).pack(side="left")
+        ttk.Button(
+            bottom, text="Download",
+            command=self._on_download_click,
+            style="Accent.TButton",
+        ).pack(side="right")
+
+        # Column weights so the Entry widgets grow with the window.
+        for col, weight in ((0, 0), (1, 1), (2, 1), (3, 0)):
+            frame.columnconfigure(col, weight=weight)
+
+    def _default_download_folder(self) -> str:
+        """User's Downloads folder, with a CWD fallback for headless tests."""
+        home = os.path.expanduser("~")
+        candidate = os.path.join(home, "Downloads")
+        if os.path.isdir(candidate):
+            return candidate
+        return home or os.getcwd()
+
+    def _on_pick_download_folder(self) -> None:
+        chosen = filedialog.askdirectory(
+            parent=self.root,
+            title="Pick a download folder",
+            initialdir=self.download_folder_var.get() or os.path.expanduser("~"),
+        )
+        if chosen:
+            self.download_folder_var.set(chosen)
 
     def _build_menu(self) -> None:
         menubar = tk.Menu(self.root)
@@ -387,31 +541,226 @@ class App:
         except Exception as e:  # noqa: BLE001
             logger.warning("save_config (debounced) failed: %s", e)
 
-    def _add_tree_row(self, task: TranscriptionTask) -> str:
+    def _add_tree_row(
+        self, task: TranscriptionTask | VideoDownloadTask,
+    ) -> str:
+        if isinstance(task, VideoDownloadTask):
+            display = task.title or task.url
+            progress_text = f"{int(task.progress)}%"
+            return self.tree.insert(
+                "", "end",
+                text=display,
+                values=("download", task.status, progress_text, ""),
+            )
         return self.tree.insert(
             "", "end",
             text=os.path.basename(task.file_path),
-            values=(task.status, f"{task.progress}%", ""),
+            values=("transcribe", task.status, f"{task.progress}%", ""),
         )
 
-    def _iid_for(self, task: TranscriptionTask) -> str | None:
+    def _iid_for(
+        self, task: TranscriptionTask | VideoDownloadTask,
+    ) -> str | None:
         for iid, t in self.row_map.items():
             if t is task:
                 return iid
         return None
 
-    def _update_tree_row(self, task: TranscriptionTask) -> None:
+    def _update_tree_row(
+        self, task: TranscriptionTask | VideoDownloadTask,
+    ) -> None:
         iid = self._iid_for(task)
         if iid is None:
+            return
+        if isinstance(task, VideoDownloadTask):
+            self.tree.item(
+                iid,
+                values=(
+                    "download",
+                    task.status,
+                    f"{int(task.progress)}%",
+                    "",
+                ),
+            )
             return
         self.tree.item(
             iid,
             values=(
+                "transcribe",
                 task.status,
                 f"{task.progress}%",
                 task.detected_language or "",
             ),
         )
+
+    # ------------------------------------------------------------ download
+
+    def _on_download_click(self) -> None:
+        """Parse the URL Text widget; enqueue one task per non-blank line."""
+        raw = self.download_urls.get("1.0", "end").strip()
+        if not raw:
+            self.status_var.set("Paste at least one URL.")
+            return
+        folder = self.download_folder_var.get().strip()
+        if not folder:
+            messagebox.showwarning(
+                "Pick a folder",
+                "Choose a download folder first.",
+                parent=self.root,
+            )
+            return
+
+        # Resolve combobox label → format key once.
+        label_to_key = {v: k for k, v in FORMAT_LABELS.items()}
+        fmt_key = label_to_key.get(self.download_format_var.get(), "best")
+
+        start_sec = parse_timecode(self.download_start_var.get())
+        end_sec = parse_timecode(self.download_end_var.get())
+        # If both fields were filled but only one parsed, warn the
+        # user — silently dropping their input is worse than refusing.
+        for label, raw_text, parsed in (
+            ("Start", self.download_start_var.get(), start_sec),
+            ("End", self.download_end_var.get(), end_sec),
+        ):
+            if raw_text.strip() and parsed is None:
+                messagebox.showwarning(
+                    "Bad time-range",
+                    f"Couldn't parse {label!r} time {raw_text!r}.\n"
+                    "Use H:MM:SS, MM:SS, or seconds.",
+                    parent=self.root,
+                )
+                return
+
+        auto = bool(self.auto_transcribe_var.get())
+
+        urls = [line.strip() for line in raw.splitlines() if line.strip()]
+        added = 0
+        skipped: list[str] = []
+        for url in urls:
+            task = self.download_service.build_task(
+                url, folder,
+                output_format=fmt_key,
+                section_start=start_sec,
+                section_end=end_sec,
+                auto_transcribe=auto,
+            )
+            if task is None:
+                skipped.append(url)
+                continue
+            self.download_queue.append(task)
+            iid = self._add_tree_row(task)
+            self.row_map[iid] = task
+            added += 1
+
+        if skipped:
+            messagebox.showwarning(
+                "Some URLs were skipped",
+                "Couldn't classify these URLs:\n\n"
+                + "\n".join(skipped[:5])
+                + ("\n…" if len(skipped) > 5 else ""),
+                parent=self.root,
+            )
+
+        if added == 0:
+            return
+
+        # Persist user-friendly knobs.
+        self.config_dict[self._CFG_DOWNLOAD_FOLDER] = folder
+        self.config_dict[self._CFG_DOWNLOAD_FORMAT] = fmt_key
+        self.config_dict[self._CFG_AUTO_TRANSCRIBE] = auto
+        self._schedule_save_config()
+
+        # Clear the text area + time fields so the next paste starts fresh.
+        self.download_urls.delete("1.0", "end")
+        self.download_start_var.set("")
+        self.download_end_var.set("")
+
+        self.status_var.set(f"Queued {added} download(s).")
+        self._dispatch_next_download()
+
+    def _dispatch_next_download(self) -> None:
+        """Start the next waiting download if nothing is already running."""
+        if self.download_current is not None:
+            return
+        for task in self.download_queue:
+            if task.status == "waiting" and not task.cancelled:
+                self.download_current = task
+                self._update_tree_row(task)
+                self.download_service.start(task)
+                self.status_var.set(
+                    f"Downloading {task.title or task.url}…",
+                )
+                return
+
+    def _task_by_id(
+        self, task_id: int,
+    ) -> VideoDownloadTask | None:
+        for t in self.download_queue:
+            if id(t) == task_id:
+                return t
+        return None
+
+    def _on_download_progress(self, event: dict[str, Any]) -> None:
+        task = self._task_by_id(int(event.get("task_id", 0)))
+        if task is None:
+            return
+        task.progress = max(0.0, min(100.0, float(event.get("percent", 0))))
+        self._update_tree_row(task)
+        # The shared progress bar reflects whichever job is currently
+        # foreground. A transcribe job's progress trumps the download
+        # bar so the transcribe doesn't appear stuck.
+        if self.worker is None or self.worker.get("task") is None:
+            self.pb["value"] = task.progress
+
+    def _on_download_done(self, event: dict[str, Any]) -> None:
+        task = self._task_by_id(int(event.get("task_id", 0)))
+        if task is None:
+            return
+        status = event.get("status", "finished")
+        task.status = status
+        saved_path = event.get("saved_path")
+        if isinstance(saved_path, str) and saved_path:
+            task.saved_path = saved_path
+        if status == "finished":
+            task.progress = 100.0
+        self._update_tree_row(task)
+        if self.download_current is task:
+            self.download_current = None
+        if status == "finished" and saved_path:
+            self.status_var.set(
+                f"Saved {os.path.basename(saved_path)}",
+            )
+            # Auto-transcribe handoff: feed the saved file into the
+            # transcribe pipeline. The lazy-model-load gate runs the
+            # first time the user clicks Transcribe — we trigger a
+            # click programmatically so the model dialog appears
+            # exactly once for the whole batch.
+            if task.auto_transcribe and os.path.isfile(saved_path):
+                self._on_files_added([saved_path])
+                self._on_transcribe_click()
+        elif status == "cancelled":
+            self.status_var.set("Download cancelled")
+        # Pick up the next download regardless of how this one ended.
+        self._dispatch_next_download()
+
+    def _on_download_error(self, event: dict[str, Any]) -> None:
+        task = self._task_by_id(int(event.get("task_id", 0)))
+        if task is None:
+            return
+        message = event.get("message") or "Unknown download error"
+        suggestion = event.get("suggestion") or ""
+        task.status = "error"
+        task.error_message = message
+        self._update_tree_row(task)
+        if self.download_current is task:
+            self.download_current = None
+        full = f"Download failed for {task.title or task.url}:\n{message}"
+        if suggestion:
+            full += f"\n\nTry: {suggestion}"
+        logger.error("Download error: %s", message)
+        messagebox.showerror("Download failed", full, parent=self.root)
+        self.status_var.set("Download failed.")
+        self._dispatch_next_download()
 
     # ------------------------------------------------------------ transcribe
 
@@ -667,6 +1016,15 @@ class App:
             return
         if name == "heartbeat":
             return
+        if name == "download_progress":
+            self._on_download_progress(event)
+            return
+        if name == "download_done":
+            self._on_download_done(event)
+            return
+        if name == "download_error":
+            self._on_download_error(event)
+            return
         if name == "worker_exit":
             rc = event.get("return_code")
             had_task = bool(self.worker and self.worker.get("task") is not None)
@@ -812,7 +1170,15 @@ class App:
             return
         menu = tk.Menu(self.root, tearoff=False)
         if task.status == "running":
-            menu.add_command(label="Cancel", command=self._cancel_running)
+            if isinstance(task, VideoDownloadTask):
+                menu.add_command(
+                    label="Cancel",
+                    command=lambda: self._cancel_download(task),
+                )
+            else:
+                menu.add_command(
+                    label="Cancel", command=self._cancel_running,
+                )
         elif task.status == "waiting":
             menu.add_command(
                 label="Remove from queue",
@@ -825,9 +1191,27 @@ class App:
             )
         menu.tk_popup(event.x_root, event.y_root)
 
-    def _remove_task(self, iid: str, task: TranscriptionTask) -> None:
-        if task in self.queue:
-            self.queue.remove(task)
+    def _cancel_download(self, task: VideoDownloadTask) -> None:
+        """Right-click → Cancel on a running download row."""
+        self.download_service.cancel(task)
+        # Visual feedback now — the worker thread will follow up
+        # with a download_done(status="cancelled") event once the
+        # subprocess actually exits.
+        task.status = "cancelled"
+        self._update_tree_row(task)
+        self.status_var.set(
+            f"Cancelling {task.title or task.url}…",
+        )
+
+    def _remove_task(
+        self, iid: str, task: TranscriptionTask | VideoDownloadTask,
+    ) -> None:
+        if isinstance(task, VideoDownloadTask):
+            if task in self.download_queue:
+                self.download_queue.remove(task)
+        else:
+            if task in self.queue:
+                self.queue.remove(task)
         try:
             self.tree.delete(iid)
         except tk.TclError:
@@ -915,14 +1299,28 @@ class App:
 
     def on_exit(self) -> None:
         running = any(t.status == "running" for t in self.queue)
-        if running:
+        downloading = any(
+            t.status == "running" for t in self.download_queue
+        )
+        if running or downloading:
+            msg = (
+                "A transcription is in progress. Quit and cancel it?"
+                if running
+                else "A download is in progress. Quit and cancel it?"
+            )
             ok = messagebox.askyesno(
-                "Quit Whisper Project?",
-                "A transcription is in progress. Quit and cancel it?",
-                parent=self.root,
+                "Quit Whisper Project?", msg, parent=self.root,
             )
             if not ok:
                 return
+        # Cancel any running download cleanly before tearing down the
+        # worker_events queue.
+        for t in self.download_queue:
+            if t.status == "running":
+                try:
+                    self.download_service.cancel(t)
+                except Exception:  # noqa: BLE001
+                    logger.exception("download cancel during exit failed")
         self._stop_worker()
         try:
             self.root.destroy()

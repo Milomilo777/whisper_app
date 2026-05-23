@@ -20,6 +20,8 @@ flowchart TB
         DLG_LOG[dialogs.show_log]
         DLG_ABOUT[dialogs.about]
         DLG_CRASH[dialogs.crash]
+        TASKS[domain.tasks]
+        DLSVC[services.download_service]
     end
 
     subgraph core [core/]
@@ -35,10 +37,13 @@ flowchart TB
         WRITERS[writers/]
         ERR[error_messages]
         HEALTH[health_check]
+        URLK[url_kind]
+        TC[_timecode]
+        SMTV[integrations.smtv]
     end
 
     subgraph bin [bin/]
-        FF[ffmpeg + ffprobe]
+        FF[ffmpeg + ffprobe + yt-dlp]
     end
 
     GUI --> APP
@@ -78,6 +83,17 @@ flowchart TB
     DLG_HUB --> HUB
     DLG_HUB --> CONFIG
     DLG_DOWNLOAD --> MM
+
+    APP --> TASKS
+    APP --> DLSVC
+    APP --> URLK
+    APP --> TC
+    DLSVC --> TASKS
+    DLSVC --> SMTV
+    DLSVC --> TC
+    DLSVC --> ERR
+    DLSVC --> URLK
+    DLSVC -.spawns.-> FF
 ```
 
 ## Sequence diagram — first Transcribe click

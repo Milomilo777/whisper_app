@@ -86,6 +86,40 @@ _RULES: list[tuple[re.Pattern[str], str, str]] = [
         "Drag-and-drop support is missing (tkinterdnd2 not installed).",
         "Run `pip install tkinterdnd2` — you can still use the Browse button without it.",
     ),
+    # ---- download (yt-dlp + SMTV) ---------------------------------------
+    (
+        re.compile(r"FileNotFoundError.*yt.?dlp|WinError 2.*yt.?dlp", re.I),
+        "yt-dlp.exe is missing from the bundle.",
+        "Reinstall the app — bin/yt-dlp.exe should sit next to the exe.",
+    ),
+    (
+        re.compile(r"yt-dlp exited with code (?:1|2|100|101)", re.I),
+        "The video could not be downloaded.",
+        "Check that the URL works in a browser; the site may block downloads, require sign-in, or have changed its layout.",
+    ),
+    (
+        re.compile(r"HTTP Error 403|HTTP 403|Forbidden", re.I),
+        "The download server refused the request (HTTP 403).",
+        "The video may be private, geo-blocked, or the site updated its anti-scraping. Try opening the URL in a browser first.",
+    ),
+    (
+        re.compile(r"HTTP Error 404|HTTP 404|not found", re.I),
+        "The video URL doesn't exist (HTTP 404).",
+        "Double-check the URL — the video may have been removed or the link mistyped.",
+    ),
+    (
+        re.compile(r"SmtvError.*", re.I),
+        "Couldn't process the Supreme Master TV page.",
+        "Open the URL in a browser to confirm it's a real episode page; if the layout has changed, the scraper needs an update.",
+    ),
+    (
+        re.compile(
+            r"unsupported url|not an SMTV episode URL|invalid URL",
+            re.I,
+        ),
+        "That URL isn't supported.",
+        "Paste an http(s):// link to a video page (YouTube, Vimeo, SMTV, etc.).",
+    ),
 ]
 
 

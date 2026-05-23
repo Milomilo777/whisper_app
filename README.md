@@ -9,12 +9,13 @@ One screen. No tabs. No advanced dialog. No video download. No diarisation. Just
 - Drag-and-drop or **Browse…** a media file.
 - Click **Transcribe** — runs [faster-whisper](https://github.com/SYSTRAN/faster-whisper) `large-v3` locally.
 - Writes `<filename>.srt`, `<filename>.json`, `<filename>.txt` next to the source media.
+- **Download Videos** (optional) — paste one URL per line; the bundled `yt-dlp.exe` (or the SMTV scraper for `suprememastertv.com` URLs) downloads to your chosen folder. Optional time-range slice; optional auto-transcribe after download.
 - Cancel any running job (Esc or right-click).
 - Pick the best available device automatically (CUDA when present, otherwise CPU).
 
 ## What it does NOT do
 
-- No video download / YouTube / SMTV / sponsorblock.
+- No sponsorblock / subtitle download / format-listing dialog.
 - No diarisation, chapters, voiceprint, LLM, Demucs, alignment.
 - No alternative backends (whisper.cpp, Parakeet) — only faster-whisper.
 - No transcript viewer, search, history, watched folder, tray.

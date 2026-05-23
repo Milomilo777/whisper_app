@@ -78,5 +78,6 @@ Per Windows / macOS / Linux conventions via `platformdirs`:
 - Config — `<user_config_dir>/WhisperProjectBasic/config.json`
 - Logs — `<user_log_dir>/WhisperProjectBasic/app.log` (5 MB, 3-file rotation)
 - Model — under `<hub_folder>/models--Systran--faster-whisper-large-v3/` (default hub: `<app_dir>/hub`)
+- Downloaded videos — the folder you chose in the **Download Videos** section (default `~/Downloads`); the bundled `bin/yt-dlp.exe` and `bin/ffmpeg.exe` do the work.
 
 Output `.srt`, `.json`, `.txt` are written **next to the source media file**, not into a separate folder.

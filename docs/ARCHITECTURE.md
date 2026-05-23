@@ -5,8 +5,11 @@ Two packages, one entry point.
 ```
 gui.py             Entry point — dispatches to App or worker mode.
 app/               Tk UI. Depends on core. Owns dialogs, widgets, App.
+  domain/          Pure-Python task models (TranscriptionTask, VideoDownloadTask).
+  services/        Long-running side-effecting concerns (download_service).
 core/              Headless logic. No Tk. Importable from the worker.
-bin/               Bundled ffmpeg + ffprobe.
+  integrations/    Per-site download integrations (smtv).
+bin/               Bundled ffmpeg + ffprobe + yt-dlp.
 ```
 
 ## Two-process model
@@ -80,6 +83,20 @@ No UI exposes any of these. Editing `config.json` by hand still works — the fi
 A failure surfaces a single `messagebox.showerror` at startup with `"Issue: <X>. Try: <Y>."`.
 
 `core/error_messages.py` is a regex table mapping common Whisper / network / disk exceptions to user-actionable strings. The worker calls `friendly_error()` before emitting the `error` event so the user sees actionable prose, not raw tracebacks.
+
+## Downloading videos
+
+The single-screen UI also exposes an optional **Download Videos** section. Each non-blank line in the URL Text widget becomes one `VideoDownloadTask` in `app.download_queue`. `core.url_kind.url_kind` classifies each URL into one of three buckets:
+
+- `smtv` → `core.integrations.smtv.download` streams the chosen file (mp3 by default) directly from the SMTV CDN in a daemon thread inside the parent process. The bundled transcript text (when present) is written next to the saved file.
+- `yt-dlp` → `app.services.download_service.DownloadService` builds an argv for `bin/yt-dlp.exe` and spawns it as a subprocess. Stdout is parsed line-by-line for `[download] N.N%` progress and `Destination:` paths. Cancel runs `taskkill /F /T` on the PID so child ffmpeg processes go too.
+- `unsupported` → the URL is skipped and the user is warned.
+
+Both backends post events on the existing `worker_events` queue. The App's `_poll_worker_events` already drains it on the Tk main thread, so the download path doesn't introduce a second event loop. The Queue Treeview gained a `kind` column (`transcribe` / `download`) to keep both task types in the same widget.
+
+Optional time-range slice: when **Start** / **End** are filled, yt-dlp gets `--download-sections "*start-end"`. SMTV has no server-side slicing — `core.integrations.smtv.warn_time_range_unsupported` logs one WARN line and the full file downloads. Both bounds are optional; either may be left open.
+
+When **Auto-transcribe after download** is checked, a successful download enqueues its saved file into the transcribe queue and triggers the normal Transcribe path — which lazily downloads the Whisper model on the first run, exactly as a manual click would.
 
 ## Known maintainability debt
 
