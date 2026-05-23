@@ -27,7 +27,10 @@ def write(segments: list[dict], audio_path: str = "") -> str:
         out.append({
             "start": _safe_float(seg.get("start", 0.0)),
             "end": _safe_float(seg.get("end", 0.0)),
-            "text": (seg.get("text") or "").strip(),
+            # str() coerces truthy non-strings (e.g. 42, 3.14) which
+            # otherwise crash .strip() with AttributeError. Discovered
+            # by the test-shard fuzzer.
+            "text": str(seg.get("text") or "").strip(),
         })
     # allow_nan=False — every consumer expects strict JSON.
     return json.dumps(out, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
