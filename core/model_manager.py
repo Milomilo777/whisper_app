@@ -360,7 +360,8 @@ def is_model_on_disk(config: dict[str, Any]) -> bool:
     fire the download dialog before the loading dialog on first
     Transcribe click.
     """
-    p = Path((config.get("model_path") or "").strip())
-    if not p:
+    raw = (config.get("model_path") or "").strip()
+    if not raw:
         return False
+    p = Path(raw)
     return p.exists() and p.is_dir()
