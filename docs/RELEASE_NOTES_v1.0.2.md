@@ -126,7 +126,7 @@ The hub folder and `config.json` are unchanged.
 | Metric | Result |
 |---|---|
 | pyright `app/ core/` | 0 errors, 0 warnings, 0 informations |
-| Unit + integration suite | 519/519 passing |
+| Unit + integration suite | 551/551 passing |
 | Real-file end-to-end (SMTV clip) | 10/10 |
 | Smoke + end-to-end (Whisper model) | 7/7 |
 

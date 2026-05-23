@@ -545,7 +545,7 @@ class App(tk.Tk):
         header.pack(fill="x")
         ttk.Label(
             header,
-            text="Whisper Project — v1.0.1",
+            text="Whisper Project — v1.0.2",
             font=("TkDefaultFont", 13, "bold"),
         ).pack(anchor="w")
         ttk.Label(

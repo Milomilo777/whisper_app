@@ -1,24 +1,26 @@
 # Build
 
-How to produce Windows binaries from source. v1.0.1 ships three
-independent installation methods; each has its own build pipeline.
+How to produce Windows binaries from source. v1.0.2 ships two
+shipped methods (Portable + Standard); a third (Compact) pipeline
+exists in this repo and still builds, but no Compact EXE is
+published — Portable + Standard cover every audience.
 
 ## TL;DR
 
 ```cmd
 :: Method A — Portable single-file exe (~447 MB)
 pyinstaller --noconfirm --clean whisper_project_onefile.spec
-:: Output: dist\WhisperProject-v1.0.1-Portable.exe
-
-:: Method B — Compact installer (~326 MB)
-pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
-:: Output: dist_installer\WhisperProject-v1.0.1-Setup-Compact.exe
+:: Output: dist\WhisperProject-v1.0.2-Portable.exe
 
 :: Method C — Standard installer with embeddable Python (~349 MB)
 build_embed_installer.bat
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
-:: Output: dist_installer\WhisperProject-v1.0.1-Setup-Standard.exe
+:: Output: dist_installer\WhisperProject-v1.0.2-Setup-Standard.exe
+
+:: Method B — Compact installer (~326 MB; unshipped, optional)
+pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
+:: Output: dist_installer\WhisperProject-v1.0.2-Setup-Compact.exe
 ```
 
 ## Prerequisites
@@ -47,7 +49,7 @@ unpacks the bundle to `%TEMP%\_MEI<random>\` (~5 s on a typical
 machine) and runs the app from there. `core.paths.resource_base()`
 points to that temp dir at runtime.
 
-Output: `dist\WhisperProject-v1.0.1-Portable.exe` (~447 MB; the bundled
+Output: `dist\WhisperProject-v1.0.2-Portable.exe` (~447 MB; the bundled
 `stable_whisper` + transitive `torch` pushed the v0.7.0 ~190 MB up by
 the audit-2 polish push).
 
@@ -73,7 +75,7 @@ The installer uses LZMA2 ultra compression, packs the ~478 MB
 onedir tree to ~137 MB, ships per-user / per-machine shortcuts, and
 gives users a real Add/Remove Programs entry.
 
-Output: `dist_installer\WhisperProject-v1.0.1-Setup-Compact.exe`
+Output: `dist_installer\WhisperProject-v1.0.2-Setup-Compact.exe`
 (~137 MB).
 
 ## Method C — Standard installer with embeddable Python
@@ -108,7 +110,7 @@ Then wrap the tree in an Inno Setup installer:
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
 ```
 
-Output: `dist_installer\WhisperProject-v1.0.1-Setup-Standard.exe`
+Output: `dist_installer\WhisperProject-v1.0.2-Setup-Standard.exe`
 (~153 MB).
 
 Method C's shortcuts launch `pythonw.exe gui.py` rather than a
@@ -128,7 +130,7 @@ For the compiled artefacts, run the smoke E2E against each:
 
 ```cmd
 :: Method A
-set WHISPER_SMOKE_EXE=dist\WhisperProject-v1.0.1-Portable.exe
+set WHISPER_SMOKE_EXE=dist\WhisperProject-v1.0.2-Portable.exe
 python -m pytest tests\smoke\test_exe_real_e2e.py
 
 :: Method B (after silent install to C:\Temp\test_B)

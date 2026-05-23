@@ -8,13 +8,12 @@ using OpenAI's Whisper model.** Drag a file in, get an `.srt` + `.json`
 + `.docx` back. No cloud, no account, no upload. Also downloads from
 any site `yt-dlp` supports.
 
-Three deliverables for three audiences:
+Two deliverables for two audiences:
 
 | Method | Asset | Size | Best for |
 |---|---|---|---|
-| **Portable** | `WhisperProject-v1.0.1-Portable.exe` | ~450 MB | one file, no install, USB-stick friendly |
-| **Compact** | `WhisperProject-v1.0.1-Setup-Compact.exe` | ~330 MB | normal user — quick startup + Start-menu shortcut |
-| **Standard** | `WhisperProject-v1.0.1-Setup-Standard.exe` | ~350 MB | inspectable — files live on disk + Python visible |
+| **Portable** | `WhisperProject-v1.0.2-Portable.exe` | ~450 MB | one file, no install, USB-stick friendly |
+| **Standard** | `WhisperProject-v1.0.2-Setup-Standard.exe` | ~350 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
 
 Download from the latest release:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
@@ -148,13 +147,15 @@ sequence.
 
 ## Status
 
-Stable at v1.0.1. The full audit + freeze-readiness review for this
-release is in [docs/FINAL_FREEZE_AUDIT_2026-05-21.md](docs/FINAL_FREEZE_AUDIT_2026-05-21.md).
+Stable at v1.0.2. The full audit + freeze-readiness review is in
+[docs/FINAL_FREEZE_AUDIT_2026-05-21.md](docs/FINAL_FREEZE_AUDIT_2026-05-21.md);
+the multi-day stability audit is in
+[docs/STABILITY_AUDIT_2026-05-23.md](docs/STABILITY_AUDIT_2026-05-23.md).
 
-Quality bars at v1.0.1:
+Quality bars at v1.0.2:
 
 - pyright `app/ core/` — 0 errors, 0 warnings, 0 informations
-- unit + integration suite — 535 tests passing
+- unit + integration suite — 551 tests passing
 - real-file end-to-end against the SMTV reference clip — 10/10
 - transcribe smoke + end-to-end — 7/7
 
