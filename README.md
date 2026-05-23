@@ -35,14 +35,27 @@ python gui.py
 
 The first launch shows a hub-folder picker (default: `<app_dir>/hub`). The first **Transcribe** click downloads the model (~3 GB, MD5-verified).
 
-## Build the portable exe
+## Build the installer
 
-```
-pip install pyinstaller
-pyinstaller --noconfirm --clean whisper_project_basic.spec
+The basic edition ships exactly one deliverable: a Setup-Standard
+installer with an embedded Python interpreter. Run the build
+script (downloads CPython 3.11 from python-build-standalone,
+pip-installs requirements into the bundle, copies the source
+tree, runs a sanity import) and then Inno Setup:
+
+```cmd
+build_embed_installer.bat
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
 ```
 
-Output: `dist/WhisperProjectBasic-Portable.exe`.
+Output: `dist_installer\WhisperProjectBasic-v0.1.0-Setup.exe`.
+
+The installer adds Whisper Project to the Start Menu, optionally
+creates a desktop icon, and registers an Add/Remove Programs
+entry. After install the entire Python source tree lives on disk
+under `C:\Program Files\WhisperProjectBasic\`, which means the
+end user (or a maintainer) can open any module and read what it
+does — there is no frozen `.exe` to disassemble.
 
 ## Self-diagnostics
 
