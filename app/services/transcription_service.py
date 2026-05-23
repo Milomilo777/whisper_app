@@ -251,7 +251,15 @@ class TranscriptionService:
     # 30 s easily covers a normal model load (~10 s on CPU) and any
     # one-segment Whisper transcribe burst, but catches a deadlocked
     # worker before the user has to kill the app.
-    LIVENESS_TIMEOUT_S = 30.0
+    #
+    # 120 s (was 30 s) is defence-in-depth on top of the progress-
+    # callback wiring through diarisation (see core/transcriber.py
+    # _run_post_pipeline). Long files (3 h+) can momentarily have a
+    # sherpa-onnx tick rate below one event per 30 s, even with the
+    # progress callback connected; 120 s keeps the watchdog useful
+    # for genuinely wedged workers while no longer killing healthy
+    # long-running diarisation passes mid-job.
+    LIVENESS_TIMEOUT_S = 120.0
 
     def poll(self) -> None:
         app = self.app

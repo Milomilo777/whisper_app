@@ -557,6 +557,7 @@ def _run_post_pipeline(
     segments_data: list[dict[str, Any]],
     detected_lang: str,
     log_cb: Callable[[str], None] | None,
+    progress_cb: Callable[[int], None] | None = None,
 ) -> int:
     """Diarisation + alignment + speaker_count for the writer.
 
@@ -573,10 +574,20 @@ def _run_post_pipeline(
                 log("Diarising speakers...", log_cb)
                 num_speakers = int(config.get("diarization_num_speakers", -1))
                 threshold = float(config.get("diarization_cluster_threshold", 0.5))
+
+                def _diar_progress(fraction: float) -> None:
+                    if progress_cb:
+                        # Diarisation runs after Whisper inference. Map its 0..1
+                        # progress to the 90..99 percent slot so the bar keeps
+                        # moving AND the parent's liveness watchdog sees regular
+                        # events during this otherwise-silent long-running C call.
+                        progress_cb(90 + int(fraction * 9))
+
                 diar_segments = _diar.diarize(
                     task.file_path,
                     num_speakers=num_speakers,
                     cluster_threshold=threshold,
+                    progress_cb=_diar_progress,
                 )
                 _diar.assign_speakers_to_segments(segments_data, diar_segments)
                 speakers = sorted({s.speaker for s in diar_segments})
@@ -898,7 +909,7 @@ def transcribe(
 
     # Speaker diarization (opt-in) + word-level alignment (opt-in).
     detected_lang = str(getattr(info, "language", "") or "")
-    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb)
+    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb, progress_cb)
 
     written = _write_outputs(
         base,
@@ -974,7 +985,7 @@ def _transcribe_via_alt_backend(
     # downstream consumers (writer template, post-pipeline) never
     # see "None" as a stringified language code.
     detected_lang = str(lang_info.language or "")
-    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb)
+    speaker_count = _run_post_pipeline(task, segments_data, detected_lang, log_cb, progress_cb)
     written = _write_outputs(
         base,
         segments_data,
