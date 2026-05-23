@@ -77,6 +77,7 @@ a = Analysis(
     ],
     datas=[
         ('bin', 'bin'),
+        ('assets', 'assets'),
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,

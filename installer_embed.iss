@@ -23,15 +23,18 @@ PrivilegesRequired=admin
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=Whisper Project
-UninstallDisplayIcon={app}\python\pythonw.exe
+UninstallDisplayIcon={app}\assets\whisper.ico
+SetupIconFile=assets\whisper.ico
 
 [Files]
 Source: "embed_build\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "assets\whisper.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "assets\whisper.png"; DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\python\pythonw.exe"
+Name: "{group}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"
 Name: "{group}\Uninstall Whisper Project"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\python\pythonw.exe"; Tasks: desktopicon
+Name: "{commondesktop}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
@@ -57,6 +60,7 @@ Type: filesandordirs; Name: "{app}\__pycache__"
 Type: filesandordirs; Name: "{app}\app"
 Type: filesandordirs; Name: "{app}\core"
 Type: filesandordirs; Name: "{app}\bin"
+Type: filesandordirs; Name: "{app}\assets"
 Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\Lib"
 Type: files; Name: "{app}\gui.py"

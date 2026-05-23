@@ -22,15 +22,18 @@ PrivilegesRequired=admin
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName=Whisper Project
-UninstallDisplayIcon={app}\WhisperProject.exe
+UninstallDisplayIcon={app}\assets\whisper.ico
+SetupIconFile=assets\whisper.ico
 
 [Files]
 Source: "dist_onedir\WhisperProject\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "assets\whisper.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "assets\whisper.png"; DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Whisper Project"; Filename: "{app}\WhisperProject.exe"
+Name: "{group}\Whisper Project"; Filename: "{app}\WhisperProject.exe"; IconFilename: "{app}\assets\whisper.ico"
 Name: "{group}\Uninstall Whisper Project"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\Whisper Project"; Filename: "{app}\WhisperProject.exe"; Tasks: desktopicon
+Name: "{commondesktop}\Whisper Project"; Filename: "{app}\WhisperProject.exe"; IconFilename: "{app}\assets\whisper.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
@@ -54,6 +57,7 @@ Filename: "{app}\WhisperProject.exe"; Description: "Launch Whisper Project"; Fla
 ; launch; Inno doesn't track files created after install, so sweep
 ; them on uninstall. dirifempty cleans up if nothing else remains.
 Type: filesandordirs; Name: "{app}\__pycache__"
+Type: filesandordirs; Name: "{app}\assets"
 Type: dirifempty; Name: "{app}"
 
 [Code]

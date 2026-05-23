@@ -142,6 +142,7 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Whisper Project")
+        self._install_icon()
         # High-DPI scaling: pick up the system DPI so fonts and
         # paddings don't shrink to dollhouse size on 150 % displays.
         self._apply_hidpi_scaling()
@@ -1879,6 +1880,29 @@ class App(tk.Tk):
             )
         else:
             self.log(f"Re-enqueued {n} interrupted transcription(s)")
+
+    def _install_icon(self) -> None:
+        """Set the window-title-bar + taskbar icon from ``assets/whisper.ico``.
+
+        Cosmetic — silently no-ops when the file is missing so a
+        damaged install never blocks launch.
+        """
+        if getattr(sys, "frozen", False):
+            ico = os.path.join(
+                os.path.dirname(os.path.abspath(sys.executable)),
+                "assets", "whisper.ico",
+            )
+        else:
+            ico = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "assets", "whisper.ico",
+            )
+        if not os.path.isfile(ico):
+            return
+        try:
+            self.iconbitmap(default=ico)
+        except tk.TclError as exc:
+            logger.warning("Could not set window icon (%s): %s", ico, exc)
 
     def _apply_hidpi_scaling(self) -> None:
         """Bump Tk's pt→px scaling on high-DPI displays.
