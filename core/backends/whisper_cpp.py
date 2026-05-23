@@ -20,6 +20,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from .._liveness_tick import liveness_tick
 from ..config import user_cache_dir
 from .base import Backend, LanguageInfo
 
@@ -211,7 +212,13 @@ class WhisperCppBackend(Backend):
         # in centiseconds in some versions, milliseconds in others.
         # We normalise via the .t0_to_seconds helper if present, and
         # fall back to dividing by 100 (centisecond default).
-        segments = self._model.transcribe(audio_path, **kwargs)
+        #
+        # The call is a single blocking C invocation that returns only
+        # once the whole file is decoded — no events emitted while it
+        # runs. Wrap it in a liveness tick so the parent watchdog
+        # sees a heartbeat at least every 10 s on slow CPUs.
+        with liveness_tick(log_cb, "whisper.cpp transcribe"):
+            segments = self._model.transcribe(audio_path, **kwargs)
 
         segments_data: list[dict[str, Any]] = []
         n = len(segments) if hasattr(segments, "__len__") else 0

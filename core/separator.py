@@ -27,11 +27,13 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Callable
 
+from ._liveness_tick import liveness_tick
 from .config import user_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -125,37 +127,55 @@ def separate_vocals(
     cache_dir().mkdir(parents=True, exist_ok=True)
     out_dir = Path(tempfile.mkdtemp(prefix="demucs_", dir=str(cache_dir())))
 
+    # Wrap the whole post-mkdtemp section in try/finally so the
+    # temp out_dir tree (htdemucs/<stem>/{vocals,no_vocals}.wav) is
+    # always removed on the success path too — previously only the
+    # one vocals.wav was moved into the cache and the rest of the
+    # tree (~30-50 MB per run) leaked under the cache dir forever.
     try:
-        _run_demucs_cli(audio_path, out_dir, model=model, log=log)
-    except Exception as e:  # noqa: BLE001
-        logger.exception("Demucs run failed: %s — using original audio", e)
-        if log:
-            log(f"Demucs failed ({e}); falling back to original audio.")
-        return audio_path
-
-    # Demucs writes to ``{out_dir}/{model}/{stem_name}/vocals.wav`` —
-    # locate it. Some Demucs versions vary the layout; recursively
-    # search for a vocals.wav inside out_dir as a robust fallback.
-    found = _find_vocals_in(out_dir)
-    if found is None:
-        if log:
-            log("Demucs produced no vocals.wav; using original audio.")
-        return audio_path
-
-    try:
-        os.replace(str(found), str(cached))
-    except OSError:
-        # Cross-drive replace can fail; fall back to copy+remove.
         try:
-            import shutil
-            shutil.copyfile(str(found), str(cached))
-        except OSError as e:
+            _run_demucs_cli(audio_path, out_dir, model=model, log=log)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Demucs run failed: %s — using original audio", e)
             if log:
-                log(f"Could not cache vocals stem: {e}")
-            return str(found)
-    if log:
-        log(f"Demucs vocals → {cached}")
-    return str(cached)
+                log(f"Demucs failed ({e}); falling back to original audio.")
+            return audio_path
+
+        # Demucs writes to ``{out_dir}/{model}/{stem_name}/vocals.wav`` —
+        # locate it. Some Demucs versions vary the layout; recursively
+        # search for a vocals.wav inside out_dir as a robust fallback.
+        found = _find_vocals_in(out_dir)
+        if found is None:
+            if log:
+                log("Demucs produced no vocals.wav; using original audio.")
+            return audio_path
+
+        try:
+            os.replace(str(found), str(cached))
+        except OSError:
+            # Cross-drive replace can fail; fall back to copy+remove.
+            try:
+                shutil.copyfile(str(found), str(cached))
+            except OSError as e:
+                if log:
+                    log(f"Could not cache vocals stem: {e}")
+                # Caller needs the stem on disk; the rmtree below
+                # would yank it, so return early *before* finally:
+                # by returning, finally still runs — but we want the
+                # stem to survive. Move it out of out_dir first.
+                survivor = cache_dir() / Path(found).name
+                try:
+                    shutil.copyfile(str(found), str(survivor))
+                except OSError:
+                    survivor = found  # last resort: hand back in-tree path
+                return str(survivor)
+        if log:
+            log(f"Demucs vocals → {cached}")
+        return str(cached)
+    finally:
+        # Always sweep the temp tree, success or failure. Cache
+        # itself keeps the moved vocals.wav (P1-5).
+        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 def _find_vocals_in(directory: Path) -> Path | None:
@@ -193,4 +213,10 @@ def _run_demucs_cli(
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    subprocess.run(cmd, **kwargs)  # type: ignore[arg-type]
+    # The demucs CLI emits its own progress bar to stderr but we
+    # capture stderr (PIPE) so the worker stdout sees nothing until
+    # demucs exits. Wrap the blocking subprocess.run in a liveness
+    # tick so the parent watchdog stays quiet on multi-minute
+    # separations on slow CPUs.
+    with liveness_tick(log, "Demucs separation"):
+        subprocess.run(cmd, **kwargs)  # type: ignore[arg-type]

@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .._liveness_tick import liveness_tick
 from ..config import user_cache_dir
 from .base import Backend, LanguageInfo
 
@@ -188,7 +189,12 @@ class ParakeetBackend(Backend):
             assert self._recognizer is not None
             stream = self._recognizer.create_stream()
             stream.accept_waveform(sample_rate, samples)
-            self._recognizer.decode_stream(stream)
+            # ``decode_stream`` is a single C-level call that processes
+            # the whole file with the GIL held and emits no progress.
+            # Wrap it in a liveness tick so the parent watchdog sees
+            # a heartbeat at least every 10 s on slow CPUs.
+            with liveness_tick(log_cb, "Parakeet decode"):
+                self._recognizer.decode_stream(stream)
 
             result = stream.result
             text = (getattr(result, "text", "") or "").strip()

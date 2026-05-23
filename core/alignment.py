@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Callable
+
+from ._liveness_tick import liveness_tick
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,7 @@ def refine_word_timestamps_in_place(
     *,
     language: str | None = None,
     model_name: str = "tiny",
+    log_cb: Callable[[str], None] | None = None,
 ) -> bool:
     """Refine word timestamps in ``segments_data`` (in place).
 
@@ -116,11 +119,16 @@ def refine_word_timestamps_in_place(
     coarse_result = _build_whisper_result(stable_whisper, segments_data, language)
 
     try:
-        refined = model.align(
-            audio_path,
-            coarse_result,
-            language=language or coarse_result.language or "en",
-        )
+        # ``model.align`` is a single long-running C call (DTW on the
+        # cross-attention weights) that emits nothing while it runs.
+        # Wrap it in a liveness tick so the worker's parent watchdog
+        # sees a heartbeat at least every 10 s on slow CPUs.
+        with liveness_tick(log_cb, "stable-ts alignment"):
+            refined = model.align(
+                audio_path,
+                coarse_result,
+                language=language or coarse_result.language or "en",
+            )
     except Exception as e:  # noqa: BLE001
         # stable-ts sometimes raises on a clip that's harder to align
         # than expected (very fast speech, music backdrop). Treat as
