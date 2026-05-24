@@ -1115,26 +1115,59 @@ class App(tk.Tk):
             return False
 
     def enqueue_transcription_from_download(self, file_path: str, language: str) -> None:
-        """Auto-transcribe-after-download wiring: push a task without the modal.
+        """Auto-transcribe-after-download wiring: push a task without freezing.
 
-        v1.0.3 — lazy model load. Spawning a worker / waiting for the
-        ``ready`` event happens via the headless path of
-        ``ensure_worker_ready`` so the user isn't surprised by a
-        modal popping up while they were watching the download
-        progress. If the load times out, we log + drop the task on
-        the floor rather than push a task that will never run.
+        Runs on the Tk main thread (the download-complete handler). A
+        cold Whisper-model load takes 10–60 s, and the old code waited
+        for the worker's ``ready`` event synchronously here — which
+        froze the whole UI after every download with the checkbox on
+        (the "Transcribe after download freezes the app" bug).
+
+        Instead we spawn a worker if none is alive yet and poll for
+        readiness with ``after()`` so the event loop keeps running; the
+        task is enqueued the moment a worker reports ready. If the load
+        never completes we drop the task rather than queue one that can
+        never run.
         """
-        if not self.transcription_service.ensure_worker_ready(self, headless=True):
-            self.log(
-                f"Auto-transcribe skipped: model load timed out for "
-                f"{os.path.basename(file_path)}"
-            )
+        from app.services.transcription_service import HEADLESS_READY_TIMEOUT_S
+        svc = self.transcription_service
+
+        def _enqueue() -> None:
+            task = TranscriptionTask(file_path)
+            if hasattr(task, "language"):
+                setattr(task, "language", language)
+            self.queue.append(task)
+            self.refresh()
+
+        if svc.ready_workers():
+            _enqueue()
             return
-        task = TranscriptionTask(file_path)
-        if hasattr(task, "language"):
-            setattr(task, "language", language)
-        self.queue.append(task)
-        self.refresh()
+
+        # No ready worker yet. Make sure one is loading — but don't
+        # spawn a second if one is already on its way (a parallel
+        # download could have started it) — then poll without blocking.
+        if not svc.active_workers():
+            svc.start_worker(temporary=False)
+            self.log(
+                f"Loading Whisper model — will transcribe "
+                f"{os.path.basename(file_path)} when ready."
+            )
+
+        deadline = time.monotonic() + HEADLESS_READY_TIMEOUT_S
+
+        def _await_ready() -> None:
+            if svc.ready_workers():
+                _enqueue()
+                return
+            if time.monotonic() >= deadline:
+                self.log(
+                    f"Auto-transcribe skipped: model load timed out for "
+                    f"{os.path.basename(file_path)}"
+                )
+                return
+            self.after(400, _await_ready)
+
+        self.after(400, _await_ready)
 
     def add_download(self) -> None:
         self.download_service.enqueue_from_form()
