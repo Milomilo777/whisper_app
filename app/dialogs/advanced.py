@@ -42,7 +42,7 @@ class AdvancedDialog(tk.Toplevel):
         self.title("Advanced settings")
         self.transient(app)
         self.grab_set()
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         cfg = app.app_config
@@ -107,9 +107,71 @@ class AdvancedDialog(tk.Toplevel):
 
         self._build()
 
+        self.update_idletasks()
+
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+
+        # Use most of the screen while leaving margins
+        width = int(screen_w * 0.75)
+        height = int(screen_h * 0.85)
+
+        # Minimum sensible size
+        width = max(width, 1100)
+        height = max(height, 800)
+
+        # Never exceed screen bounds
+        width = min(width, screen_w - 80)
+        height = min(height, screen_h - 80)
+
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
     def _build(self) -> None:
-        body = ttk.Frame(self, padding=12)
-        body.pack(fill="both", expand=True)
+        main = ttk.Frame(self)
+        main.pack(fill="both", expand=True)
+
+        # Scrollable content area
+        content_container = ttk.Frame(main)
+        content_container.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(content_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            content_container,
+            orient="vertical",
+            command=canvas.yview,
+        )
+
+        body = ttk.Frame(canvas, padding=12)
+
+        body.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=body, anchor="nw")
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Linux mouse wheel support
+        canvas.bind_all(
+            "<Button-4>",
+            lambda e: canvas.yview_scroll(-1, "units")
+        )
+        canvas.bind_all(
+            "<Button-5>",
+            lambda e: canvas.yview_scroll(1, "units")
+        )
 
         # VAD parameters
         vad = ttk.LabelFrame(body, text="Voice Activity Detection")
@@ -294,7 +356,7 @@ class AdvancedDialog(tk.Toplevel):
                 row=2 + i // 3, column=i % 3, sticky="w", padx=8, pady=2
             )
 
-        buttons = ttk.Frame(body)
+        buttons = ttk.Frame(main)
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Cancel", command=self._on_close).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save_and_close).pack(side="right")
