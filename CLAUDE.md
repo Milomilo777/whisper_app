@@ -70,12 +70,16 @@ asks for them in the current session:
     in docs, code comments, or commit messages. The SMTV scraper
     accepts non-English content URLs; that's per-URL capability,
     not a UI claim.
-  - Two shipped deliverables (Portable + Setup-Standard) must
-    keep building. The Setup-Compact pipeline still exists in the
-    repo and the spec is maintained, but Compact is not published.
-    Adding a new module = update both `whisper_project_onefile.spec`
-    and `whisper_project_onedir.spec` hidden-import lists (so the
-    Compact pipeline doesn't bit-rot).
+  - Shipped deliverable: **Setup-Standard only** (decided
+    2026-05-24). Future releases publish just the Standard
+    installer (`build_embed_installer.bat` + `installer_embed.iss`).
+    Portable is no longer shipped. Both the Portable
+    (`whisper_project_onefile.spec`) and Compact
+    (`whisper_project_onedir.spec` + `installer.iss`) pipelines
+    still exist in the repo and their specs are maintained, but
+    neither is published. Adding a new module = update both
+    `whisper_project_onefile.spec` and `whisper_project_onedir.spec`
+    hidden-import lists so the unshipped pipelines don't bit-rot.
   - Tests live under `tests/`. The hermetic unit suite is
     `tests/` minus `tests/smoke/`. Smoke needs real resources
     (the Whisper model, a test video at

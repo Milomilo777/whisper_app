@@ -20,17 +20,19 @@ this repo. Read this file before anything else.
 | Pyright basic | 0 errors, 0 warnings, 0 informations |
 | Smoke + end-to-end | 7/7 PASS against real SMTV clip |
 
-## 2. Two deliverables
+## 2. Shipped deliverable — Standard only going forward
 
-Both live on GitHub as assets of the v1.0.3 release. The Compact
-installer pipeline still exists in the repo and still builds, but
-is intentionally not shipped — Portable + Standard cover every
-audience.
+v1.0.3 historically shipped **both** Portable and Standard (both are
+GitHub assets of that release). **As of 2026-05-24 the policy changed:
+future releases publish Setup-Standard only.** Portable now joins the
+Compact pipeline as maintained-but-unshipped — both specs stay in the
+repo and keep building so they don't bit-rot, but neither produces a
+published EXE anymore.
 
-| Asset | Local path | Size |
-|---|---|---|
-| Portable | `dist/WhisperProject-v1.0.3-Portable.exe` | 447 MB |
-| Setup-Standard | `dist_installer/WhisperProject-v1.0.3-Setup-Standard.exe` | 349 MB |
+| Asset | Local path | Size | Shipped going forward? |
+|---|---|---|---|
+| Setup-Standard | `dist_installer/WhisperProject-v1.0.3-Setup-Standard.exe` | 349 MB | yes — the only published deliverable |
+| Portable | `dist/WhisperProject-v1.0.3-Portable.exe` | 447 MB | no — v1.0.3 was its last release |
 
 Download from:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
