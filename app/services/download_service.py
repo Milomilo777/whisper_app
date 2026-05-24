@@ -228,25 +228,32 @@ def build_download_command(
         audio_selector = "ba/bestaudio" if audio["kind"] == "best_audio" else audio["format_id"]
         command.extend(["-f", audio_selector, "-x", "--audio-format", output_format])
     else:
+        
         if video["kind"] == "best_video":
-            video_selector = (
-                "bv*[ext=mp4]/bestvideo[ext=mp4]/bv*/bestvideo"
-                if output_format == "mp4"
-                else "bv*/bestvideo"
-            )
+            if output_format == "mp4":
+                video_selector = "bv*[ext=mp4]/bestvideo[ext=mp4]/bv*/bestvideo"
+            else:
+                video_selector = "bv*/bestvideo"
         else:
             video_selector = video["format_id"]
+
         if audio["kind"] == "best_audio":
-            audio_selector = (
-                "ba[ext=m4a]/bestaudio[ext=m4a]/ba/bestaudio"
-                if output_format == "mp4"
-                else "ba/bestaudio"
-            )
+            if output_format == "mp4":
+                audio_selector = "ba[ext=m4a]/bestaudio[ext=m4a]/ba/bestaudio"
+            else:
+                audio_selector = "ba/bestaudio"
         else:
             audio_selector = audio["format_id"]
-        command.extend(
-            ["-f", f"{video_selector}+{audio_selector}/best", "--merge-output-format", output_format]
-        )
+
+        format_selector = f"({video_selector})+({audio_selector})/best"
+
+        command.extend([
+            "-f",
+            format_selector,
+            "--merge-output-format",
+            output_format,
+        ])
+
 
     # Optional --download-sections slice (v1.0.3). Only emitted when
     # the user supplied a start and/or end in the Download tab fields
