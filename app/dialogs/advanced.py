@@ -157,21 +157,29 @@ class AdvancedDialog(tk.Toplevel):
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-
+        
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _bind_mousewheel(_event):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            canvas.bind_all(
+                "<Button-4>",
+                lambda e: canvas.yview_scroll(-1, "units")
+            )
+            canvas.bind_all(
+                "<Button-5>",
+                lambda e: canvas.yview_scroll(1, "units")
+            )
 
-        # Linux mouse wheel support
-        canvas.bind_all(
-            "<Button-4>",
-            lambda e: canvas.yview_scroll(-1, "units")
-        )
-        canvas.bind_all(
-            "<Button-5>",
-            lambda e: canvas.yview_scroll(1, "units")
-        )
+        def _unbind_mousewheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
 
         # VAD parameters
         vad = ttk.LabelFrame(body, text="Voice Activity Detection")
