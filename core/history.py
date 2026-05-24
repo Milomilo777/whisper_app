@@ -242,6 +242,29 @@ class HistoryDB:
             ).rowcount
         return int(d) + int(t)
 
+    def dismiss_interrupted_transcriptions(self, row_ids: Iterable[int]) -> int:
+        """Move the given interrupted transcription rows to ``cancelled``.
+
+        Crash-resume offers interrupted rows once per launch. Without
+        this, clicking "No" left them ``interrupted`` so the same
+        prompt reappeared on every later launch — the only way to
+        clear it was to actually re-run the transcription. Marking the
+        declined rows ``cancelled`` (a terminal status the resume scan
+        skips and ``stats`` does not count) stops the nag while keeping
+        the row in history. Returns rows touched.
+        """
+        ids = [int(i) for i in row_ids]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        with self._txn() as conn:
+            n = conn.execute(
+                "UPDATE transcriptions SET status='cancelled' "
+                f"WHERE status='interrupted' AND id IN ({placeholders})",
+                ids,
+            ).rowcount
+        return int(n)
+
     def stats(self) -> dict[str, Any]:
         """Quick stats for the Statistics dialog.
 

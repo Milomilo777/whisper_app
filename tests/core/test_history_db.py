@@ -86,6 +86,29 @@ def test_mark_interrupted_moves_running_rows(db):
     assert t_status == "interrupted"
 
 
+def test_dismiss_interrupted_clears_only_offered_rows(db):
+    a = db.insert_transcription("/tmp/a.wav")
+    b = db.insert_transcription("/tmp/b.wav")
+    c = db.insert_transcription("/tmp/c.wav")
+    assert db.mark_interrupted() == 3  # all three running -> interrupted
+    # User declined resume for a + b only; c was not offered.
+    touched = db.dismiss_interrupted_transcriptions([a, b])
+    assert touched == 2
+    statuses = {r["id"]: r["status"] for r in db.list_transcriptions()}
+    assert statuses[a] == "cancelled"
+    assert statuses[b] == "cancelled"
+    assert statuses[c] == "interrupted"
+
+
+def test_dismiss_interrupted_is_noop_for_empty_and_non_interrupted(db):
+    rid = db.insert_transcription("/tmp/x.wav")
+    db.finish_transcription(rid, "finished")
+    assert db.dismiss_interrupted_transcriptions([]) == 0
+    # A finished row is never moved, even if its id is passed.
+    assert db.dismiss_interrupted_transcriptions([rid]) == 0
+    assert db.list_transcriptions()[0]["status"] == "finished"
+
+
 def test_stats_basic_counts(db):
     a = db.insert_download("https://a")
     db.finish_download(a, "finished", output_paths=["/tmp/a.mp4"])

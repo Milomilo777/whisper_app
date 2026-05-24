@@ -1868,6 +1868,14 @@ class App(tk.Tk):
             f"previous crash. Resume {pronoun} now?",
             parent=self,
         ):
+            # User declined — clear the interrupted flag on the rows we
+            # offered so this prompt doesn't reappear on every launch.
+            try:
+                history.dismiss_interrupted_transcriptions(
+                    [r["id"] for r in unique]
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to dismiss interrupted rows", exc_info=True)
             return
         # Crash-resume: if a partial checkpoint exists for any of
         # these interrupted files, flag the new task as a resume so
