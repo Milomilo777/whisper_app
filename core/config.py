@@ -329,6 +329,48 @@ def load_config() -> dict[str, Any]:
     return _apply_runtime_fallbacks(merged)
 
 
+def _persistable_model_path(config: dict[str, Any]) -> str:
+    """Return the ``model_path`` value that is safe to write to disk.
+
+    ``_apply_runtime_fallbacks`` fills ``model_path`` in memory by
+    deriving it from ``hub_folder`` (or the default hub) so the model
+    loaders get a concrete path. That derived value must NOT be
+    persisted: on the next load any non-empty ``model_path`` on a
+    mounted drive is treated as an explicit per-model override that
+    wins over ``hub_folder`` (see the resolution order in core.hub).
+    Writing a derived path back therefore pins the model location to a
+    stale folder and silently ignores the user's hub choice — most
+    visibly, the first-run hub picker never takes effect because the
+    default-hub path resolved during startup gets saved and then
+    outranks the folder the user actually picked.
+
+    Only a genuinely custom ``model_path`` — one that matches no
+    hub-derived layout — is preserved. Anything that equals the path
+    we would derive from the current ``hub_folder`` or the default hub
+    is stored as "" so it re-derives cleanly on every launch.
+    """
+    from . import hub as _hub
+    raw = (config.get("model_path") or "").strip()
+    if not raw:
+        return ""
+    model = config.get("model")
+    model_name = (model.get("name") if isinstance(model, dict) else "") or "whisper-model"
+    hub_folder = (config.get("hub_folder") or "").strip()
+
+    def _norm(p: str) -> str:
+        return os.path.normcase(os.path.normpath(os.path.abspath(p)))
+
+    derived: set[str] = set()
+    for h in (hub_folder, str(_hub.default_hub_folder())):
+        if not h:
+            continue
+        try:
+            derived.add(_norm(str(_hub.model_folder_for(h, model_name))))
+        except ValueError:
+            continue
+    return "" if _norm(raw) in derived else raw
+
+
 def save_config(config: dict[str, Any]) -> None:
     # Serialise concurrent saves through _SAVE_LOCK — without this,
     # two threads racing to os.replace the same destination throw
@@ -339,12 +381,17 @@ def save_config(config: dict[str, Any]) -> None:
         path = config_path()
         directory = os.path.dirname(path) or "."
         Path(directory).mkdir(parents=True, exist_ok=True)
+        # Don't persist an auto-derived model_path — it would harden
+        # into an explicit override that defeats hub_folder. See
+        # _persistable_model_path for the full rationale.
+        to_persist = dict(config)
+        to_persist["model_path"] = _persistable_model_path(config)
         fd, tmp_path = tempfile.mkstemp(
             prefix=".config-", suffix=".tmp", dir=directory
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+                json.dump(to_persist, f, indent=2, ensure_ascii=False)
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())

@@ -49,6 +49,61 @@ def test_save_then_load_roundtrip(isolated_dirs, monkeypatch):
     assert loaded["parallel_workers"] == 4
 
 
+def test_hub_choice_survives_save_load_cycle(isolated_dirs, monkeypatch):
+    """End-to-end regression: the first-run hub picker must take effect.
+
+    Startup resolves model_path against the DEFAULT hub (hub_folder is
+    still empty), then the user picks a hub. Saving used to persist the
+    stale default-derived model_path, which on the next load outranked
+    hub_folder as an "explicit override" — so the chosen hub was
+    silently ignored. The save must drop the derived path so the
+    reload follows the chosen hub.
+    """
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    from core import hub as _hub
+
+    user_hub = str(isolated_dirs / "external_drive" / "models")
+    config = cfg.load_config()                  # fresh: model_path derived vs default hub
+    assert config["model_path"]                 # non-empty (derived)
+    config["hub_folder"] = user_hub             # what HubSetupDialog._on_ok does
+    cfg.save_config(config)
+    reloaded = cfg.load_config()
+
+    expected = str(_hub.model_folder_for(user_hub, cfg.DEFAULT_CONFIG["model"]["name"]))
+    assert reloaded["hub_folder"] == user_hub
+    assert reloaded["model_path"] == expected
+
+
+def test_save_drops_hub_derived_model_path(isolated_dirs, monkeypatch):
+    """A model_path equal to the current hub's derived layout is stored
+    as "" (carries no info; re-derives on load)."""
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    from core import hub as _hub
+
+    hub_folder = str(isolated_dirs / "hub")
+    derived = str(_hub.model_folder_for(hub_folder, cfg.DEFAULT_CONFIG["model"]["name"]))
+    payload = dict(cfg.DEFAULT_CONFIG)
+    payload["hub_folder"] = hub_folder
+    payload["model_path"] = derived
+    cfg.save_config(payload)
+
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["model_path"] == ""
+
+
+def test_save_preserves_custom_model_path(isolated_dirs, monkeypatch):
+    """A genuinely custom model_path (matches no hub layout) survives a
+    save so legacy explicit per-model overrides keep working."""
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    custom = str(isolated_dirs / "totally" / "custom" / "place")
+    payload = dict(cfg.DEFAULT_CONFIG)
+    payload["model_path"] = custom
+    cfg.save_config(payload)
+
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["model_path"] == custom
+
+
 def test_load_corrupt_json_falls_back(isolated_dirs, monkeypatch):
     monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
     Path(cfg.config_path()).write_text("{not valid json", encoding="utf-8")
