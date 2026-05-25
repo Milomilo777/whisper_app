@@ -44,6 +44,37 @@ from .writers import get_binary_writer, get_writer, is_binary, supported_formats
 _CHECKPOINT_EVERY_N_SEGMENTS = 10
 _CHECKPOINT_EVERY_N_SECONDS = 20.0
 
+# faster-whisper accepts ISO-639-1 (+ a few special) codes only — never a
+# BCP-47 region tag like "en-US" / "pt-BR". Passing one makes transcribe()
+# raise, which silently produced NO output when an auto-transcribe carried
+# a download's "en-US" subtitle language (seen on a YouTube Short).
+_WHISPER_LANGS = frozenset({
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs",
+    "ca", "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi",
+    "fo", "fr", "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy",
+    "id", "is", "it", "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb",
+    "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt",
+    "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt", "ro", "ru",
+    "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
+    "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi",
+    "yi", "yo", "zh", "yue",
+})
+
+
+def _normalize_language(code: str | None) -> str | None:
+    """Coerce a UI/download language hint into a Whisper-accepted code.
+
+    Returns a valid code, or None for auto-detect. Strips a BCP-47
+    region/script suffix ("en-US" -> "en", "zh-Hans" -> "zh") and drops
+    anything Whisper doesn't recognise rather than letting transcribe()
+    raise (which produced a silent no-output failure).
+    """
+    if not code:
+        return None
+    base = code.strip().lower().replace("_", "-").split("-", 1)[0]
+    return base if base in _WHISPER_LANGS else None
+
+
 logger = logging.getLogger(__name__)
 
 config = load_config()
@@ -1163,7 +1194,7 @@ def _transcribe_via_alt_backend(
 
     segments_data, lang_info = backend.transcribe_to_segments(
         task.file_path,
-        language=getattr(task, "language", None) or None,
+        language=_normalize_language(getattr(task, "language", None)),
         want_words=want_words,
         vad_parameters=vad_params,
         initial_prompt=config.get("initial_prompt") or None,
