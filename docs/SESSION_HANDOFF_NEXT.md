@@ -5,20 +5,34 @@ this repo. Read this file before anything else.
 
 ---
 
-## 1. Current state (2026-05-23)
+## 1. Current state (2026-05-25)
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` (carries v1.0.3; pushed to origin) |
-| Last commit | `7295872` — release: bump to v1.0.3 |
+| Branch | `chore/cleanup-hardening` — now carries **v1.1.0** (pushed to origin) |
+| Version | `pyproject.toml` = 1.1.0; both `.iss` = 1.1.0 |
+| Last published release | `v1.0.3` on GitHub — **v1.1.0 is NOT published yet** |
 | Default GitHub branch | `master` (untouched) — separate from this branch |
-| Release tag | `v1.0.3` on GitHub with two EXEs uploaded |
 | Archive tag | `archive/release-v0.7-baseline` — pre-orphan snapshot |
 | Working tree | clean |
-| Unit suite | 578 passing |
-| Real-file E2E | 10/10 PASS (`tests/core/test_v08_real_file_e2e.py`) |
-| Pyright basic | 0 errors, 0 warnings, 0 informations |
-| Smoke + end-to-end | 7/7 PASS against real SMTV clip |
+| One-command gate | **`run_tests.bat`** — pyright (app/ + core/) + hermetic unit suite, PASS/FAIL summary |
+| Unit suite | full hermetic suite green (was 578; +~30 this session) |
+| Pyright basic | 0 errors, 0 warnings, 0 informations on `app/` + `core/` |
+| Real download check | audio fix verified on a real YouTube video (selector resolves to 137+140) |
+
+### What changed in v1.1.0 (2026-05-25)
+
+Fixes + one opt-in feature. Full list in `docs/CHANGELOG.md`; the
+bug-hunt method + findings are in
+`docs/AUDIT_2026-05-25_boundary_bugs.md`. Headlines: audio restored in
+video downloads, three main-thread model-load freezes removed
+(download / crash-resume / watched-folder), the model-hub and
+download-folder choices now stick, the crash-resume prompt no longer
+nags, a truncated SMTV download now fails instead of shipping corrupt,
+the About dialog no longer shows the repo URL, and a new opt-in
+"Cookies from browser" option (Advanced → Downloads) lets login-walled
+sites (FB / IG / TikTok stories, age-gated Shorts) download via the
+user's browser session.
 
 ## 2. Shipped deliverable — Standard only going forward
 
@@ -53,17 +67,28 @@ See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
 
 ## 3. What's pending
 
-- Manual install testing on a fresh Windows user profile (see
-  `docs/RELEASE_PROCESS.md` Step 6). The code is end-to-end
-  tested; the manual pass exists to verify the installer GUI
-  flow and the first-run Hub Folder dialog on a real clean
-  install.
-- Audit follow-ups: every P1 in `docs/STABILITY_AUDIT_2026-05-23.md`
-  is still open. P0-4 / P0-5 (LLM-titling silence) were
-  deliberately deferred.
-- SMTV time-range support — would need ffmpeg-based HTTP slicing.
-  Listed as a known limitation in
-  `docs/integrations/smtv-brief.md`.
+- **Publish v1.1.0 + prune old releases.** The Standard installer
+  builds to `dist_installer/WhisperProject-v1.1.0-Setup-Standard.exe`;
+  tag `v1.1.0` + `gh release create` with that EXE + notes. The owner
+  then asked to delete the older GitHub releases, keeping only the
+  latest. (Destructive on public artefacts — show the delete list
+  first and confirm.)
+- **Manual install + GUI test** on a fresh Windows profile
+  (`docs/RELEASE_PROCESS.md` Step 6): installer flow, first-run Hub
+  dialog, and the v1.1.0 GUI changes specifically — no freeze after
+  "Transcribe after download"; the Advanced dialog scrolls; the new
+  "Cookies from browser" dropdown; the About dialog with no repo URL.
+- **Deferred bug-audit items** (`docs/AUDIT_2026-05-25_boundary_bugs.md`):
+  SMTV cancel-latency on a stalled socket + no-retry; worker-lifecycle
+  hardening (pending-load dangle, `startup_error` blast radius);
+  download-row "interrupted" stats skew; the hardware-probe stall (async
+  attempt reverted — a proper fix needs the construction test made
+  async-aware); and the Class C yt-dlp time-range suspicions (keyframe
+  snap, sub-second timecode, open-left bound) — these need a real
+  yt-dlp + ffprobe verification harness before any code change.
+- Older items still open: the P1s in
+  `docs/STABILITY_AUDIT_2026-05-23.md`; SMTV server-side time-range
+  slicing (known limitation in `docs/integrations/smtv-brief.md`).
 
 ## 4. Branch + tag map
 
