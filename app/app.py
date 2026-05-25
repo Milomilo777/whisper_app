@@ -1045,6 +1045,74 @@ class App(tk.Tk):
             self.log("Model setup was cancelled or failed.")
         return False
 
+    # On-demand optional dependencies (slim build) ---------------------------
+    def _offer_optional_install(self, feature: str, friendly: str, size_hint: str) -> bool:
+        """If a slim-build optional feature's package is missing, offer a
+        one-time download. Returns True if usable (already present or just
+        installed), False if declined/failed — the caller then proceeds
+        without the feature (the worker skips it gracefully).
+        """
+        import threading
+
+        import core.optional_deps as optional_deps
+        if optional_deps.is_available(feature):
+            return True
+        if not messagebox.askyesno(
+            f"{friendly} needs a download",
+            f"{friendly} needs a one-time download of about {size_hint} "
+            f"(PyTorch + support files).\n\nDownload and install it now?\n"
+            f"Choose No to continue this time without it.",
+            parent=self,
+        ):
+            self.log(f"{friendly}: skipped the optional download — continuing without it.")
+            return False
+        win = tk.Toplevel(self)
+        win.title(f"Installing {friendly}")
+        win.transient(self)
+        win.resizable(False, False)
+        ttk.Label(
+            win,
+            text=(f"Downloading and installing {friendly} (~{size_hint}).\n"
+                  "This happens once and can take a few minutes…"),
+            justify="left",
+        ).pack(padx=18, pady=(16, 8))
+        bar = ttk.Progressbar(win, mode="indeterminate", length=340)
+        bar.pack(padx=18, pady=(0, 16))
+        bar.start(12)
+        state = {"ok": False, "done": False}
+
+        def _work() -> None:
+            try:
+                state["ok"] = optional_deps.install(feature, log_cb=self.log)
+            except Exception as e:  # noqa: BLE001
+                self.log(f"{friendly} install failed: {e}")
+            finally:
+                state["done"] = True
+
+        threading.Thread(target=_work, name="optdeps-install", daemon=True).start()
+
+        def _poll() -> None:
+            if state["done"]:
+                try:
+                    win.destroy()
+                except tk.TclError:
+                    pass
+                return
+            self.after(200, _poll)
+
+        self.after(200, _poll)
+        self.wait_window(win)
+        if state["ok"]:
+            self.log(f"{friendly} installed.")
+            # A live worker activated its sys.path BEFORE this install, so
+            # restart workers to pick up the new package on the next task.
+            try:
+                self.transcription_service.stop_all()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        return False
+
     # Adding tasks ------------------------------------------------------------
     def add(self) -> None:
         text = self.fv.get().strip()
@@ -1097,6 +1165,12 @@ class App(tk.Tk):
             if not self.ensure_model_with_modal():
                 self.log("Transcription cancelled: the Whisper model is not ready.")
                 return
+        # Slim build: if word-alignment is enabled but its (large, optional)
+        # package isn't installed, offer the one-time download BEFORE the
+        # worker spawns so the worker activates with it present. Declining
+        # is fine — the worker skips alignment gracefully.
+        if self.app_config.get("alignment") == "stable_ts":
+            self._offer_optional_install("alignment", "Word-timestamp alignment", "700 MB")
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Transcription cancelled: model load was cancelled")
             return

@@ -64,11 +64,26 @@ if errorlevel 1 (
   exit /b 4
 )
 
+echo [embed] slim: pruning heavy optional packages (installed on-demand at runtime)
+REM torch + its deps (sympy/networkx/mpmath) and numba/llvmlite are pulled in
+REM ONLY by the optional stable-ts alignment / openai-whisper backend. They are
+REM ~750 MB and are installed on first use via core.optional_deps. Removing them
+REM here keeps the shipped bundle ~800 MB instead of ~1.5 GB.
+pushd "%BUILD%\Lib\site-packages"
+for %%P in (torch torchaudio whisper stable_whisper numba llvmlite sympy networkx mpmath functorch torchgen) do if exist "%%P\" rmdir /s /q "%%P"
+for /d %%D in (torch-* torchaudio-* openai_whisper-* stable_ts-* numba-* llvmlite-* sympy-* networkx-* mpmath-*) do rmdir /s /q "%%D"
+popd
+
 echo [embed] copying source tree
 xcopy /E /I /Y "%ROOT%app" "%BUILD%\app" >nul
 xcopy /E /I /Y "%ROOT%core" "%BUILD%\core" >nul
 xcopy /E /I /Y "%ROOT%bin" "%BUILD%\bin" >nul
 copy "%ROOT%gui.py" "%BUILD%\" >nul
+
+echo [embed] writing the portable launcher
+> "%BUILD%\Run Whisper Project.bat" echo @echo off
+>> "%BUILD%\Run Whisper Project.bat" echo cd /d "%%~dp0"
+>> "%BUILD%\Run Whisper Project.bat" echo start "" "python\pythonw.exe" "gui.py"
 
 echo [embed] writing sitecustomize.py to teach python where site-packages lives
 > "%BUILD%\python\Lib\sitecustomize.py" echo import sys, os
