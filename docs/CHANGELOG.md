@@ -4,6 +4,37 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.3] — 2026-05-25
+
+Features + a follow-up bug-hunt (the time-slice and download flows).
+
+### Added
+
+- **Position slider on the Download tab.** After a video is probed, drag
+  the Start / End sliders (0 .. video length) to fill the time-range
+  fields instead of typing.
+- **Portable ZIP** is now a first-class download — the full embeddable-
+  Python environment + a `Run Whisper Project.bat` launcher. No install;
+  update by swapping `app\` / `core\` files.
+
+### Changed
+
+- **License changed from MIT to BSD-3-Clause.** Added a root `LICENSE`
+  and a `THIRD_PARTY_NOTICES.md` summarizing the bundled components'
+  licenses (FFmpeg, yt-dlp, the Python runtime + packages).
+
+### Fixed
+
+- **A clipped transcription that was cancelled then resumed** no longer
+  transcribes past the end of the clip (a clipped run now neither resumes
+  nor writes a whole-file checkpoint).
+- **A reversed time range (end before start)** no longer makes the
+  download fetch nothing — it degrades to "from start to the end".
+- The Download-tab sliders no longer wipe a manually-typed range when the
+  format probe finishes, and ignore stray drags before a video is probed.
+- The login/cookie download hint no longer fires on unrelated errors
+  (it matched substrings like "stor**age**"/"**page**").
+
 ## [1.3.2] — 2026-05-25
 
 Security + features release. A dedicated security/concurrency/resource
