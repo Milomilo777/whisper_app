@@ -11,15 +11,16 @@ this repo. Read this file before anything else.
 |---|---|
 | Branch | `chore/cleanup-hardening` — carries **v1.2.0** (all committed + pushed) |
 | Version | pyproject = 1.2.0; `core.__version__` = 1.2.0; both `.iss` = 1.2.0 |
-| Last PUBLISHED release | **v1.1.0** on GitHub — **v1.2.0 is committed but NOT built/published yet** |
-| GitHub releases now | `v1.1.0` (latest) + `basic-v0.1.0`; the old v0.6.0–v1.0.3 releases + tags were pruned this session |
+| Last PUBLISHED release | **v1.2.0** on GitHub — built + smoke-tested + published 2026-05-25 |
+| GitHub releases now | `v1.2.0` (latest) + `basic-v0.1.0`; v1.1.0 + the old v0.6.0–v1.0.3 releases/tags were pruned |
+| Installed test copy | `C:\Temp\wp_v120_test` (silent-installed v1.2.0, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v120_test\python\pythonw.exe C:\Temp\wp_v120_test\gui.py` |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
-### What changed in v1.2.0 (committed, NOT yet built/published)
+### What shipped in v1.2.0 (PUBLISHED 2026-05-25)
 
 UX + accessibility on top of v1.1.0. Full list: `docs/CHANGELOG.md` +
 `docs/RELEASE_NOTES_v1.2.0.md`. Headlines: app-wide copy/paste fix
@@ -31,7 +32,7 @@ downloads, output-file de-dup (`name (1).srt`), the About dialog showing
 the live version, and a stable installer `AppId` (single Add/Remove
 entry that upgrades cleanly).
 
-### v1.1.0 (already PUBLISHED on GitHub)
+### v1.1.0 changes (folded into the published v1.2.0; v1.1.0 itself pruned)
 
 Audio-in-downloads fix, the main-thread model-load freezes (download /
 crash-resume / watched-folder), model-hub + download-folder persistence,
@@ -70,36 +71,31 @@ Collaborator-driven UX + memory release on top of v1.0.2.
 
 See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
 
-## 3. What's pending — FINISH THE v1.2.0 RELEASE
+## 3. v1.2.0 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
 
-The v1.2.0 code is committed and the gate is ALL GREEN. The user
-approved: build + release + install + real-test (especially the new
-features), and **leave the installed app in place so they can test it
-too — do NOT uninstall/delete it.** `embed_build/` is already rebuilt
-for v1.2.0 (the heavy step is done). Run from the repo root; use
-absolute paths via `cmd.exe` (a background cmd may not inherit the cwd).
+The full pipeline ran green and v1.2.0 is live on GitHub. The installed
+copy at `C:\Temp\wp_v120_test` is KEPT for the user to test — do NOT
+uninstall/delete it. For reference, the steps (all COMPLETE) were:
 
-`<REPO>` = `C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`
-
-1. **(DONE this session)** embed rebuild —
-   `MSYS_NO_PATHCONV=1 cmd.exe /c '<REPO>\build_embed_installer.bat'`
-   ended "build complete"/"embed_import_ok". Re-run only if app/ or
-   core/ changed since.
-2. **Compile installer** (this VERIFIES the new `AppId` syntax — watch
-   for a `[Setup]`/Pascal error):
-   `MSYS_NO_PATHCONV=1 "/c/Users/Owner/AppData/Local/Programs/Inno Setup 6/ISCC.exe" '<REPO>\installer_embed.iss'`
+1. ✅ embed rebuild (`build_embed_installer.bat`) — "build complete".
+2. ✅ Installer compiled — the new stable `AppId` syntax compiled clean
    → `dist_installer\WhisperProject-v1.2.0-Setup-Standard.exe` (~349 MB).
-3. **Smoke E2E** on the built tree (expect `2 passed, 1 skipped`):
-   `WHISPER_SMOKE_EXE='<REPO>\embed_build\python\pythonw.exe' WHISPER_SMOKE_GUI='<REPO>\embed_build\gui.py' python -m pytest tests/smoke/test_exe_real_e2e.py -q`
-4. **Silent install + smoke the installed tree** (KEEP it):
-   `cmd /c '<REPO>\dist_installer\WhisperProject-v1.2.0-Setup-Standard.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=C:\Temp\wp_v120_test'`
-   then smoke with `WHISPER_SMOKE_EXE=C:\Temp\wp_v120_test\python\pythonw.exe` + `...\gui.py`.
-5. **Publish** (pre-authorised in CLAUDE.md):
-   `git tag -a v1.2.0 -m "Release v1.2.0" && git push origin v1.2.0`
-   `gh release create v1.2.0 "dist_installer\WhisperProject-v1.2.0-Setup-Standard.exe" --title "v1.2.0 — clipboard/UX + queue features" --notes-file docs/RELEASE_NOTES_v1.2.0.md`
-6. **Prune v1.1.0** (owner's standing rule = keep only the latest):
-   `gh release delete v1.1.0 --cleanup-tag --yes`
-   → GitHub then has only `v1.2.0` + `basic-v0.1.0` (archive tags kept).
+3. ✅ Smoke E2E on the built tree — `2 passed, 1 skipped` (real
+   transcription works on the v1.2.0 embed build).
+4. ✅ Silent-installed to `C:\Temp\wp_v120_test` and KEPT. Launch:
+   `C:\Temp\wp_v120_test\python\pythonw.exe C:\Temp\wp_v120_test\gui.py`
+   (or Start-menu → "Whisper Project").
+5. ✅ Published — tag `v1.2.0` pushed + `gh release create` with the
+   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.2.0.md`.
+6. ✅ Pruned v1.1.0 (`gh release delete v1.1.0 --cleanup-tag --yes`) —
+   GitHub now has only `v1.2.0` + `basic-v0.1.0` (archive tags kept).
+
+**To cut the NEXT release** (vX.Y.Z), bump the version in
+`core/__init__.py` + `pyproject.toml` + both `.iss` files, then repeat
+steps 1–6. Use absolute paths via `cmd.exe` (a background cmd may not
+inherit cwd); `<REPO>` =
+`C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`.
+Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
 7. **GUI-manual checks the user will do** (not automatable): paste/copy
    under a Persian layout, the right-click text menus, the log console
    "Copy all", bulk multi-select queue actions, the queue scrollbar, the
