@@ -9,18 +9,52 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.3.0** (all committed + pushed) |
-| Version | pyproject = 1.3.0; `core.__version__` = 1.3.0; both `.iss` = 1.3.0 |
-| Last PUBLISHED release | **v1.3.0** on GitHub — built + smoke-tested (installed tree) + published 2026-05-25 |
-| GitHub releases now | `v1.3.0` (latest) + `basic-v0.1.0`; v1.2.0 + earlier releases/tags were pruned |
-| Installed test copy | `C:\Temp\wp_v130_test` (silent-installed v1.3.0, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v130_test\python\pythonw.exe C:\Temp\wp_v130_test\gui.py`. (The older `C:\Temp\wp_v120_test` may still exist.) |
+| Branch | `chore/cleanup-hardening` — carries **v1.3.1** (all committed + pushed) |
+| Version | pyproject = 1.3.1; `core.__version__` = 1.3.1; both `.iss` = 1.3.1 |
+| Last PUBLISHED release | **v1.3.1** on GitHub — built + smoke-tested (built + installed tree) + published 2026-05-25 |
+| GitHub releases now | `v1.3.1` (latest) + `basic-v0.1.0`; v1.3.0 + earlier releases/tags were pruned |
+| Installed test copy | `C:\Temp\wp_v131_test` (silent-installed v1.3.1, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v131_test\python\pythonw.exe C:\Temp\wp_v131_test\gui.py`. (Older `wp_v130_test` / `wp_v120_test` may still exist.) |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
-### What shipped in v1.3.0 (PUBLISHED 2026-05-25)
+### What shipped in v1.3.1 (PUBLISHED 2026-05-25)
+
+Reliability bug-hunt on top of v1.3.0 (traced each UI action through the
+code + four parallel audit agents). Full list: `docs/CHANGELOG.md` +
+`docs/RELEASE_NOTES_v1.3.1.md`. Headlines: **non-ASCII filename downloads
+now transcribe** — yt-dlp stdout forced to UTF-8 (`_utf8_subprocess_env`)
+PLUS a self-healing fallback (`DownloadService._recover_saved_path`) that
+finds the real downloaded file if the parsed path is wrong; **language
+codes normalized on the DEFAULT path** (`_normalize_language` now in
+`_build_transcribe_kwargs`, not just the alt-backend call — fixes "en-US"
+and multi-value picker codes like "zh-Hans,zh-CN" crashing the worker);
+**VLC found via registry/Program Files** with a clear 64-bit hint
+(`_locate_vlc_dir`); **download cancel stops the linked transcription** +
+**re-run keeps the time-range**; **optional-dep probes catch OSError**
+(diarization/parakeet/whisper_cpp no longer crash the app on a bad native
+DLL — VLC bug class); Transcribe **path validation**; demucs via
+`sys.executable`. Plus the queue **"working" marquee** animation and the
+**0:00:00 time-range defaults**. New tests: test_normalize_language,
+test_recover_saved_path, test_transcribe_kwargs, test_progress_cell
+(+marquee).
+
+### Still pending (next session)
+- **#28 — time-range for the Transcribe tab**: let the user transcribe
+  only a slice of a long local file. Recommended approach: faster-whisper
+  `clip_timestamps` threaded through `_build_transcribe_kwargs` (the
+  central kwargs builder), with the per-segment progress % computed
+  relative to the clip bounds (transcriber.py:~1123) so the bar still
+  fills 0→100. Add Start/End fields to the Transcribe tab + clip_start/end
+  on TranscriptionTask.
+- **Minor**: `watched_folder` has no `_drive_is_mounted` deferral like
+  download_folder/model_path, so a not-yet-mounted/temp watched folder is
+  silently dropped at launch (app/app.py watched-folder branch). Low
+  urgency (degrades gracefully, just doesn't watch).
+
+### What shipped in v1.3.0 (published 2026-05-25, now pruned from GitHub)
 
 UX + reliability on top of v1.2.0. Full list: `docs/CHANGELOG.md` +
 `docs/RELEASE_NOTES_v1.3.0.md`. Headlines: **fixed auto-transcribe after
@@ -88,32 +122,33 @@ Collaborator-driven UX + memory release on top of v1.0.2.
 
 See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
 
-## 3. v1.3.0 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
+## 3. v1.3.1 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
 
-The full pipeline ran green and v1.3.0 is live on GitHub. The installed
-copy at `C:\Temp\wp_v130_test` is KEPT for the user to test — do NOT
+The full pipeline ran green and v1.3.1 is live on GitHub. The installed
+copy at `C:\Temp\wp_v131_test` is KEPT for the user to test — do NOT
 uninstall/delete it. For reference, the steps (all COMPLETE) were:
 
 1. ✅ embed rebuild (`build_embed_installer.bat`) — "embed_import_ok" /
    "build complete".
-2. ✅ Installer compiled — the new `#define MyAppVersion` + version-stamped
-   shortcut compiled clean (569 s) →
-   `dist_installer\WhisperProject-v1.3.0-Setup-Standard.exe` (~349 MB).
+2. ✅ Installer compiled clean (576 s) →
+   `dist_installer\WhisperProject-v1.3.1-Setup-Standard.exe` (~349 MB).
 3. ✅ Smoke E2E on the built tree AND the installed tree — both
-   `2 passed, 1 skipped` (real transcription works on v1.3.0).
-4. ✅ Silent-installed to `C:\Temp\wp_v130_test` and KEPT. Launch:
-   `C:\Temp\wp_v130_test\python\pythonw.exe C:\Temp\wp_v130_test\gui.py`
-   (or Start-menu → "Whisper Project 1.3.0").
-5. ✅ Published — tag `v1.3.0` pushed + `gh release create` with the
-   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.0.md`.
-6. ✅ Pruned v1.2.0 (`gh release delete v1.2.0 --cleanup-tag --yes`) —
-   GitHub now has only `v1.3.0` + `basic-v0.1.0` (archive tags kept).
-7. **GUI-manual checks the user will do** (not automatable): the per-row
-   progress bars in both queues, the version in the title bar / shortcut,
-   the Download row reading "transcribing" with live progress after an
-   auto-transcribe (try a YouTube Short / reel with "Transcribe after
-   download" on), the smaller "Last result" card, and the language picker
-   starting at "Auto".
+   `2 passed, 1 skipped` (real transcription works on v1.3.1).
+4. ✅ Silent-installed to `C:\Temp\wp_v131_test` and KEPT. Launch:
+   `C:\Temp\wp_v131_test\python\pythonw.exe C:\Temp\wp_v131_test\gui.py`
+   (or Start-menu → "Whisper Project 1.3.1").
+5. ✅ Published — tag `v1.3.1` pushed + `gh release create` with the
+   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.1.md`.
+6. ✅ Pruned v1.3.0 (`gh release delete v1.3.0 --cleanup-tag --yes`) —
+   GitHub now has only `v1.3.1` + `basic-v0.1.0` (archive tags kept).
+7. **GUI-manual checks the user will do** (not automatable) — the v1.3.1
+   fixes especially: download a video whose TITLE has an apostrophe /
+   accent / emoji with "Transcribe after download" on and confirm a
+   transcript is written; pick a NON-English language (e.g. Chinese,
+   Persian) and confirm it transcribes instead of failing; open the
+   video+subtitle viewer and confirm VLC now works (64-bit VLC was just
+   installed); cancel a download mid-transcribe; re-run a trimmed
+   download and confirm only the slice is fetched.
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
 `core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
