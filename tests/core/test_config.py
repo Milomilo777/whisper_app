@@ -185,6 +185,42 @@ def test_persistable_model_path_is_case_insensitive_on_windows(isolated_dirs):
     assert cfg._persistable_model_path(config) == ""
 
 
+def test_download_folder_survives_unmounted_drive_save(isolated_dirs, monkeypatch):
+    """Regression: a download_folder on a temporarily-unmounted drive must
+    not be forgotten. Load clears it for the session, but save must keep
+    the on-disk value so re-attaching the drive restores it."""
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = dict(cfg.DEFAULT_CONFIG)
+    payload["download_folder"] = "Z:/recordings"
+    Path(cfg.config_path()).write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(cfg, "_drive_is_mounted", lambda p: False)
+
+    config = cfg.load_config()
+    assert config["download_folder"] == ""          # cleared in memory this session
+    cfg.save_config(config)                           # must NOT persist the cleared ""
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["download_folder"] == "Z:/recordings"
+
+
+def test_download_folder_normal_value_persists(isolated_dirs, monkeypatch):
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    monkeypatch.setattr(cfg, "_drive_is_mounted", lambda p: True)
+    payload = dict(cfg.DEFAULT_CONFIG)
+    payload["download_folder"] = str(isolated_dirs / "dl")
+    cfg.save_config(payload)
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["download_folder"] == str(isolated_dirs / "dl")
+
+
+def test_download_folder_empty_stays_empty_when_no_prior(isolated_dirs, monkeypatch):
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = dict(cfg.DEFAULT_CONFIG)
+    payload["download_folder"] = ""
+    cfg.save_config(payload)
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["download_folder"] == ""
+
+
 def test_load_corrupt_json_falls_back(isolated_dirs, monkeypatch):
     monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
     Path(cfg.config_path()).write_text("{not valid json", encoding="utf-8")

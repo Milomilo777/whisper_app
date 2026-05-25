@@ -371,6 +371,34 @@ def _persistable_model_path(config: dict[str, Any]) -> str:
     return "" if _norm(raw) in derived else raw
 
 
+def _persistable_download_folder(config: dict[str, Any]) -> str:
+    """Return the ``download_folder`` value that is safe to write to disk.
+
+    ``_apply_runtime_fallbacks`` clears ``download_folder`` to "" in
+    memory when its drive is unmounted, so the UI re-prompts for this
+    session. Persisting that "" would *permanently* forget a folder that
+    merely lives on a removable / network drive detached at launch. So
+    when the in-memory value is empty, fall back to the on-disk value if
+    it points at a currently-unmounted drive — keeping the user's choice
+    until the drive returns. (Same spirit as _persistable_model_path:
+    don't let a session-only repair leak into a permanent loss.)
+    """
+    current = (config.get("download_folder") or "").strip()
+    if current:
+        return current
+    try:
+        with open(config_path(), "r", encoding="utf-8") as f:
+            on_disk = json.load(f)
+    except (OSError, ValueError):
+        return current
+    if not isinstance(on_disk, dict):
+        return current
+    prev = (on_disk.get("download_folder") or "").strip()
+    if prev and not _drive_is_mounted(prev):
+        return prev
+    return current
+
+
 def save_config(config: dict[str, Any]) -> None:
     # Serialise concurrent saves through _SAVE_LOCK — without this,
     # two threads racing to os.replace the same destination throw
@@ -386,6 +414,7 @@ def save_config(config: dict[str, Any]) -> None:
         # _persistable_model_path for the full rationale.
         to_persist = dict(config)
         to_persist["model_path"] = _persistable_model_path(config)
+        to_persist["download_folder"] = _persistable_download_folder(config)
         fd, tmp_path = tempfile.mkstemp(
             prefix=".config-", suffix=".tmp", dir=directory
         )

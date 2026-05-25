@@ -6,8 +6,9 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [1.0.4] — 2026-05-25
 
-Bug-fix release. Restores audio in video downloads, removes two UI
-freezes / nags, and makes the model-hub choice stick.
+Bug-fix release. Restores audio in video downloads, removes several UI
+freezes and nags, and makes the model-hub and download-folder choices
+stick.
 
 ### Fixed
 
@@ -36,6 +37,15 @@ freezes / nags, and makes the model-hub choice stick.
   `interrupted`, so the same prompt returned next time. Declining now
   clears the flag on the offered rows; genuine future crashes still
   prompt.
+- **A download folder on a removable / network drive was forgotten.**
+  If the drive was detached at launch, the folder was cleared *and the
+  cleared value was written back to config*, so the choice was lost
+  permanently. The cleared value is no longer persisted while the drive
+  is merely unmounted — the folder returns when the drive does. (Same
+  class as the `model_path` fix above.)
+- **"Re-detect hardware" briefly froze the wizard.** The accelerator
+  probe (which imports torch / onnxruntime) ran on the UI thread; it
+  now runs off-thread and fills the table in when done.
 
 ### Changed
 

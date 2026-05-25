@@ -66,20 +66,19 @@ Status legend: **FIXED** (in v1.0.4) · **DEFER** (real, queued) ·
   `Event.wait(120 s)` on the Tk main thread as the original bug. All
   three paths now share `App._when_worker_ready`, an `after()`-polling
   helper that never blocks the loop.
-- **DEFER** `HardwareWizard._reprobe` → `core.hardware.probe_tiers()`
-  runs synchronous `torch` / `onnxruntime` / `openvino` imports on the
-  main thread (Advanced → "Re-detect hardware"). Seconds-long stall, no
-  progress UI. Fix: move to a `safe_thread` + `post_to_main`, mirroring
-  the benchmark worker.
+- **FIXED (v1.0.4)** `HardwareWizard._reprobe` → `probe_tiers()` ran
+  synchronous `torch` / `onnxruntime` / `openvino` imports on the main
+  thread (Advanced → "Re-detect hardware"), a seconds-long stall. Now
+  threaded with a `post_to_main` bounce-back, mirroring the benchmark.
 
 ### Class B — config persistence
-- **DEFER** `download_folder` has the same trap that `model_path` had,
-  and is currently **unguarded**. `_apply_runtime_fallbacks` clears it
-  to `""` when its drive is unmounted; any later `save_config` persists
-  the `""`, so a download folder on a removable / network drive is
-  forgotten permanently after one launch without the drive. Fix
-  symmetric to `_persistable_model_path`: don't persist the cleared
-  value when the clear was only due to a missing mount.
+- **FIXED (v1.0.4)** `download_folder` had the same trap that
+  `model_path` had. `_apply_runtime_fallbacks` clears it to `""` when
+  its drive is unmounted; any later `save_config` persisted the `""`,
+  so a download folder on a removable / network drive was forgotten
+  permanently after one launch without the drive. Fixed symmetric to
+  `_persistable_model_path` via `_persistable_download_folder`: the
+  cleared value is not persisted while the drive is merely unmounted.
 
 ### Class C — subprocess command correctness (VERIFY before fixing)
 These need a real yt-dlp/ffmpeg + ffprobe run to confirm; do **not**
@@ -117,9 +116,11 @@ change blindly — the time-range feature is shipped and E2E-tested.
   source is deleted (slow disk leak).
 
 ## 4. Landed in v1.0.4
-Original four bugs + the two extra freeze sites (Class A). Everything
-else above is queued with a clear fix direction; Class C is gated on a
-real yt-dlp/ffprobe verification harness.
+Original four bugs + the two extra freeze sites (Class A) + the
+download-folder persistence trap (Class B) + the hardware-probe stall
+(Class A). Still queued: worker-lifecycle hardening (Class D items 2–3)
+and the download-row stats skew (D1); Class C is gated on a real
+yt-dlp/ffprobe verification harness.
 
 ## 5. Recommended follow-ups (highest value first)
 1. Build a small **real-subprocess E2E** harness: run yt-dlp on a short
