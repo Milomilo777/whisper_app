@@ -4,6 +4,31 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.4] — 2026-05-25
+
+Much smaller install + a docx fix.
+
+### Changed
+
+- **Install size cut from ~1.5 GB to ~800 MB.** PyTorch and the heavy ML
+  libraries it drags in (sympy/networkx/numba/llvmlite) are no longer
+  bundled — they were only needed by two optional features.
+
+### Added
+
+- **On-demand optional features.** Word-timestamp alignment (stable-ts)
+  and the openai-whisper backend now download their support (~700 MB,
+  PyTorch) on first use into a user folder, the same way the Whisper model
+  is fetched. Declining just runs without that feature. Core transcription,
+  subtitles, diarization, and downloads are unaffected and need no
+  download.
+
+### Fixed
+
+- **DOCX / PDF output now actually written.** The long-lived worker read
+  its config once at startup, so a docx/pdf format ticked afterward never
+  reached it; the selected output formats are now sent with each job.
+
 ## [1.3.3] — 2026-05-25
 
 Features + a follow-up bug-hunt (the time-slice and download flows).
