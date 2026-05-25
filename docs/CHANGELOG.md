@@ -4,6 +4,43 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-05-25
+
+Bug-fix release. Restores audio in video downloads, removes two UI
+freezes / nags, and makes the model-hub choice stick.
+
+### Fixed
+
+- **Video downloads were silent (no audio).** yt-dlp's format selector
+  was emitted as `video…/bestvideo+audio…/best` without grouping, so
+  yt-dlp's `/` precedence selected a video-only stream and the merged
+  file had no audio. Each stream group is now parenthesized:
+  `(video…)+(audio…)/best`.
+- **"Transcribe after download" froze the app.** The post-download
+  enqueue waited synchronously for the Whisper model to load on the Tk
+  main thread (up to the 120 s load timeout), freezing the whole UI. It
+  now spawns the worker and polls for readiness with `after()`, so the
+  app stays responsive and the transcription is queued once the model
+  is ready.
+- **The model hub folder you picked was ignored.** A `model_path`
+  derived from the *default* hub during startup was being written to
+  `config.json`, then treated on the next launch as an explicit
+  per-model override that outranked your chosen `hub_folder` — so the
+  model always loaded from `<app>/hub` and `model_path` looked like it
+  "reset" every launch. Auto-derived model paths are no longer
+  persisted; a genuinely custom path is still kept.
+- **The crash-resume prompt reappeared on every launch.** Declining
+  "Resume interrupted transcriptions?" left the rows flagged
+  `interrupted`, so the same prompt returned next time. Declining now
+  clears the flag on the offered rows; genuine future crashes still
+  prompt.
+
+### Changed
+
+- The **Advanced settings** dialog is now resizable and scrolls, so it
+  fits on smaller screens.
+- The **About** dialog no longer shows the source-repository URL.
+
 ## [1.0.3] — 2026-05-23
 
 UX + memory release. Adds the optional time-range download
