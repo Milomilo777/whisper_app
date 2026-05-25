@@ -44,12 +44,13 @@ class _AutoScrollbar(ttk.Scrollbar):
 # render without an embedded image set, and so they survive the
 # packaging mode that ships no icon assets.
 STATUS_ICON = {
-    "waiting":   "⋯ ",
-    "running":   "▶ ",
-    "paused":    "⏸ ",
-    "finished":  "✓ ",
-    "error":     "✗ ",
-    "cancelled": "⊘ ",
+    "waiting":      "⋯ ",
+    "running":      "▶ ",
+    "paused":       "⏸ ",
+    "transcribing": "✍ ",
+    "finished":     "✓ ",
+    "error":        "✗ ",
+    "cancelled":    "⊘ ",
 }
 
 

@@ -468,6 +468,12 @@ class TranscriptionService:
                     p = event.get("percent", 0)
                     worker["task"].progress = p
                     app.update_overall_progress()
+                    # Mirror progress onto the Download row when this task
+                    # was auto-spawned from a download (it shows
+                    # "transcribing" there); the download poll won't refresh
+                    # on its own once the download itself has finished.
+                    if getattr(worker["task"], "source_download", None) is not None:
+                        app.refresh_download_queue()
             elif event_type == "language_detected":
                 if worker["task"]:
                     worker["task"].detected_language = event.get("language", "")
@@ -682,6 +688,20 @@ class TranscriptionService:
                 )
             except Exception as e:  # noqa: BLE001
                 app.log(f"history record update failed: {e}")
+        # If this task was auto-spawned from a download, the Download row
+        # mirrored "transcribing" + live progress while it ran. It's
+        # terminal now (finished / error / cancelled) — restore that row to
+        # "finished" (the download itself succeeded) and unlink.
+        dl = getattr(task, "source_download", None)
+        if dl is not None:
+            dl.status = "finished"
+            dl.transcription_task = None
+            dl.progress = 100
+            task.source_download = None
+            try:
+                app.refresh_download_queue()
+            except Exception:  # noqa: BLE001
+                pass
         worker["task"] = None
         app.update_overall_progress()
         if worker.get("temporary") and not any(t.status == "waiting" for t in app.queue):

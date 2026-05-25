@@ -1097,8 +1097,15 @@ class DownloadService:
                         pass
             if app.app_config.get("auto_transcribe_after_download") and saved_path:
                 try:
-                    app.enqueue_transcription_from_download(saved_path, task.detected_language)
-                    app.log(f"→ Queued for transcription: {os.path.basename(saved_path)}")
+                    app.enqueue_transcription_from_download(
+                        saved_path, task.detected_language, source_download=task
+                    )
+                    # Show the download row as "transcribing" so the user
+                    # knows work continues after the download — the file is
+                    # being transcribed, which can be slow. The app /
+                    # finish_task flip it back to "finished" when done.
+                    task.status = "transcribing"
+                    app.log(f"-> Now transcribing: {os.path.basename(saved_path)}")
                 except Exception as e:  # noqa: BLE001
                     app.log(f"Auto-transcribe wiring failed: {e}")
         # Phase 3a — finalise the history row.

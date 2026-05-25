@@ -58,6 +58,11 @@ class VideoDownloadTask:
         # Full path of the finished download (set by DownloadService._finish)
         # so the Download tab can offer a one-click "Open file".
         self.saved_path: str | None = None
+        # When auto-transcribe-after-download is on, the spawned
+        # TranscriptionTask is linked here so the Download row can show
+        # "transcribing" + the live transcription progress (instead of
+        # looking idle at 100%). Cleared when that transcription ends.
+        self.transcription_task: Any = None
 
     def time_range_label(self) -> str | None:
         """Short human-readable badge for the Queue row.

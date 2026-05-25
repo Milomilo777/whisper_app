@@ -9,16 +9,21 @@
 ; Lib\site-packages\, the app's source under app\ + core\, and the
 ; bundled bin\ binaries. Shortcuts launch pythonw.exe gui.py.
 
+; Single version knob — drives AppVersion, the output filename, and the
+; (version-stamped) shortcut name so the user can see which build is
+; installed. Bump alongside core/__init__.py + pyproject.toml.
+#define MyAppVersion "1.3.0"
+
 [Setup]
 ; Stable AppId — keeps a single, upgradable Add/Remove Programs entry
 ; across versions (and shared with the Compact installer, same product).
 AppId={{734B46B9-5E70-4C4E-8833-0A7506A64376}
 AppName=Whisper Project
-AppVersion=1.2.0
+AppVersion={#MyAppVersion}
 AppPublisher=Whisper Project
 DefaultDirName={autopf}\WhisperProject
 DefaultGroupName=Whisper Project
-OutputBaseFilename=WhisperProject-v1.2.0-Setup-Standard
+OutputBaseFilename=WhisperProject-v{#MyAppVersion}-Setup-Standard
 OutputDir=dist_installer
 Compression=lzma2/ultra
 SolidCompression=yes
@@ -35,9 +40,9 @@ Source: "assets\whisper.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "assets\whisper.png"; DestDir: "{app}\assets"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"
+Name: "{group}\Whisper Project {#MyAppVersion}"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"
 Name: "{group}\Uninstall Whisper Project"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\Whisper Project"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"; Tasks: desktopicon
+Name: "{commondesktop}\Whisper Project {#MyAppVersion}"; Filename: "{app}\python\pythonw.exe"; Parameters: """{app}\gui.py"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\whisper.ico"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"

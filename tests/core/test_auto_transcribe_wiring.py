@@ -17,11 +17,15 @@ class _FakeApp:
         self.download_current = None
         self.history = None
         self.enqueued: list[tuple[str, str]] = []
+        self.enqueued_sources: list = []
         self.logs: list[str] = []
         self.refresh_called = 0
 
-    def enqueue_transcription_from_download(self, file_path: str, language: str) -> None:
+    def enqueue_transcription_from_download(
+        self, file_path: str, language: str, source_download: object = None
+    ) -> None:
         self.enqueued.append((file_path, language))
+        self.enqueued_sources.append(source_download)
 
     def log(self, msg: str) -> None:
         self.logs.append(msg)
@@ -47,7 +51,11 @@ def test_finish_enqueues_when_flag_on():
     task = _task()
     svc._finish(task, "finished", saved_path="/tmp/T.mp4")
     assert app.enqueued == [("/tmp/T.mp4", "en")]
-    assert any("Queued for transcription" in m for m in app.logs)
+    # The download row is linked to its transcription and flipped to
+    # "transcribing" so the user sees work continue after the download.
+    assert app.enqueued_sources == [task]
+    assert task.status == "transcribing"
+    assert any("transcrib" in m.lower() for m in app.logs)
 
 
 def test_finish_skips_when_flag_off():

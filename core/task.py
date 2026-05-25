@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 
 class TranscriptionTask:
     def __init__(self, file_path: str) -> None:
@@ -29,3 +31,9 @@ class TranscriptionTask:
         # transcribe automatically if the partial is stale (different
         # source mtime, changed model/config, etc.).
         self.resume: bool = False
+        # Set by the app when this task was auto-spawned from a finished
+        # download. Holds the originating VideoDownloadTask so the
+        # Download row can mirror "transcribing" + progress and flip back
+        # to "finished" when this task ends. Typed Any to keep core free
+        # of an app-layer import.
+        self.source_download: Any = None

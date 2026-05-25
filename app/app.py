@@ -26,6 +26,7 @@ from app.widgets.console import build_console
 from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcribe_tab
 from app.widgets.tray import TrayController
+from core import __version__ as _APP_VERSION
 from core.config import load_config, save_config
 from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
@@ -141,7 +142,10 @@ class App(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Whisper Project")
+        # Window-title base carries the version so the user can always see
+        # which build is running (title bar / taskbar / Alt-Tab).
+        self._base_title = f"Whisper Project v{_APP_VERSION}"
+        self.title(self._base_title)
         self._install_icon()
         # High-DPI scaling: pick up the system DPI so fonts and
         # paddings don't shrink to dollhouse size on 150 % displays.
@@ -1116,7 +1120,9 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             return False
 
-    def enqueue_transcription_from_download(self, file_path: str, language: str) -> None:
+    def enqueue_transcription_from_download(
+        self, file_path: str, language: str, source_download: "Any" = None
+    ) -> None:
         """Auto-transcribe-after-download wiring: push a task without freezing.
 
         Runs on the Tk main thread (the download-complete handler). A
@@ -1137,14 +1143,27 @@ class App(tk.Tk):
             task = TranscriptionTask(file_path)
             if hasattr(task, "language"):
                 setattr(task, "language", language)
+            # Link the originating download row to this transcription so
+            # the Download tab shows "transcribing" + live progress, then
+            # flips back to "finished" when the transcription ends.
+            if source_download is not None:
+                task.source_download = source_download
+                source_download.transcription_task = task
+                source_download.status = "transcribing"
+                self.refresh_download_queue()
             self.queue.append(task)
             self.refresh()
 
+        def _on_timeout() -> None:
+            self.log(f"Auto-transcribe skipped: model load timed out for {base}")
+            if source_download is not None:
+                source_download.status = "finished"
+                source_download.transcription_task = None
+                self.refresh_download_queue()
+
         self._when_worker_ready(
             _enqueue,
-            on_timeout=lambda: self.log(
-                f"Auto-transcribe skipped: model load timed out for {base}"
-            ),
+            on_timeout=_on_timeout,
             loading_label=f"will transcribe {base} when ready.",
         )
 
@@ -1540,6 +1559,11 @@ class App(tk.Tk):
         self.download_tree.delete(*self.download_tree.get_children())
         self.download_row_map = {}
         for task in self.download_queue:
+            # While auto-transcribe runs, mirror the linked transcription's
+            # live progress on the download row (otherwise a finished
+            # download would sit at 100% and look idle while it transcribes).
+            tr = getattr(task, "transcription_task", None)
+            prog = tr.progress if (task.status == "transcribing" and tr is not None) else task.progress
             item_id = self.download_tree.insert(
                 "",
                 "end",
@@ -1548,7 +1572,7 @@ class App(tk.Tk):
                     task.url,
                     task.format_label,
                     status_label(task.status),
-                    progress_cell(task.progress),
+                    progress_cell(prog),
                     self.fmt_time(task),
                 ),
             )
@@ -1575,26 +1599,26 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
         if not running and not running_dl:
-            self.title("Whisper Project")
+            self.title(self._base_title)
             return
         if running and not running_dl and len(running) == 1:
             t = running[0]
             self.title(
-                f"Whisper Project — {t.progress}% transcribing "
+                f"{self._base_title} — {t.progress}% transcribing "
                 f"{os.path.basename(t.file_path)}"
             )
             return
         if running_dl and not running and len(running_dl) == 1:
             d = running_dl[0]
             self.title(
-                f"Whisper Project — {d.progress}% downloading "
+                f"{self._base_title} — {d.progress}% downloading "
                 f"{d.title[:40] if d.title else d.url[:40]}"
             )
             return
         total = len(running) + len(running_dl)
         all_p = [t.progress for t in running] + [d.progress for d in running_dl]
         avg = sum(all_p) // len(all_p) if all_p else 0
-        self.title(f"Whisper Project — {total} tasks (avg {avg}%)")
+        self.title(f"{self._base_title} — {total} tasks (avg {avg}%)")
 
     def show_last_result(self, task: "TranscriptionTask") -> None:
         """Populate the Transcribe-tab Last Result card.
