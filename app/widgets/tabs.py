@@ -240,6 +240,20 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         command=app._save_transcribe_prefs,
     ).pack(side="left")
 
+    # Optional time-slice — transcribe only a portion of a long file
+    # (e.g. 5 minutes out of a 10-hour recording). 0:00:00 on a side means
+    # "unset"; leaving both at 0:00:00 transcribes the whole file.
+    ttk.Label(quick_opts, text="    Time range:").pack(side="left")
+    app.transcribe_start_time_var = tk.StringVar(value="0:00:00")
+    ttk.Entry(quick_opts, textvariable=app.transcribe_start_time_var, width=9).pack(
+        side="left", padx=(4, 2)
+    )
+    ttk.Label(quick_opts, text="to").pack(side="left")
+    app.transcribe_end_time_var = tk.StringVar(value="0:00:00")
+    ttk.Entry(quick_opts, textvariable=app.transcribe_end_time_var, width=9).pack(
+        side="left", padx=(2, 0)
+    )
+
     # ── Row 3: the big accent Transcribe CTA + tiny Advanced link ────
     cta_row = ttk.Frame(parent)
     cta_row.grid(

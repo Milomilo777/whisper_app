@@ -588,6 +588,11 @@ class TranscriptionService:
                 # crash-resume hook), forward it so the worker calls
                 # ``resume_transcription`` instead of ``transcribe``.
                 "resume": bool(getattr(t, "resume", False)),
+                # Time-slice (Transcribe-tab time range). The worker has its
+                # OWN task object, so the clip bounds must cross the process
+                # boundary or clip_timestamps is never applied.
+                "clip_start": getattr(t, "clip_start", None),
+                "clip_end": getattr(t, "clip_end", None),
             }
             self._dispatch_command_async(worker, t, command)
 

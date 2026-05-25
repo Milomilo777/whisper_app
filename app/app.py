@@ -86,6 +86,9 @@ class App(tk.Tk):
     # (DownloadService clears them after enqueue, no config save).
     download_start_time_var: tk.StringVar
     download_end_time_var: tk.StringVar
+    # Transcribe-tab time-slice (created by tabs.build_transcribe_tab).
+    transcribe_start_time_var: tk.StringVar
+    transcribe_end_time_var: tk.StringVar
     download_mode_var: tk.StringVar
     download_mode_combo: "ttk.Combobox"
     audio_format_var: tk.StringVar
@@ -1101,6 +1104,13 @@ class App(tk.Tk):
                 )
                 if code:
                     task.language = code
+        # Optional time-slice (Transcribe-tab time range): transcribe only
+        # [start, end]. A 0:00:00 / blank bound is "unset", so leaving both
+        # at 0:00:00 transcribes the whole file.
+        if hasattr(self, "transcribe_start_time_var"):
+            from app.services.download_service import _parse_timecode
+            task.clip_start = _parse_timecode(self.transcribe_start_time_var.get()) or None
+            task.clip_end = _parse_timecode(self.transcribe_end_time_var.get()) or None
         self.queue.append(task)
         self.pb["value"] = 0
         self.nb.select(self.t2)

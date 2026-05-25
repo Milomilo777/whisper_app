@@ -172,6 +172,10 @@ def main() -> int:
             # a full re-transcribe so the user always gets an output
             # rather than an error.
             task.resume = bool(command.get("resume", False))
+            # Time-slice (Transcribe-tab time range): transcribe only this
+            # span via clip_timestamps. None = whole file.
+            task.clip_start = command.get("clip_start")
+            task.clip_end = command.get("clip_end")
             emit("started", file_path=file_path)
 
             def language_cb(lang: str, prob: float) -> None:
