@@ -244,6 +244,11 @@ class TranscriptionService:
                 # the worker emits. If it lags by > LIVENESS_TIMEOUT_S
                 # the worker is declared wedged and restarted.
                 "last_event_at": 0.0,
+                # Serialises stdin writes: a transcribe dispatch, a
+                # cooperative cancel/pause/resume, and a shutdown can be
+                # written from three different daemon threads — the lock
+                # keeps their JSON lines from interleaving on the pipe.
+                "stdin_lock": threading.Lock(),
             }
             app.next_worker_id += 1
             app.workers.append(worker)
@@ -334,9 +339,7 @@ class TranscriptionService:
 
         def _async_shutdown() -> None:
             try:
-                if process.stdin:
-                    process.stdin.write(shutdown_msg)
-                    process.stdin.flush()
+                self._locked_stdin_write(worker, shutdown_msg)
             except Exception:
                 logger.debug(
                     "stop_worker: stdin shutdown write failed for worker %s",
@@ -506,6 +509,14 @@ class TranscriptionService:
                     worker["task"].language_probability = event.get("probability", 0.0)
                     app.refresh()
             elif event_type == "done":
+                # The worker reports the files it actually wrote; store
+                # them so finish_task's history record + the Last-result
+                # card reflect reality (incl. docx/pdf and de-duped names)
+                # instead of re-deriving from config.
+                if worker["task"] is not None:
+                    outs = event.get("outputs")
+                    if isinstance(outs, list):
+                        worker["task"].output_paths = [str(p) for p in outs]
                 self.finish_task(worker)
             elif event_type == "error":
                 if worker["task"]:
@@ -614,6 +625,27 @@ class TranscriptionService:
             command = transcribe_command(t)
             self._dispatch_command_async(worker, t, command)
 
+    @staticmethod
+    def _locked_stdin_write(worker: dict[str, Any], msg: str) -> None:
+        """Write one line to a worker's stdin under its per-worker lock.
+
+        Raises RuntimeError if the worker has no stdin (dead process).
+        The lock serialises the three possible concurrent writers
+        (dispatch / control / shutdown) so JSON lines never interleave.
+        """
+        process = worker.get("process")
+        stdin = process.stdin if process else None
+        if stdin is None:
+            raise RuntimeError("worker stdin is None")
+        lock = worker.get("stdin_lock")
+        if lock is None:
+            stdin.write(msg)
+            stdin.flush()
+            return
+        with lock:
+            stdin.write(msg)
+            stdin.flush()
+
     def _dispatch_command_async(
         self,
         worker: dict[str, Any],
@@ -635,11 +667,7 @@ class TranscriptionService:
 
         def _worker_dispatch() -> None:
             try:
-                stdin = worker["process"].stdin
-                if stdin is None:
-                    raise RuntimeError("worker stdin is None")
-                stdin.write(msg)
-                stdin.flush()
+                self._locked_stdin_write(worker, msg)
             except Exception as e:
                 logger.exception(
                     "Failed to dispatch task to worker %s: %s",
@@ -665,6 +693,50 @@ class TranscriptionService:
             name=f"dispatch-w{worker_id}",
             daemon=True,
         ).start()
+
+    def _send_command_async(
+        self, worker: dict[str, Any], command: dict[str, Any]
+    ) -> None:
+        """Fire-and-forget a control command (cancel/pause/resume) to a
+        worker's stdin from a daemon thread.
+
+        Unlike _dispatch_command_async this does NOT mark the task as
+        errored on a failed write: the caller has already set the UI
+        state, and a dead worker is handled by the liveness watchdog /
+        worker_exit event. We only log.
+        """
+        msg = json.dumps(command) + "\n"
+        worker_id = worker.get("id", "?")
+
+        def _send() -> None:
+            try:
+                self._locked_stdin_write(worker, msg)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "control %r to worker %s failed: %s",
+                    command.get("action"), worker_id, e,
+                )
+
+        threading.Thread(
+            target=_send,
+            name=f"control-w{worker_id}",
+            daemon=True,
+        ).start()
+
+    def send_control(self, task: Any, action: str) -> bool:
+        """Send cancel/pause/resume to the worker running ``task``.
+
+        Returns True if a worker was found and the command dispatched.
+        The worker's reader thread applies it to the in-flight task;
+        the transcriber honours it at the next segment boundary (cancel
+        also flushes a resumable checkpoint). Returns False when the task
+        isn't on a worker yet (still ``waiting``) — nothing to signal.
+        """
+        for worker in self.app.workers:
+            if worker.get("task") is task:
+                self._send_command_async(worker, {"action": action})
+                return True
+        return False
 
     def finish_task(self, worker: dict[str, Any], keep_status: bool = False) -> None:
         task = worker["task"]
@@ -697,11 +769,18 @@ class TranscriptionService:
             import time as _time
             try:
                 duration = (_time.time() - task.start_time) if task.start_time else 0.0
-                base = task.file_path.rsplit(".", 1)[0]
-                paths = [
-                    f"{base}.{ext}"
-                    for ext in (app.app_config.get("output_formats") or ["srt", "json"])
-                ]
+                # Prefer the worker-reported written paths (accurate for
+                # docx/pdf + de-duped names); fall back to deriving from
+                # config for older workers / interrupted runs.
+                written = getattr(task, "output_paths", None)
+                if written:
+                    paths = list(written)
+                else:
+                    base = task.file_path.rsplit(".", 1)[0]
+                    paths = [
+                        f"{base}.{ext}"
+                        for ext in (app.app_config.get("output_formats") or ["srt", "json"])
+                    ]
                 history.finish_transcription(
                     task.history_id,
                     status=task.status,

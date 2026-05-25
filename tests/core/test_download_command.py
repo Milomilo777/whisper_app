@@ -404,6 +404,16 @@ def test_fmt_timecode_preserves_fraction_when_present():
     assert "5" in out  # ".5" appended
 
 
+def test_fmt_timecode_carries_subsecond_rounding():
+    # Regression: 90.999 used to format as "0:01:301" because the
+    # fraction rounded to "1.00" while the integer seconds stayed 90.
+    assert _fmt_timecode(90.999) == "0:01:31"
+    assert _fmt_timecode(59.999) == "0:01:00"
+    assert _fmt_timecode(3599.999) == "1:00:00"
+    # A genuine sub-second value still round-trips without a carry.
+    assert _fmt_timecode(90.99).startswith("0:01:30")
+
+
 def test_download_sections_arg_both_bounds():
     assert _download_sections_arg(51.0, 85.0) == "*0:00:51-0:01:25"
 

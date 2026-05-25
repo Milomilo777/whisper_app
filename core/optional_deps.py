@@ -16,9 +16,17 @@ import importlib.util
 import os
 import subprocess
 import sys
+import threading
 from typing import Callable
 
 from .config import user_cache_dir
+
+# Serialises on-demand installs: two transcribes that both need the
+# same feature can fire near-simultaneously, and two `pip install
+# --target` runs into the same dir race and can leave a half-written
+# package tree. The lock makes the second caller wait, then short-
+# circuit on the now-present package.
+_install_lock = threading.Lock()
 
 # feature key -> (import name to probe, [pip packages to install])
 FEATURES: dict[str, tuple[str, list[str]]] = {
@@ -68,24 +76,29 @@ def install(feature: str, log_cb: Callable[[str], None] | None = None) -> bool:
     pkgs = packages_for(feature)
     if not pkgs:
         return False
-    target = extras_dir()
-    os.makedirs(target, exist_ok=True)
-    cmd = [sys.executable, "-m", "pip", "install", "--target", target, "--upgrade", *pkgs]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip()
-        if line and log_cb:
-            log_cb(line)
-    if proc.wait() == 0:
-        activate()
-        return True
-    return False
+    with _install_lock:
+        # A concurrent caller may have installed it while we waited on
+        # the lock — don't run a second redundant (and racing) pip.
+        if is_available(feature):
+            return True
+        target = extras_dir()
+        os.makedirs(target, exist_ok=True)
+        cmd = [sys.executable, "-m", "pip", "install", "--target", target, "--upgrade", *pkgs]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line and log_cb:
+                log_cb(line)
+        if proc.wait() == 0:
+            activate()
+            return True
+        return False

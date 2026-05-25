@@ -83,7 +83,8 @@ def progress_cell(percent: float | int) -> str:
     """
     try:
         pct = int(round(float(percent)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: int(round(inf)) on a non-finite percent.
         pct = 0
     pct = max(0, min(100, pct))
     filled = (pct * _PROGRESS_SEGMENTS + 50) // 100
@@ -105,7 +106,8 @@ def marquee_cell(frame: int, percent: float | int = 0) -> str:
         track[(head + i) % _PROGRESS_SEGMENTS] = "▓"
     try:
         pct = max(0, min(100, int(round(float(percent)))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: int(round(inf)) on a non-finite percent.
         pct = 0
     return "".join(track) + f" {pct:>3d}%"
 

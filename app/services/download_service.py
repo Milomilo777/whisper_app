@@ -126,8 +126,13 @@ def _fmt_timecode(seconds: float) -> str:
     """Format seconds back into yt-dlp's preferred ``H:MM:SS.SS``."""
     if seconds < 0:
         seconds = 0.0
+    # Round to centiseconds FIRST so a value like 90.999 carries into the
+    # integer part (-> 91) instead of leaving total=90 with frac="1.00",
+    # which appended a bogus digit ("0:01:301"). After rounding, frac is
+    # always < 1.00 so the suffix can never overflow the seconds field.
+    seconds = round(seconds, 2)
     total = int(seconds)
-    frac = seconds - total
+    frac = round(seconds - total, 2)
     hours, rem = divmod(total, 3600)
     minutes, secs = divmod(rem, 60)
     base = f"{hours}:{minutes:02d}:{secs:02d}"

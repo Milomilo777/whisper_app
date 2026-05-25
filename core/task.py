@@ -49,3 +49,9 @@ class TranscriptionTask:
         # config snapshot would otherwise be stale (the docx-never-written
         # bug). None = fall back to the worker's config default.
         self.output_formats: list[str] | None = None
+        # The actual files written by the last (re)transcribe, as
+        # reported by the worker in its "done" event. The UI uses these
+        # for the history record + the "Last result" card instead of
+        # re-deriving names from config (which missed docx/pdf and the
+        # de-duped "name (1).srt" form). None until a run completes.
+        self.output_paths: list[str] | None = None

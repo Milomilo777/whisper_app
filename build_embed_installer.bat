@@ -71,7 +71,11 @@ REM ~750 MB and are installed on first use via core.optional_deps. Removing them
 REM here keeps the shipped bundle ~800 MB instead of ~1.5 GB.
 pushd "%BUILD%\Lib\site-packages"
 for %%P in (torch torchaudio whisper stable_whisper numba llvmlite sympy networkx mpmath functorch torchgen) do if exist "%%P\" rmdir /s /q "%%P"
-for /d %%D in (torch-* torchaudio-* openai_whisper-* stable_ts-* numba-* llvmlite-* sympy-* networkx-* mpmath-*) do rmdir /s /q "%%D"
+REM Native-lib sibling dirs left orphaned once their package is gone
+REM (llvmlite.libs alone is ~30-40 MB). The if-exist guard skips any
+REM that a given torch/numba wheel didn't ship.
+for %%P in (llvmlite.libs numba.libs torch.libs torchaudio.libs) do if exist "%%P\" rmdir /s /q "%%P"
+for /d %%D in (torch-* torchaudio-* openai_whisper-* stable_ts-* numba-* llvmlite-* sympy-* networkx-* mpmath-* functorch-* torchgen-*) do rmdir /s /q "%%D"
 popd
 
 echo [embed] copying source tree
@@ -93,7 +97,10 @@ echo [embed] writing sitecustomize.py to teach python where site-packages lives
 >> "%BUILD%\python\Lib\sitecustomize.py" echo     sys.path.insert(0, _site)
 
 echo [embed] sanity import check (full stack)
-"%BUILD%\python\python.exe" -c "import faster_whisper, ctranslate2, sv_ttk, platformdirs, tkinter; print('embed_import_ok')"
+REM docx + reportlab are bundled (NOT pruned) — they back the docx/pdf
+REM writers. Import them here so a future prune mistake fails the build
+REM loudly instead of silently re-introducing the docx-never-written bug.
+"%BUILD%\python\python.exe" -c "import faster_whisper, ctranslate2, sv_ttk, platformdirs, tkinter, docx, reportlab; print('embed_import_ok')"
 if errorlevel 1 (
   echo [embed] sanity import failed — bundle is incomplete
   exit /b 5

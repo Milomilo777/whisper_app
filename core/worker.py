@@ -17,12 +17,21 @@ Events emitted:
 Commands accepted on stdin (one JSON object per line):
   - ``{"action": "shutdown"}``
   - ``{"action": "transcribe", "file_path": "...", "language": "..."}``
+  - ``{"action": "cancel"}``   : cancel the in-flight task (flush checkpoint)
+  - ``{"action": "pause"}``    : pause the in-flight task at the next segment
+  - ``{"action": "resume"}``   : resume a paused task
+
+cancel/pause/resume are *control* commands: a dedicated reader thread
+applies them to the running task immediately, because the main thread is
+blocked inside ``transcribe()`` and cannot read stdin itself. The
+transcriber polls ``task.cancelled`` / ``task.paused`` between segments.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -48,6 +57,39 @@ logger = logging.getLogger(__name__)
 # env var is missing (older parents) — the parent falls back to
 # matching by PID, preserving backwards compatibility.
 _SESSION_TOKEN: str = os.environ.get("WHISPER_WORKER_TOKEN", "") or ""
+
+
+# The task currently being transcribed, shared between the main thread
+# (which runs transcribe()) and the stdin-reader thread (which applies
+# cancel/pause/resume). Guarded by a lock; bool-flag writes on the task
+# itself are atomic under the GIL, which is all the transcriber's
+# between-segment poll needs.
+_state_lock = threading.Lock()
+_current_task: "TranscriptionTask | None" = None
+
+
+def _set_current_task(task: "TranscriptionTask | None") -> None:
+    global _current_task
+    with _state_lock:
+        _current_task = task
+
+
+def _apply_control(action: str) -> None:
+    """Apply a control command to the in-flight task, if any.
+
+    No-op when no task is running (a stray cancel/pause between tasks is
+    harmless — each transcribe builds a fresh task with the flags clear).
+    """
+    with _state_lock:
+        task = _current_task
+    if task is None:
+        return
+    if action == "cancel":
+        task.cancelled = True
+    elif action == "pause":
+        task.paused = True
+    elif action == "resume":
+        task.paused = False
 
 
 def emit(event: str, **payload: Any) -> None:
@@ -134,25 +176,52 @@ def main() -> int:
     # buffering up megabytes of garbage.
     MAX_COMMAND_BYTES = 1 << 20  # 1 MB
 
-    for line in sys.stdin:
-        if len(line) > MAX_COMMAND_BYTES:
-            emit(
-                "error",
-                message=(
-                    f"command exceeds max length ({len(line)} > "
-                    f"{MAX_COMMAND_BYTES} bytes); dropped"
-                ),
-            )
-            continue
-        line = line.strip()
-        if not line:
-            continue
+    # Transcribe/shutdown commands are handed to the main thread via this
+    # queue; cancel/pause/resume are applied inline by the reader thread.
+    cmd_queue: "queue.Queue[dict[str, Any] | None]" = queue.Queue()
 
+    def _stdin_reader() -> None:
+        """Read stdin concurrently with transcription.
+
+        The main thread blocks inside transcribe(), so it cannot read
+        its own control commands. This thread does: it applies
+        cancel/pause/resume to the in-flight task immediately and queues
+        everything else (transcribe/shutdown) for the main loop. A None
+        sentinel on stdin-close tells the main loop to exit.
+        """
         try:
-            command = json.loads(line)
-        except json.JSONDecodeError as e:
-            emit("error", message=f"Invalid worker command: {e}")
-            continue
+            for raw in sys.stdin:
+                if len(raw) > MAX_COMMAND_BYTES:
+                    emit(
+                        "error",
+                        message=(
+                            f"command exceeds max length ({len(raw)} > "
+                            f"{MAX_COMMAND_BYTES} bytes); dropped"
+                        ),
+                    )
+                    continue
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    command = json.loads(line)
+                except json.JSONDecodeError as e:
+                    emit("error", message=f"Invalid worker command: {e}")
+                    continue
+                if command.get("action") in ("cancel", "pause", "resume"):
+                    _apply_control(command["action"])
+                else:
+                    cmd_queue.put(command)
+        finally:
+            cmd_queue.put(None)
+
+    threading.Thread(target=_stdin_reader, name="worker-stdin",
+                     daemon=True).start()
+
+    while True:
+        command = cmd_queue.get()
+        if command is None:  # stdin closed — parent gone
+            return 0
 
         action = command.get("action")
         if action == "shutdown":
@@ -190,23 +259,30 @@ def main() -> int:
             # past clip_end. Clips are short — re-transcribe the slice fresh.
             if task.clip_start or task.clip_end:
                 task.resume = False
+            # Publish the task so the reader thread can cancel/pause it.
+            _set_current_task(task)
             emit("started", file_path=file_path)
 
             def language_cb(lang: str, prob: float) -> None:
                 emit("language_detected", language=lang, probability=prob, file_path=file_path)
 
-            did_resume = False
-            if task.resume:
-                did_resume = resume_transcription(
-                    task, progress_cb, log_cb, language_cb=language_cb
+            try:
+                did_resume = False
+                if task.resume:
+                    did_resume = resume_transcription(
+                        task, progress_cb, log_cb, language_cb=language_cb
+                    )
+                if not did_resume:
+                    transcribe(task, progress_cb, log_cb, language_cb=language_cb)
+                emit(
+                    "done",
+                    file_path=file_path,
+                    outputs=getattr(task, "output_paths", None) or [],
                 )
-            if not did_resume:
-                transcribe(task, progress_cb, log_cb, language_cb=language_cb)
-            emit("done", file_path=file_path)
+            finally:
+                _set_current_task(None)
         except Exception as e:  # noqa: BLE001
             emit("error", message=str(e), file_path=file_path)
-
-    return 0
 
 
 if __name__ == "__main__":

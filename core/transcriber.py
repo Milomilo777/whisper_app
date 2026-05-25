@@ -569,6 +569,7 @@ def _write_outputs(
     formats = formats or list(config.get("output_formats") or ["srt", "json"])
     template = str(config.get("output_filename_template") or "{base}.{ext}")
     written: list[str] = []
+    write_errors: list[str] = []
     available = supported_formats()
     # Catch the "user asked for formats but every name we got is
     # unknown" case up front — otherwise the function silently
@@ -631,22 +632,29 @@ def _write_outputs(
                 with open(part_path, "w", encoding="utf-8", newline="\n") as fs:
                     fs.write(payload_s)
             os.replace(part_path, path)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
             try:
                 os.unlink(part_path)
             except OSError:
                 pass
-            # Clean up any files we already wrote on the way to this
-            # failure — disk-full mid-batch used to leave the user
-            # with a mix of fresh + stale files. Roll those back so
-            # the final state matches the pre-call state.
-            for prior in written:
-                try:
-                    os.unlink(prior)
-                except OSError:
-                    pass
-            raise
+            # Isolate per-format failures: one broken writer (a missing
+            # optional dependency, or a single format's encoding bug) must
+            # NOT discard the formats that wrote fine. Each format is
+            # already atomic (os.replace) and indexed (never overwrites a
+            # prior run), so there's nothing to roll back — log and move
+            # on to the next format.
+            logger.warning("output format %r failed: %s", fmt_name, e)
+            write_errors.append(f"{fmt_name}: {e}")
+            continue
         written.append(path)
+    # Requested known formats, but every writer failed (disk full, all
+    # writers broken) — surface it so the task doesn't report a silent
+    # "wrote 0 files" success.
+    if planned and not written:
+        raise RuntimeError(
+            "All output writers failed; last error: "
+            + (write_errors[-1] if write_errors else "unknown")
+        )
     return written
 
 
@@ -1227,6 +1235,10 @@ def transcribe(
         chapter_path = _write_chapter_sidecar(base, chapters_attr)
         if chapter_path:
             written.append(chapter_path)
+        # Hand the real written paths to the UI (history + Last-result
+        # card) so it never has to re-derive names from config — that
+        # missed docx/pdf and the de-duped "name (1).srt" form.
+        task.output_paths = list(written)
         log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
             log_cb)
 
@@ -1334,6 +1346,7 @@ def _transcribe_via_alt_backend(
     chapter_path = _write_chapter_sidecar(base, chapters_attr)
     if chapter_path:
         written.append(chapter_path)
+    task.output_paths = list(written)
     log(
         f"Wrote {len(written)} output file(s): "
         f"{', '.join(os.path.basename(p) for p in written)}",
@@ -1598,6 +1611,7 @@ def resume_transcription(
         chapter_path = _write_chapter_sidecar(base, chapters_attr)
         if chapter_path:
             written.append(chapter_path)
+        task.output_paths = list(written)
         log(
             f"Resume: wrote {len(written)} output file(s): "
             f"{', '.join(os.path.basename(p) for p in written)}",

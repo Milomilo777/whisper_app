@@ -1082,10 +1082,14 @@ class App(tk.Tk):
         state = {"ok": False, "done": False}
 
         def _work() -> None:
+            # self.log writes the Tk text widget directly; this runs off
+            # the main thread, so marshal every line through post_to_main.
+            def _safe_log(line: str) -> None:
+                self.post_to_main(lambda: self.log(line))
             try:
-                state["ok"] = optional_deps.install(feature, log_cb=self.log)
+                state["ok"] = optional_deps.install(feature, log_cb=_safe_log)
             except Exception as e:  # noqa: BLE001
-                self.log(f"{friendly} install failed: {e}")
+                self.post_to_main(lambda e=e: self.log(f"{friendly} install failed: {e}"))
             finally:
                 state["done"] = True
 
@@ -1392,7 +1396,10 @@ class App(tk.Tk):
         if not task:
             return
         m = tk.Menu(self, tearoff=0)
-        if task.status in ("waiting", "running"):
+        if task.status in ("waiting", "running", "transcribing"):
+            # "transcribing" = the download finished and handed off to an
+            # auto-transcribe; Cancel here stops that linked task too
+            # (cancel_download unlinks + cancels transcription_task).
             m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
         elif task.status in ("finished", "cancelled", "error"):
             saved = getattr(task, "saved_path", None)
@@ -1622,31 +1629,43 @@ class App(tk.Tk):
         self.refresh_download_queue()
 
     def pause(self, t: TranscriptionTask) -> None:
+        # Only a task actually running on a worker can be paused.
+        # Pausing a still-"waiting" task would flip it to "paused", and
+        # dispatch_waiting only picks up "waiting" — it would never run.
+        if t.status != "running":
+            return
         t.paused = True
         t.status = "paused"
+        # Cooperative: the worker's reader thread flips its task.paused
+        # and the transcriber waits between segments.
+        self.transcription_service.send_control(t, "pause")
         self.refresh()
 
     def resume(self, t: TranscriptionTask) -> None:
+        if t.status != "paused":
+            return
         t.paused = False
         t.status = "running"
+        self.transcription_service.send_control(t, "resume")
         self.refresh()
 
     def cancel(self, t: TranscriptionTask) -> None:
         t.cancelled = True
         t.status = "cancelled"
         # Freeze the Elapsed column at the cancel moment so the user
-        # sees how long the task actually ran before they killed it.
+        # sees how long the task actually ran before they stopped it.
         if getattr(t, "end_time", None) is None:
             t.end_time = time.time()
-        for worker in self.workers:
-            if worker["task"] == t:
-                self.log("Cancelling running task and restarting its worker...")
-                worker["task"] = None
-                if worker.get("temporary") and not any(task.status == "waiting" for task in self.queue):
-                    self.transcription_service.retire_worker(worker)
-                else:
-                    self.transcription_service.restart_worker(worker)
-                break
+        # Cooperative cancel: tell the worker to stop at the next segment
+        # boundary. The transcriber flushes a resumable checkpoint and the
+        # worker emits "done", which finish_task() routes to release (and
+        # retire, if temporary) the worker — so a partial run is no longer
+        # lost the way a hard kill+restart lost it. The liveness watchdog
+        # still reaps a worker that wedges instead of honouring the cancel.
+        if not self.transcription_service.send_control(t, "cancel"):
+            self.log("Cancelled (task was not yet running on a worker).")
+        else:
+            self.log("Cancelling task; saving a resume checkpoint...")
         self.refresh()
 
     def remove_task(self, t: TranscriptionTask) -> None:
@@ -1869,15 +1888,19 @@ class App(tk.Tk):
 
         base, _ = os.path.splitext(task.file_path)
         folder = os.path.dirname(task.file_path) or "."
-        candidates = [
-            f"{base}.srt",
-            f"{base}.json",
-            f"{base}.vtt",
-            f"{base}.tsv",
-            f"{base}.txt",
-            f"{base}.lrc",
-        ]
-        existing = [p for p in candidates if os.path.isfile(p)]
+        # Prefer the exact files the worker reported writing — that
+        # covers docx/pdf/md and the de-duped "name (1).srt" form the
+        # hard-coded candidate list below would miss (a docx-only run
+        # used to show "no output files found" despite a clean write).
+        written = getattr(task, "output_paths", None)
+        if written:
+            existing = [p for p in written if os.path.isfile(p)]
+        else:
+            candidates = [
+                f"{base}.{ext}"
+                for ext in ("srt", "json", "vtt", "tsv", "txt", "lrc", "docx", "pdf", "md")
+            ]
+            existing = [p for p in candidates if os.path.isfile(p)]
 
         ttk.Label(
             self.last_result_body,

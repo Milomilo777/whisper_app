@@ -86,6 +86,21 @@ def test_main_emits_started_then_done_on_transcribe(monkeypatch, capsys):
     assert started[0]["file_path"] == "/tmp/x.wav"
 
 
+def test_main_done_event_includes_written_outputs(monkeypatch, capsys):
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+
+    def fake_transcribe(task, p, l, language_cb=None):
+        task.output_paths = ["/tmp/x.srt", "/tmp/x.docx"]
+
+    monkeypatch.setattr(worker, "transcribe", fake_transcribe)
+    inputs = json.dumps({"action": "transcribe", "file_path": "/tmp/x.wav"}) + "\n" + json.dumps({"action": "shutdown"}) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(inputs))
+    worker.main()
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    done = [e for e in events if e["event"] == "done"]
+    assert done and done[0].get("outputs") == ["/tmp/x.srt", "/tmp/x.docx"]
+
+
 def test_main_unknown_action_emits_error(monkeypatch, capsys):
     monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
     inputs = json.dumps({"action": "fly-to-the-moon"}) + "\n" + json.dumps({"action": "shutdown"}) + "\n"

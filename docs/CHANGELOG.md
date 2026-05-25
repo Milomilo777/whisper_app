@@ -4,6 +4,48 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.5] — 2026-05-25
+
+Real pause/resume/cancel + a post-slim hardening pass (five parallel
+code-audit shards over everything that changed in v1.3.x).
+
+### Added
+
+- **Pause / Resume now actually work, and Cancel keeps your progress.**
+  Previously Pause did nothing to a running job and Cancel killed the
+  worker and threw away the partial transcript. The worker now reads
+  pause/resume/cancel on a side channel while it's transcribing: Pause
+  halts at the next segment, Resume continues, and Cancel saves a
+  resumable checkpoint (so "Re-run" picks up where you stopped) instead
+  of discarding it.
+
+### Fixed
+
+- **A docx-only (or pdf-only) result no longer looks lost.** The "Last
+  result" card and the history record now list the files the worker
+  actually wrote — including docx/pdf and de-duped `name (1).srt` names —
+  instead of guessing from settings (which only knew srt/json/txt/…).
+- **You can cancel an auto-transcribe from the Download row.** Right-
+  clicking a row that shows "transcribing" now offers Cancel (the menu
+  was empty before).
+- **A sub-second download end time no longer corrupts the range** (e.g.
+  `1:30.999` no longer became a bogus `0:01:301`).
+- **One broken output writer no longer discards the others.** A failing
+  format is logged and skipped; the formats that wrote fine are kept
+  (only an all-formats failure raises).
+- Pausing a task that hadn't started yet no longer strands it.
+- Progress bars tolerate a non-finite percentage without erroring.
+
+### Changed
+
+- On-demand optional-feature installs are serialized (two requests can't
+  race into a half-written package) and their progress log is delivered
+  to the UI thread safely.
+- The slim build also drops the orphaned `llvmlite` native-lib folder
+  (~30–40 MB) and the build's sanity check imports the docx/pdf writers,
+  so a future prune mistake fails the build instead of silently breaking
+  docx again.
+
 ## [1.3.4] — 2026-05-25
 
 Much smaller install + a docx fix.
