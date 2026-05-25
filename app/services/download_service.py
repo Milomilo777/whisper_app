@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 logger = logging.getLogger(__name__)
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from queue import Empty
 from typing import TYPE_CHECKING, Any
@@ -297,7 +298,18 @@ def build_download_command(
 
 
 _PERCENT_RE = re.compile(r"\[download\]\s+(\d+(?:\.\d+)?)%")
-_DEST_RE = re.compile(r"^\[(?:download|Merger|ExtractAudio)\] (?:Destination|Merging formats into):\s+(.+)$")
+# Plain per-stream download target. With adaptive (separate video+audio)
+# formats these are intermediate fragments that yt-dlp DELETES the moment
+# it merges them, so a fragment path must never win over a final one below.
+_DEST_RE = re.compile(r"^\[download\] Destination:\s+(.+)$")
+# Authoritative final on-disk file, emitted by post-processing. yt-dlp
+# prints the merge target QUOTED and with NO colon
+# (`Merging formats into "PATH"`); audio extraction uses `Destination: PATH`;
+# a re-run that finds the file already present prints `PATH has already
+# been downloaded`. These name the file that actually survives on disk.
+_MERGE_RE = re.compile(r'^\[Merger\] Merging formats into "(.+)"$')
+_EXTRACT_RE = re.compile(r"^\[ExtractAudio\] Destination:\s+(.+)$")
+_ALREADY_RE = re.compile(r"^\[download\] (.+) has already been downloaded$")
 
 
 def parse_progress_line(line: str) -> dict[str, Any] | None:
@@ -331,12 +343,48 @@ def parse_progress_line(line: str) -> dict[str, Any] | None:
     return None
 
 
-def parse_destination_line(line: str) -> str | None:
-    """Pick out a saved-file path from yt-dlp output (auto-transcribe wiring)."""
+def parse_destination_line(line: str) -> tuple[str, bool] | None:
+    """Pick a saved-file path out of one yt-dlp output line.
+
+    Returns ``(path, is_final)`` or ``None``. ``is_final`` is True for a
+    post-processed / already-present file (a merge target, extracted audio,
+    or "has already been downloaded"). Those name the file that survives on
+    disk and must take priority over the per-stream ``[download]
+    Destination:`` fragments, which yt-dlp deletes during a video+audio
+    merge — transcribing a fragment path would hit a missing file.
+    """
     if not line:
         return None
-    m = _DEST_RE.match(line.strip())
-    return m.group(1).strip() if m else None
+    s = line.strip()
+    for pattern in (_MERGE_RE, _EXTRACT_RE, _ALREADY_RE):
+        m = pattern.match(s)
+        if m:
+            return m.group(1).strip(), True
+    m = _DEST_RE.match(s)
+    if m:
+        return m.group(1).strip(), False
+    return None
+
+
+def select_saved_path(lines: "Iterable[str]") -> str | None:
+    """Choose the real saved file from a run of yt-dlp output lines.
+
+    A final (post-processed) path wins and locks; the per-stream fragment
+    paths only fill in until a final one arrives, and never overwrite it —
+    so a download whose fragments were merged-then-deleted still resolves to
+    the surviving merged file. Mirrors the accumulation in ``_media_phase``.
+    """
+    saved: str | None = None
+    saved_is_final = False
+    for line in lines:
+        dest = parse_destination_line(line.rstrip())
+        if dest is None:
+            continue
+        path, is_final = dest
+        if is_final or not saved_is_final:
+            saved = path
+            saved_is_final = saved_is_final or is_final
+    return saved
 
 
 # Service class wired into the App ------------------------------------------------
@@ -943,6 +991,7 @@ class DownloadService:
         )
 
         saved_path: str | None = None
+        saved_is_final = False
         for line in task.process.stdout:  # type: ignore[union-attr]
             line = line.rstrip()
             parsed = parse_progress_line(line)
@@ -950,8 +999,14 @@ class DownloadService:
                 app.download_events.put(("progress", task, float(parsed["percent"])))
             elif line:
                 dest = parse_destination_line(line)
-                if dest:
-                    saved_path = dest
+                if dest is not None:
+                    path, is_final = dest
+                    # A final (post-processed) path wins and locks; a plain
+                    # per-stream fragment never overwrites a final one,
+                    # because fragments are deleted during a merge.
+                    if is_final or not saved_is_final:
+                        saved_path = path
+                        saved_is_final = saved_is_final or is_final
                 app.download_events.put(("log", task, line))
 
         return_code = task.process.wait()

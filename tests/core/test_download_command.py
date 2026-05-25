@@ -16,6 +16,7 @@ from app.services.download_service import (
     build_subtitle_command,
     parse_destination_line,
     parse_progress_line,
+    select_saved_path,
 )
 
 
@@ -239,24 +240,87 @@ def test_parse_progress_line_caps_at_100():
 # --- parse_destination_line ------------------------------------------------
 
 
-def test_parse_destination_line_picks_path():
+def test_parse_destination_line_picks_fragment_path():
     line = "[download] Destination: C:/out/My Video.mp4"
-    assert parse_destination_line(line) == "C:/out/My Video.mp4"
+    assert parse_destination_line(line) == ("C:/out/My Video.mp4", False)
 
 
-def test_parse_destination_line_handles_merger():
-    line = "[Merger] Merging formats into: /tmp/out.mp4"
-    assert parse_destination_line(line) == "/tmp/out.mp4"
+def test_parse_destination_line_handles_merger_quoted_no_colon():
+    # Real yt-dlp shape: the merge target is QUOTED and has NO colon. The
+    # old regex expected `Merging formats into:` and silently missed this,
+    # so the deleted audio fragment won — the v1.2.0 auto-transcribe bug.
+    line = '[Merger] Merging formats into "/tmp/out.mp4"'
+    assert parse_destination_line(line) == ("/tmp/out.mp4", True)
 
 
 def test_parse_destination_line_handles_extract_audio():
     line = "[ExtractAudio] Destination: /tmp/song.mp3"
-    assert parse_destination_line(line) == "/tmp/song.mp3"
+    assert parse_destination_line(line) == ("/tmp/song.mp3", True)
+
+
+def test_parse_destination_line_handles_already_downloaded():
+    line = "[download] /tmp/out.mp4 has already been downloaded"
+    assert parse_destination_line(line) == ("/tmp/out.mp4", True)
 
 
 def test_parse_destination_line_returns_none_for_other_lines():
     assert parse_destination_line("[download] 42% of 10MB") is None
     assert parse_destination_line("") is None
+
+
+# --- select_saved_path: the on-disk file wins over deleted fragments -------
+
+
+def test_select_saved_path_merge_beats_deleted_fragments():
+    lines = [
+        "[download] Destination: C:/out/clip.f137.mp4",
+        "[download] Destination: C:/out/clip.f140.m4a",
+        '[Merger] Merging formats into "C:/out/clip.mp4"',
+        "Deleting original file C:/out/clip.f137.mp4 (pass -k to keep)",
+        "Deleting original file C:/out/clip.f140.m4a (pass -k to keep)",
+    ]
+    assert select_saved_path(lines) == "C:/out/clip.mp4"
+
+
+def test_select_saved_path_single_file_no_merge():
+    assert select_saved_path(["[download] Destination: C:/out/clip.mp4"]) == "C:/out/clip.mp4"
+
+
+def test_select_saved_path_extract_audio_wins():
+    lines = [
+        "[download] Destination: C:/out/clip.webm",
+        "[ExtractAudio] Destination: C:/out/clip.mp3",
+    ]
+    assert select_saved_path(lines) == "C:/out/clip.mp3"
+
+
+def test_select_saved_path_already_downloaded():
+    lines = ["[download] C:/out/clip.mp4 has already been downloaded"]
+    assert select_saved_path(lines) == "C:/out/clip.mp4"
+
+
+def test_select_saved_path_final_locks_out_trailing_fragment():
+    # Defensive: even if a fragment line trails the merge, the final wins.
+    lines = [
+        '[Merger] Merging formats into "C:/out/clip.mp4"',
+        "[download] Destination: C:/out/clip.f140.m4a",
+    ]
+    assert select_saved_path(lines) == "C:/out/clip.mp4"
+
+
+def test_select_saved_path_real_world_reel_regression():
+    # Exact transcript shape that shipped broken in v1.2.0: saved_path
+    # resolved to the deleted .m4a fragment, so auto-transcribe hit
+    # "No such file or directory". The merge target must win.
+    base = "C:/Users/Owner/Desktop/My Reel"
+    lines = [
+        f"[download] Destination: {base}.f1632576788007822v.mp4",
+        f"[download] Destination: {base}.f1462030628999880a.m4a",
+        f'[Merger] Merging formats into "{base}.mp4"',
+        f"Deleting original file {base}.f1632576788007822v.mp4 (pass -k to keep)",
+        f"Deleting original file {base}.f1462030628999880a.m4a (pass -k to keep)",
+    ]
+    assert select_saved_path(lines) == f"{base}.mp4"
 
 
 # --- timecode helpers (v1.0.3 --download-sections) -------------------------
