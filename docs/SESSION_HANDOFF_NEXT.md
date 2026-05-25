@@ -9,16 +9,47 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `master` — **the single mainline** (2026-05-25: `chore/cleanup-hardening` + `basic-edition` were folded into master and deleted; tips kept as tags `archive/cleanup-hardening-final` / `archive/basic-edition`). Carries **v1.3.5**, all committed + pushed. |
-| Version | pyproject = 1.3.5; `core.__version__` = 1.3.5; both `.iss` = 1.3.5 |
-| Last PUBLISHED release | **v1.3.5** on GitHub (Standard + Portable) — real Pause/Resume/Cancel + a five-shard post-slim audit pass; built + slim past-bug E2E PASS + a live pause/resume/cancel E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-25. |
-| GitHub releases now | `v1.3.5` (latest) + `v1.3.4` + `v1.3.3` + `basic-v0.1.0` — **old releases are now KEPT, not pruned** (user decision 2026-05-25; see §3). |
-| Installed test copy | none built for v1.3.5 (validated by the past-bug E2E `tools/e2e_slim_pastbugs.py` + the pause/cancel E2E `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
+| Branch | `master` — **the single mainline** (2026-05-25: `chore/cleanup-hardening` + `basic-edition` were folded into master and deleted; tips kept as `archive/*` tags). Carries **v1.3.6**, all committed + pushed. The whole history was rewritten 2026-05-25 to attribute every commit to `translation-robot` (GitHub no-reply) and strip the old email + all `Co-Authored-By` trailers; local `git config` identity is set to match. |
+| Version | pyproject = 1.3.6; `core.__version__` = 1.3.6; both `.iss` = 1.3.6 |
+| Last PUBLISHED release | **v1.3.6** on GitHub (Standard + Portable) — Video Tiling tab + Linux/macOS groundwork; built + slim past-bug E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-26. |
+| GitHub releases now | `v1.3.6` (latest) + `v1.3.5` + `v1.3.4` + `v1.3.3` + `basic-v0.1.0` — **old releases are KEPT, never pruned** (user decision 2026-05-25; see §3). |
+| Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
+
+### What shipped in v1.3.6 (PUBLISHED 2026-05-26)
+
+Video Tiling tab + Linux/macOS groundwork. Full list: `docs/CHANGELOG.md`
++ `docs/RELEASE_NOTES_v1.3.6.md` + the plan in
+`docs/CROSS_PLATFORM_ROADMAP.md`. Headlines: **Video Tiling tab**
+(`core/tiling.py` + `build_tiling_tab`) — one live stream filled across the
+screen as an N×N grid via `yt-dlp | ffplay -vf tile=NxN` (ports
+`translation-robot/video-tiler`); **ffplay is NOT bundled** (would bloat
+the build), so the tab detects its absence and tells the user to drop
+`ffplay.exe` in `bin/` or put ffmpeg on PATH. **Cross-platform core
+hardening** — `yt-dlp`/`ffmpeg`/`ffprobe` resolve per-OS via
+`core.paths.bundled_binary` (PATH fallback), `--ffmpeg-location` is only
+passed when a bundled ffmpeg exists, VLC discovery covers macOS/Linux; the
+Windows build is byte-for-byte the same shape. **`platform/linux/`** (one-
+step `install.sh` venv + deps + static-ffmpeg fallback + a headless
+`whisper-transcribe` CLI + update/uninstall) and **`platform/macos/`**
+(`install.command` + `unblock.command` for Gatekeeper + README). A
+`.gitattributes` pins LF on `*.sh`/`*.command`.
+
+**Follow-ups for a future session:**
+- Video Tiling needs **ffplay** to actually run. To make it work
+  out-of-box on Windows, add `bin/ffplay.exe` (from the full ffmpeg build)
+  — either commit it (repo already LFS-warns on the ~97 MB ffmpeg.exe) or,
+  cleaner, have `build_embed_installer.bat` fetch ffplay into
+  `embed_build/bin` at build time. Deferred to keep the build/repo size
+  unchanged this release.
+- **macOS is unvalidated** — no Mac was available. The code + scripts
+  follow best practice but need a real-device run (see `platform/macos/README.md`).
+- Linux scripts are `bash -n`-clean but not run on a real distro here; the
+  maintainer confirmed transcription works on their Linux server.
 
 ### What shipped in v1.3.5 (PUBLISHED 2026-05-25)
 
