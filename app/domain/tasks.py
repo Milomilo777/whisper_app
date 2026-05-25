@@ -55,6 +55,9 @@ class VideoDownloadTask:
         # column.
         self.section_start: float | None = section_start
         self.section_end: float | None = section_end
+        # Full path of the finished download (set by DownloadService._finish)
+        # so the Download tab can offer a one-click "Open file".
+        self.saved_path: str | None = None
 
     def time_range_label(self) -> str | None:
         """Short human-readable badge for the Queue row.

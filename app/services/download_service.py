@@ -1015,6 +1015,7 @@ class DownloadService:
         if status == "finished":
             task.progress = 100
             if saved_path:
+                task.saved_path = saved_path
                 # Friendly completion line — the user actually wants
                 # to know "what file landed, where, how big". Ring
                 # the bell so they notice even if they're in another

@@ -1262,6 +1262,12 @@ class App(tk.Tk):
         if task.status in ("waiting", "running"):
             m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
         elif task.status in ("finished", "cancelled", "error"):
+            saved = getattr(task, "saved_path", None)
+            if task.status == "finished" and saved and os.path.isfile(saved):
+                m.add_command(
+                    label="Open file",
+                    command=lambda p=saved: self._open_file(p),
+                )
             m.add_command(
                 label="Open download folder",
                 command=lambda: self._open_folder(task.folder),
