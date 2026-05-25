@@ -1055,8 +1055,11 @@ class App(tk.Tk):
             except Exception as e:  # noqa: BLE001
                 self.log(f"URL handoff failed: {e}")
             return
-        if not self.fv.get():
-            self.log("Pick a file first — use the Browse button on the Transcribe tab.")
+        # Local-path sanity: a deleted / mistyped path would otherwise
+        # enqueue a task that only fails deep in the worker with a cryptic
+        # error. Catch it here where we can give a clear message.
+        if not os.path.isfile(text):
+            self.log(f"File not found — pick an existing file: {text}")
             return
         # First-transcribe gating:
         #   1. If the model bytes are not on disk → download dialog.

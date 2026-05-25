@@ -29,6 +29,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Callable
@@ -197,7 +198,10 @@ def _run_demucs_cli(
     is stable across demucs releases.
     """
     cmd = [
-        "python", "-m", "demucs",
+        # sys.executable, not bare "python": the frozen/embed build has no
+        # "python" on PATH, so the bare name raised FileNotFoundError and
+        # silently killed vocal separation.
+        sys.executable, "-m", "demucs",
         "--two-stems", "vocals",
         "-n", model,
         "-o", str(out_dir),
