@@ -4,6 +4,41 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-25
+
+UX + reliability release on top of v1.2.0 — bug fixes and visibility
+improvements found while running the app on real downloads.
+
+### Added
+
+- **Graphical progress bars in the queue rows.** The transcription and
+  download queues draw a block bar (e.g. `████░░░░░░ 42%`) next to the
+  number, so progress is visible at a glance instead of just a figure.
+- **The version is visible.** The window title shows `Whisper Project
+  v1.3.0`, and the Standard installer's Start-menu / desktop shortcut is
+  named with the version — so you can tell which build is installed.
+- **The Download tab shows transcription progress.** After an
+  auto-transcribe-from-download, the download row reads "transcribing"
+  and mirrors the live transcription progress, then flips to "finished",
+  so a slow transcription no longer looks like a stalled, idle 100%.
+
+### Changed
+
+- **The "Last result" card no longer dominates the Transcribe tab** — it
+  sizes to its content instead of expanding to fill the lower half.
+- **The transcription language resets to "Auto" on every launch** and is
+  no longer persisted; every other transcribe preference is still saved.
+
+### Fixed
+
+- **Auto-transcribe after a video+audio download.** yt-dlp merges the two
+  streams into one file and deletes the per-stream fragments; the
+  saved-path parser had been matching the now-deleted audio fragment, so
+  auto-transcribe hit "No such file or directory" and silently did
+  nothing. It now resolves the merged output (and the
+  already-downloaded / extracted-audio cases too). Seen on Facebook reels
+  and YouTube Shorts.
+
 ## [1.2.0] — 2026-05-25
 
 UX + accessibility release on top of v1.1.0 — mostly things the operator
