@@ -37,3 +37,9 @@ class TranscriptionTask:
         # to "finished" when this task ends. Typed Any to keep core free
         # of an app-layer import.
         self.source_download: Any = None
+        # Optional transcription time-slice (Transcribe-tab time range).
+        # Wall-clock seconds into the source; both None = the whole file.
+        # Fed to faster-whisper as clip_timestamps so only this span is
+        # processed; segment timestamps stay on the original timeline.
+        self.clip_start: float | None = None
+        self.clip_end: float | None = None

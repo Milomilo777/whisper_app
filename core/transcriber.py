@@ -1009,6 +1009,25 @@ def _build_transcribe_kwargs(task: "TranscriptionTask") -> dict[str, Any]:
     return kwargs
 
 
+def _clip_timestamps_arg(task: TranscriptionTask) -> str | None:
+    """faster-whisper ``clip_timestamps`` value for a Transcribe-tab time
+    slice, or None for the whole file.
+
+    Returns "start,end" (process only that span) or "start" (from start to
+    the end of the file). A zero/blank bound means "unset" on that side, so
+    leaving both = the whole file (None).
+    """
+    start = getattr(task, "clip_start", None)
+    end = getattr(task, "clip_end", None)
+    start_s = float(start) if start else 0.0
+    end_s = float(end) if end else 0.0
+    if start_s <= 0.0 and end_s <= 0.0:
+        return None
+    if end_s > start_s:
+        return f"{start_s},{end_s}"
+    return f"{start_s}"
+
+
 def transcribe(
     task: TranscriptionTask,
     progress_cb: Callable[[int], None] | None = None,
@@ -1077,9 +1096,28 @@ def transcribe(
         want_words = bool(config.get("word_timestamps", False))
 
         transcribe_kwargs = _build_transcribe_kwargs(task)
-        runner = PIPELINE if PIPELINE is not None else MODEL
-        if PIPELINE is not None:
+        # Optional time-slice (Transcribe-tab time range): process only
+        # [clip_start, clip_end] via clip_timestamps. The batched pipeline
+        # doesn't accept clip_timestamps, so a clipped task uses the plain
+        # model (still fast for a short slice).
+        clip = _clip_timestamps_arg(task)
+        use_batched = PIPELINE is not None and clip is None
+        runner: Any = PIPELINE if use_batched else MODEL
+        if use_batched:
             transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
+        if clip is not None:
+            transcribe_kwargs["clip_timestamps"] = clip
+
+        # Progress is measured against the clip span — segment timestamps
+        # stay on the original timeline, so without this the bar would
+        # barely move when slicing a few minutes out of a long file.
+        _clip_start_s = float(getattr(task, "clip_start", None) or 0.0)
+        _clip_end_v = getattr(task, "clip_end", None)
+        progress_span = (
+            float(_clip_end_v) - _clip_start_s
+            if (_clip_end_v and float(_clip_end_v) > _clip_start_s)
+            else duration
+        )
 
         segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
 
@@ -1142,7 +1180,10 @@ def transcribe(
             while task.paused and not task.cancelled:
                 time.sleep(0.2)
 
-            percent = min(100, int((seg.end / duration) * 100)) if duration else 0
+            percent = (
+                min(100, max(0, int(((seg.end - _clip_start_s) / progress_span) * 100)))
+                if progress_span else 0
+            )
             msg = f"[{percent}%] {fmt(seg.start)} --> {fmt(seg.end)} | {(seg.text or '').strip()}"
             log(msg, log_cb)
 
