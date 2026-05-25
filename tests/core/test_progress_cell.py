@@ -59,11 +59,11 @@ def test_progress_cell_has_constant_width():
 
 def test_marquee_cell_always_three_lit_blocks():
     for frame in range(0, 25):
-        assert marquee_cell(frame).count("█") == 3
+        assert marquee_cell(frame).count("▓") == 3
 
 
 def test_marquee_cell_constant_width():
-    assert len({len(marquee_cell(f)) for f in range(0, 25)}) == 1
+    assert len({len(marquee_cell(f, p) ) for f in range(0, 25) for p in (0, 50, 100)}) == 1
 
 
 def test_marquee_cell_advances_with_frame():
@@ -74,3 +74,11 @@ def test_marquee_cell_advances_with_frame():
 def test_marquee_cell_wraps_each_track_length():
     # The lit window has a 10-segment period, so it loops smoothly.
     assert marquee_cell(0) == marquee_cell(10)
+
+
+def test_marquee_cell_still_shows_the_percentage():
+    # "Have both": the moving bar must still carry the number so the user
+    # always sees how far along it is (the colleague's regression).
+    assert marquee_cell(0, 0).endswith("  0%")
+    assert marquee_cell(3, 7).endswith("  7%")
+    assert marquee_cell(3, 100).endswith("100%")

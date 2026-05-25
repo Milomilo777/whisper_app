@@ -1561,7 +1561,7 @@ class App(tk.Tk):
         from app.widgets.tabs import marquee_cell, progress_cell
 
         if status in ("running", "transcribing") and (progress or 0) <= 0:
-            return marquee_cell(getattr(self, "_anim_frame", 0))
+            return marquee_cell(getattr(self, "_anim_frame", 0), progress)
         return progress_cell(progress)
 
     def _ensure_animation(self) -> None:

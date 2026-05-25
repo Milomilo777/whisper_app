@@ -91,18 +91,23 @@ def progress_cell(percent: float | int) -> str:
     return f"{bar} {pct:>3d}%"
 
 
-def marquee_cell(frame: int) -> str:
-    """An indeterminate "working" bar for a row with no real % yet.
+def marquee_cell(frame: int, percent: float | int = 0) -> str:
+    """An indeterminate "working" bar that STILL shows the percentage.
 
-    A 3-cell lit window slides across the track so the user can see that
-    something is happening (e.g. while the Whisper model loads, before the
-    first segment produces a real percentage) without faking a number.
+    A 3-cell shaded window slides across the track so the user sees that
+    something is happening (e.g. while the model loads, before the first
+    segment), while the real number is still appended — so the percentage
+    is never hidden, just animated until determinate progress takes over.
     """
     track = ["░"] * _PROGRESS_SEGMENTS
     head = frame % _PROGRESS_SEGMENTS
     for i in range(3):
-        track[(head + i) % _PROGRESS_SEGMENTS] = "█"
-    return "".join(track) + " ···"
+        track[(head + i) % _PROGRESS_SEGMENTS] = "▓"
+    try:
+        pct = max(0, min(100, int(round(float(percent)))))
+    except (TypeError, ValueError):
+        pct = 0
+    return "".join(track) + f" {pct:>3d}%"
 
 
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
