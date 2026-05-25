@@ -9,16 +9,43 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.3.4** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
-| Version | pyproject = 1.3.4; `core.__version__` = 1.3.4; both `.iss` = 1.3.4 |
-| Last PUBLISHED release | **v1.3.4** on GitHub (Standard + Portable) — slim ~800 MB build; built + the slim past-bug E2E PASS (docx + all formats + `en-US` normalisation + clip 0–20s + apostrophe-in-filename, via the real worker over its JSON protocol) + hermetic suite green + pyright 0/0/0; published 2026-05-25. |
-| GitHub releases now | `v1.3.4` (latest) + `basic-v0.1.0`; v1.3.3 + earlier releases/tags were pruned |
-| Installed test copy | none built for v1.3.4 (the slim build was validated by the past-bug E2E driver against the embed tree directly — `tools/e2e_slim_pastbugs.py`). The user installs the published EXE themselves. |
+| Branch | `chore/cleanup-hardening` — carries **v1.3.5** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
+| Version | pyproject = 1.3.5; `core.__version__` = 1.3.5; both `.iss` = 1.3.5 |
+| Last PUBLISHED release | **v1.3.5** on GitHub (Standard + Portable) — real Pause/Resume/Cancel + a five-shard post-slim audit pass; built + slim past-bug E2E PASS + a live pause/resume/cancel E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-25. |
+| GitHub releases now | `v1.3.5` (latest) + `v1.3.4` + `v1.3.3` + `basic-v0.1.0` — **old releases are now KEPT, not pruned** (user decision 2026-05-25; see §3). |
+| Installed test copy | none built for v1.3.5 (validated by the past-bug E2E `tools/e2e_slim_pastbugs.py` + the pause/cancel E2E `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
+
+### What shipped in v1.3.5 (PUBLISHED 2026-05-25)
+
+Real Pause/Resume/Cancel + a post-slim hardening pass (five parallel
+code-audit shards over everything that changed in v1.3.x). Full list:
+`docs/CHANGELOG.md` + `docs/RELEASE_NOTES_v1.3.5.md`. Headlines:
+**cooperative pause/resume/cancel (#37)** — the worker now reads control
+commands on a dedicated `worker-stdin` reader thread and flips the
+in-flight task's `cancelled`/`paused` flags while the main thread is busy
+in `transcribe()`; the transcriber already polled those between segments
+(and flushes a resumable checkpoint on cancel), so only signal delivery
+was missing. `app/app.py` pause/resume/cancel now call
+`TranscriptionService.send_control(task, action)` instead of killing the
+worker; a per-worker `stdin_lock` serialises the three concurrent writers.
+**The worker reports the files it actually wrote** in the `done` event
+(`task.output_paths` → `finish_task` history + `show_last_result`), so a
+docx/pdf-only run no longer shows "no output files found". Plus the audit
+fixes: a "transcribing" download row is cancellable; `_fmt_timecode`
+sub-second carry (`1:30.999` → `0:01:31`); per-format writer resilience
+(one bad writer no longer discards the good ones); pausing a not-yet-
+running task is a no-op; `progress_cell`/`marquee_cell` tolerate a
+non-finite percent; on-demand installs are serialised + log on the UI
+thread; the slim build drops the orphaned `llvmlite.libs` and its sanity
+check imports docx/reportlab to guard the docx-regression class. New
+tests: `test_worker_control`, `test_cancel_checkpoint` (deterministic
+faked-model cancel→checkpoint), done-event outputs, sub-second timecode;
+new live driver `tools/e2e_cancel_pause.py`.
 
 ### What shipped in v1.3.4 (PUBLISHED 2026-05-25)
 
@@ -42,7 +69,7 @@ now threaded transcribe_command → worker → `_write_outputs`.
 New: `tools/e2e_slim_pastbugs.py` (slim-build past-bug release gate) +
 `tests/core/test_optional_deps.py`.
 
-### What shipped in v1.3.3 (PUBLISHED 2026-05-25, now pruned from GitHub)
+### What shipped in v1.3.3 (PUBLISHED 2026-05-25; pruned then RESTORED — still on GitHub)
 
 Position slider on the Download tab (#39) + clip/range review fixes, and
 the first Portable ZIP of the embed tree. Full list: `docs/CHANGELOG.md`
@@ -71,14 +98,15 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
 **hub_folder/model_path** fix (collaborator commit 5b59fbc).
 
 ### Still pending (next session)
-- **#37 worker cancel/pause/checkpoint (MED-HIGH).** cancel()/pause()
-  only mutate the parent-side task; the worker subprocess never receives
-  a cancel/pause over stdin, so pause() is a no-op on a running worker and
-  cancel works only by killing+restarting (the worker-side cancelled
-  checkpoint-flush is dead code → the partial checkpoint is lost on
-  cancel). Fix: send a real cancel/pause action over stdin, or document
-  pause as a no-op. Also `ensure_worker_ready(headless=True)` can deadlock
-  if ever called on the Tk main thread.
+- **#37 worker cancel/pause/checkpoint — DONE in v1.3.5.** A cooperative
+  control channel now delivers cancel/pause/resume to the running worker
+  (a `worker-stdin` reader thread flips the in-flight task's flags); pause
+  truly halts, resume continues, and cancel flushes a resumable checkpoint
+  instead of killing the worker. Proven by `tests/core/test_worker_control.py`
+  + `tests/core/test_cancel_checkpoint.py` + `tools/e2e_cancel_pause.py`.
+  Residual (NOT addressed): `ensure_worker_ready(headless=True)` could
+  still deadlock if ever called on the Tk main thread — low risk (the
+  headless path is only invoked off the main thread today).
 - **Resource leaks (MED).** Killing a worker orphans its grandchild
   ffmpeg/demucs (no process-group/job-object kill); `partials/` grows
   unbounded (a killed worker leaves the checkpoint JSON + `.slice.wav`; no
@@ -185,9 +213,21 @@ the embed tree (v1.3.2+).** Both ship now. The PyInstaller Compact
 Download from:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
 
-## 3. v1.3.4 RELEASE — DONE (2026-05-25).
+## 3. RELEASES — v1.3.5 latest, DONE (2026-05-25).
 
-v1.3.4 is live on GitHub (Standard + Portable). Steps that ran:
+**v1.3.5** is live (Standard 219 MB + Portable 326 MB) and is the same
+slim build process below, plus: the live pause/cancel E2E
+(`tools/e2e_cancel_pause.py`) PASS, and **no prune** — `v1.3.4` and
+`v1.3.3` were kept on GitHub. v1.3.5's only build wrinkle vs v1.3.4: the
+build sanity check now also imports docx/reportlab (still "embed_import_ok").
+
+The detailed step log below is from **v1.3.4** and documents the
+identical pipeline (bump → build → compile → zip → e2e → publish). Follow
+it for the next release too, but **skip step 7 (no pruning)**.
+
+---
+
+v1.3.4 was live on GitHub (Standard + Portable). Steps that ran:
 
 1. ✅ Gate green: pyright `app/ core/` 0/0/0; hermetic suite (tests/ minus
    tests/smoke) exit 0.
@@ -255,8 +295,9 @@ Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
 
 ```
 origin/master                       (historical, untouched)
-origin/chore/cleanup-hardening      ← HEAD carries v1.3.4 (latest release)
-  tag v1.3.4                        ← the current release commit
+origin/chore/cleanup-hardening      ← HEAD carries v1.3.5 (latest release)
+  tag v1.3.5                        ← the current release commit
+  tag v1.3.4, v1.3.3                ← kept (no longer pruned)
   tag v1.0.3                        ← earlier release commit (7295872)
   tag archive/release-v0.7-baseline ← pre-orphan snapshot (recovery aid)
   tag v0.7.1, v0.7.0                ← historical releases
@@ -308,7 +349,7 @@ rebuild.
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Process model + threading |
 | [docs/CONFIG.md](CONFIG.md) | Every config key documented |
 | [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) | How to ship the next release |
-| [docs/RELEASE_NOTES_v1.3.4.md](RELEASE_NOTES_v1.3.4.md) | v1.3.4 user-facing notes (latest) |
+| [docs/RELEASE_NOTES_v1.3.5.md](RELEASE_NOTES_v1.3.5.md) | v1.3.5 user-facing notes (latest) |
 | [docs/CHANGELOG.md](CHANGELOG.md) | Full version history |
 | [docs/STABILITY_AUDIT_2026-05-23.md](STABILITY_AUDIT_2026-05-23.md) | Multi-day stability audit + the P1 punch list |
 | [CLAUDE.md](../CLAUDE.md) | Durable rules for any Claude Code session |
