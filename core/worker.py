@@ -87,6 +87,13 @@ def emit(event: str, **payload: Any) -> None:
 
 def main() -> int:
     setup_logging(load_config().get("log_level", "INFO"))
+    # Make on-demand-installed optional packages (stable-ts → torch)
+    # importable; alignment runs in THIS worker process.
+    try:
+        from .optional_deps import activate as _activate_extras
+        _activate_extras()
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("Worker starting (pid=%d)", os.getpid())
 
     def log_cb(message: str) -> None:

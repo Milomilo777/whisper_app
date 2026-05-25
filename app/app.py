@@ -153,6 +153,13 @@ class App(tk.Tk):
         # which build is running (title bar / taskbar / Alt-Tab).
         self._base_title = f"Whisper Project v{_APP_VERSION}"
         self.title(self._base_title)
+        # Make any on-demand-installed optional packages importable so
+        # feature-availability checks (e.g. stable-ts alignment) see them.
+        try:
+            from core.optional_deps import activate as _activate_extras
+            _activate_extras()
+        except Exception:  # noqa: BLE001
+            pass
         self._install_icon()
         # High-DPI scaling: pick up the system DPI so fonts and
         # paddings don't shrink to dollhouse size on 150 % displays.
