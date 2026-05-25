@@ -312,6 +312,21 @@ _EXTRACT_RE = re.compile(r"^\[ExtractAudio\] Destination:\s+(.+)$")
 _ALREADY_RE = re.compile(r"^\[download\] (.+) has already been downloaded$")
 
 
+def _utf8_subprocess_env() -> dict[str, str]:
+    """Env that forces the yt-dlp child to emit UTF-8 on stdout.
+
+    On Windows a child Python process defaults to the console/ANSI code
+    page, so a non-ASCII filename character (e.g. the U+2019 apostrophe in
+    a YouTube title) came back mojibake'd under our utf-8 decode. The
+    parsed saved_path then didn't match the real on-disk file, so the size
+    readout showed "(?)" and auto-transcribe hit "No such file".
+    """
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    return env
+
+
 def parse_progress_line(line: str) -> dict[str, Any] | None:
     """Parse one stdout line from yt-dlp.
 
@@ -933,6 +948,7 @@ class DownloadService:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_utf8_subprocess_env(),
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         wrote_files: list[str] = []
@@ -995,6 +1011,7 @@ class DownloadService:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=_utf8_subprocess_env(),
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
