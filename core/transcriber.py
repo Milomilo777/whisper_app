@@ -333,7 +333,18 @@ def get_duration(path: str) -> float:
             f"ffprobe failed (exit={r.returncode}) for {path}: "
             f"{r.stderr.strip() or 'no output'}"
         )
-    return float(r.stdout.strip())
+    raw = r.stdout.strip()
+    try:
+        duration = float(raw)
+    except ValueError:
+        # A corrupt-but-readable container can make ffprobe exit 0 and print
+        # "N/A". Treat as unknown duration (0.0) so transcription still runs
+        # — faster-whisper decodes the audio independently; only the
+        # progress %% is unavailable — instead of crashing with a raw
+        # "could not convert string to float: 'N/A'".
+        logger.warning("get_duration: non-numeric ffprobe output %r for %s", raw, path)
+        return 0.0
+    return duration if duration > 0 else 0.0
 
 
 def fmt(sec: float) -> str:
