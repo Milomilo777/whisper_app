@@ -16,12 +16,14 @@ freezes / nags, and makes the model-hub choice stick.
   yt-dlp's `/` precedence selected a video-only stream and the merged
   file had no audio. Each stream group is now parenthesized:
   `(video…)+(audio…)/best`.
-- **"Transcribe after download" froze the app.** The post-download
-  enqueue waited synchronously for the Whisper model to load on the Tk
-  main thread (up to the 120 s load timeout), freezing the whole UI. It
-  now spawns the worker and polls for readiness with `after()`, so the
-  app stays responsive and the transcription is queued once the model
-  is ready.
+- **Model-load froze the UI on several paths.** Three main-thread
+  enqueue paths — auto-transcribe-after-download, crash-resume
+  ("Resume interrupted transcriptions?" → Yes), and the watched
+  folder — waited synchronously for the Whisper model to load (up to
+  the 120 s timeout), freezing the whole app. They now share one
+  non-blocking helper that spawns the worker and polls for readiness
+  with `after()`, so the UI stays responsive and the task is queued
+  once the model is ready.
 - **The model hub folder you picked was ignored.** A `model_path`
   derived from the *default* hub during startup was being written to
   `config.json`, then treated on the next launch as an explicit

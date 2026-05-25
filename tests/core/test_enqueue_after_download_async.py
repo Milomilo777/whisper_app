@@ -18,6 +18,8 @@ import pytest
 
 pytest.importorskip("tkinter")
 
+from app.app import App
+
 
 class _FakeAfter:
     """Stand-in for tk.Misc.after — records callbacks, runs on demand."""
@@ -67,9 +69,12 @@ class _FakeApp:
     def refresh(self) -> None:
         self.refreshed += 1
 
+    # Bind the real helper so these tests exercise the actual scheduling
+    # logic that enqueue_transcription_from_download now delegates to.
+    _when_worker_ready = App._when_worker_ready
+
 
 def _call(app: _FakeApp) -> None:
-    from app.app import App
     App.enqueue_transcription_from_download(app, "/tmp/clip.mp4", "en")  # type: ignore[arg-type]
 
 

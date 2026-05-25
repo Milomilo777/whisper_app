@@ -1124,8 +1124,7 @@ class App(tk.Tk):
         never completes we drop the task rather than queue one that can
         never run.
         """
-        from app.services.transcription_service import HEADLESS_READY_TIMEOUT_S
-        svc = self.transcription_service
+        base = os.path.basename(file_path)
 
         def _enqueue() -> None:
             task = TranscriptionTask(file_path)
@@ -1134,31 +1133,53 @@ class App(tk.Tk):
             self.queue.append(task)
             self.refresh()
 
-        if svc.ready_workers():
-            _enqueue()
-            return
+        self._when_worker_ready(
+            _enqueue,
+            on_timeout=lambda: self.log(
+                f"Auto-transcribe skipped: model load timed out for {base}"
+            ),
+            loading_label=f"will transcribe {base} when ready.",
+        )
 
-        # No ready worker yet. Make sure one is loading — but don't
-        # spawn a second if one is already on its way (a parallel
-        # download could have started it) — then poll without blocking.
+    def _when_worker_ready(
+        self,
+        on_ready: Callable[[], None],
+        *,
+        on_timeout: Callable[[], None] | None = None,
+        loading_label: str = "",
+    ) -> None:
+        """Run ``on_ready`` on the Tk main thread once a transcription
+        worker is loaded, without blocking the event loop.
+
+        Every main-thread enqueue path (auto-transcribe-after-download,
+        crash-resume, watched-folder) used to call
+        ``ensure_worker_ready(headless=True)``, which blocks on a
+        ``threading.Event.wait`` for up to the model-load timeout. Those
+        handlers run on the Tk main thread, so a cold model load froze
+        the whole UI. This spawns a worker if none is alive and polls
+        for readiness with ``after()`` instead; ``on_timeout`` (if
+        given) runs when the load doesn't finish within the timeout.
+        """
+        from app.services.transcription_service import HEADLESS_READY_TIMEOUT_S
+        svc = self.transcription_service
+        if svc.ready_workers():
+            on_ready()
+            return
+        # Spawn a worker if none is alive yet — but don't spawn a second
+        # if one is already loading (a parallel path may have started it).
         if not svc.active_workers():
             svc.start_worker(temporary=False)
-            self.log(
-                f"Loading Whisper model — will transcribe "
-                f"{os.path.basename(file_path)} when ready."
-            )
-
+            if loading_label:
+                self.log(f"Loading Whisper model — {loading_label}")
         deadline = time.monotonic() + HEADLESS_READY_TIMEOUT_S
 
         def _await_ready() -> None:
             if svc.ready_workers():
-                _enqueue()
+                on_ready()
                 return
             if time.monotonic() >= deadline:
-                self.log(
-                    f"Auto-transcribe skipped: model load timed out for "
-                    f"{os.path.basename(file_path)}"
-                )
+                if on_timeout is not None:
+                    on_timeout()
                 return
             self.after(400, _await_ready)
 
@@ -1804,21 +1825,25 @@ class App(tk.Tk):
                         return
                 except Exception:  # noqa: BLE001
                     continue
-            # v1.0.3 — lazy model load. The watched-folder path runs
-            # without a user at the keyboard, so we use the headless
-            # ensure_worker_ready path (no modal, synchronous wait
-            # with timeout). If the wait fails we log + drop the
-            # file rather than enqueue a task that will never run.
-            if not self.transcription_service.ensure_worker_ready(self, headless=True):
-                self.log(
-                    f"Watched: skipped {os.path.basename(path)} — "
-                    f"model load timed out"
-                )
-                return
-            task = TranscriptionTask(path)
-            self.queue.append(task)
-            self.refresh()
-            self.log(f"Watched: enqueued {os.path.basename(path)}")
+            # Lazy model load without freezing the UI. The watched-folder
+            # tick runs on the Tk main thread, so a synchronous wait for
+            # the model would freeze the app; spawn + await the worker via
+            # after()-polling instead and enqueue once it's ready.
+            base = os.path.basename(path)
+
+            def _do_enqueue() -> None:
+                task = TranscriptionTask(path)
+                self.queue.append(task)
+                self.refresh()
+                self.log(f"Watched: enqueued {base}")
+
+            self._when_worker_ready(
+                _do_enqueue,
+                on_timeout=lambda: self.log(
+                    f"Watched: skipped {base} — model load timed out"
+                ),
+                loading_label=f"will transcribe {base} when ready.",
+            )
 
         try:
             aid = self.after(1200, lambda: _check_stable_then_enqueue(size1))
@@ -1883,39 +1908,42 @@ class App(tk.Tk):
             from core.transcriber import has_resumable_checkpoint
         except Exception:  # noqa: BLE001
             has_resumable_checkpoint = lambda _p: False  # type: ignore[assignment]
-        # v1.0.3 — lazy model load. Crash-resume runs without a user
-        # at the keyboard (it fires from a startup after()), so we
-        # use the headless ensure_worker_ready path. If the load
-        # times out, we don't enqueue: the rows stay flagged
-        # interrupted in history.db and the user can manually drag
-        # the file in later.
-        if not self.transcription_service.ensure_worker_ready(self, headless=True):
-            self.log(
+        # Lazy model load without freezing the UI. This fires from a
+        # startup after(), i.e. on the Tk main thread, so we spawn and
+        # await the worker via after()-polling instead of a synchronous
+        # wait (which froze the app while the model loaded). On timeout
+        # the rows stay flagged interrupted for a later attempt.
+        def _do_resume() -> None:
+            resumed = 0
+            for r in unique:
+                task = TranscriptionTask(r["file_path"])
+                lang = r.get("language") or ""
+                if lang and hasattr(task, "language"):
+                    task.language = lang  # type: ignore[attr-defined]
+                try:
+                    if has_resumable_checkpoint(r["file_path"]):
+                        task.resume = True
+                        resumed += 1
+                except Exception:  # noqa: BLE001
+                    pass
+                self.queue.append(task)
+            self.refresh()
+            if resumed:
+                self.log(
+                    f"Re-enqueued {n} interrupted transcription(s) "
+                    f"({resumed} will resume from checkpoint)"
+                )
+            else:
+                self.log(f"Re-enqueued {n} interrupted transcription(s)")
+
+        self._when_worker_ready(
+            _do_resume,
+            on_timeout=lambda: self.log(
                 f"Crash-resume skipped: model load timed out "
                 f"({n} task(s) not re-enqueued)"
-            )
-            return
-        resumed = 0
-        for r in unique:
-            task = TranscriptionTask(r["file_path"])
-            lang = r.get("language") or ""
-            if lang and hasattr(task, "language"):
-                task.language = lang  # type: ignore[attr-defined]
-            try:
-                if has_resumable_checkpoint(r["file_path"]):
-                    task.resume = True
-                    resumed += 1
-            except Exception:  # noqa: BLE001
-                pass
-            self.queue.append(task)
-        self.refresh()
-        if resumed:
-            self.log(
-                f"Re-enqueued {n} interrupted transcription(s) "
-                f"({resumed} will resume from checkpoint)"
-            )
-        else:
-            self.log(f"Re-enqueued {n} interrupted transcription(s)")
+            ),
+            loading_label=f"resuming {n} interrupted transcription(s) when ready.",
+        )
 
     def _install_icon(self) -> None:
         """Set the window-title-bar + taskbar icon from ``assets/whisper.ico``.
