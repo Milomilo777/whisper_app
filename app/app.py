@@ -766,11 +766,6 @@ class App(tk.Tk):
 
         footer = ttk.Frame(dlg, padding=(16, 4, 16, 14))
         footer.pack(fill="x")
-        ttk.Label(
-            footer,
-            text="Repository: https://github.com/Milomilo777/whisper_project_direct_download_v2",
-            foreground="#666",
-        ).pack(side="left")
         ttk.Button(footer, text="OK", command=dlg.destroy).pack(side="right")
 
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
