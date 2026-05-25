@@ -9,18 +9,35 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.2.0** (all committed + pushed) |
-| Version | pyproject = 1.2.0; `core.__version__` = 1.2.0; both `.iss` = 1.2.0 |
-| Last PUBLISHED release | **v1.2.0** on GitHub — built + smoke-tested + published 2026-05-25 |
-| GitHub releases now | `v1.2.0` (latest) + `basic-v0.1.0`; v1.1.0 + the old v0.6.0–v1.0.3 releases/tags were pruned |
-| Installed test copy | `C:\Temp\wp_v120_test` (silent-installed v1.2.0, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v120_test\python\pythonw.exe C:\Temp\wp_v120_test\gui.py` |
+| Branch | `chore/cleanup-hardening` — carries **v1.3.0** (all committed + pushed) |
+| Version | pyproject = 1.3.0; `core.__version__` = 1.3.0; both `.iss` = 1.3.0 |
+| Last PUBLISHED release | **v1.3.0** on GitHub — built + smoke-tested (installed tree) + published 2026-05-25 |
+| GitHub releases now | `v1.3.0` (latest) + `basic-v0.1.0`; v1.2.0 + earlier releases/tags were pruned |
+| Installed test copy | `C:\Temp\wp_v130_test` (silent-installed v1.3.0, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v130_test\python\pythonw.exe C:\Temp\wp_v130_test\gui.py`. (The older `C:\Temp\wp_v120_test` may still exist.) |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
-### What shipped in v1.2.0 (PUBLISHED 2026-05-25)
+### What shipped in v1.3.0 (PUBLISHED 2026-05-25)
+
+UX + reliability on top of v1.2.0. Full list: `docs/CHANGELOG.md` +
+`docs/RELEASE_NOTES_v1.3.0.md`. Headlines: **fixed auto-transcribe after
+a merged video+audio download** (the saved-path parser matched the
+yt-dlp-deleted audio fragment, so Shorts / reels silently failed to
+transcribe — now `select_saved_path` makes the merged file win); per-row
+**graphical progress bars** in both queues (`progress_cell`); the
+**version is now visible** (window title `_base_title` + a version-stamped
+installer shortcut via a `#define MyAppVersion` knob); the **Download row
+shows "transcribing" + live progress** after an auto-transcribe (linked
+via `TranscriptionTask.source_download` ↔
+`VideoDownloadTask.transcription_task`, flipped back in `finish_task`);
+the **"Last result" card** no longer expands to fill the Transcribe tab;
+and the **language picker resets to "Auto" every launch** (no longer
+persisted; other prefs still are).
+
+### What shipped in v1.2.0 (published 2026-05-25, now pruned from GitHub)
 
 UX + accessibility on top of v1.1.0. Full list: `docs/CHANGELOG.md` +
 `docs/RELEASE_NOTES_v1.2.0.md`. Headlines: app-wide copy/paste fix
@@ -71,35 +88,39 @@ Collaborator-driven UX + memory release on top of v1.0.2.
 
 See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
 
-## 3. v1.2.0 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
+## 3. v1.3.0 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
 
-The full pipeline ran green and v1.2.0 is live on GitHub. The installed
-copy at `C:\Temp\wp_v120_test` is KEPT for the user to test — do NOT
+The full pipeline ran green and v1.3.0 is live on GitHub. The installed
+copy at `C:\Temp\wp_v130_test` is KEPT for the user to test — do NOT
 uninstall/delete it. For reference, the steps (all COMPLETE) were:
 
-1. ✅ embed rebuild (`build_embed_installer.bat`) — "build complete".
-2. ✅ Installer compiled — the new stable `AppId` syntax compiled clean
-   → `dist_installer\WhisperProject-v1.2.0-Setup-Standard.exe` (~349 MB).
-3. ✅ Smoke E2E on the built tree — `2 passed, 1 skipped` (real
-   transcription works on the v1.2.0 embed build).
-4. ✅ Silent-installed to `C:\Temp\wp_v120_test` and KEPT. Launch:
-   `C:\Temp\wp_v120_test\python\pythonw.exe C:\Temp\wp_v120_test\gui.py`
-   (or Start-menu → "Whisper Project").
-5. ✅ Published — tag `v1.2.0` pushed + `gh release create` with the
-   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.2.0.md`.
-6. ✅ Pruned v1.1.0 (`gh release delete v1.1.0 --cleanup-tag --yes`) —
-   GitHub now has only `v1.2.0` + `basic-v0.1.0` (archive tags kept).
+1. ✅ embed rebuild (`build_embed_installer.bat`) — "embed_import_ok" /
+   "build complete".
+2. ✅ Installer compiled — the new `#define MyAppVersion` + version-stamped
+   shortcut compiled clean (569 s) →
+   `dist_installer\WhisperProject-v1.3.0-Setup-Standard.exe` (~349 MB).
+3. ✅ Smoke E2E on the built tree AND the installed tree — both
+   `2 passed, 1 skipped` (real transcription works on v1.3.0).
+4. ✅ Silent-installed to `C:\Temp\wp_v130_test` and KEPT. Launch:
+   `C:\Temp\wp_v130_test\python\pythonw.exe C:\Temp\wp_v130_test\gui.py`
+   (or Start-menu → "Whisper Project 1.3.0").
+5. ✅ Published — tag `v1.3.0` pushed + `gh release create` with the
+   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.0.md`.
+6. ✅ Pruned v1.2.0 (`gh release delete v1.2.0 --cleanup-tag --yes`) —
+   GitHub now has only `v1.3.0` + `basic-v0.1.0` (archive tags kept).
+7. **GUI-manual checks the user will do** (not automatable): the per-row
+   progress bars in both queues, the version in the title bar / shortcut,
+   the Download row reading "transcribing" with live progress after an
+   auto-transcribe (try a YouTube Short / reel with "Transcribe after
+   download" on), the smaller "Last result" card, and the language picker
+   starting at "Auto".
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
-`core/__init__.py` + `pyproject.toml` + both `.iss` files, then repeat
-steps 1–6. Use absolute paths via `cmd.exe` (a background cmd may not
-inherit cwd); `<REPO>` =
+`core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
+`.iss` reads `#define MyAppVersion`), then repeat steps 1–6. Use absolute
+paths via `cmd.exe` (a background cmd may not inherit cwd); `<REPO>` =
 `C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`.
 Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
-7. **GUI-manual checks the user will do** (not automatable): paste/copy
-   under a Persian layout, the right-click text menus, the log console
-   "Copy all", bulk multi-select queue actions, the queue scrollbar, the
-   model "Download now", "Open file" on a download, the About version.
 
 ### Deferred bug-audit items (`docs/AUDIT_2026-05-25_boundary_bugs.md`)
 - SMTV cancel-latency on a stalled socket + no-retry; a site-layout
