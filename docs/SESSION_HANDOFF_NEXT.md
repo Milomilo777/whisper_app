@@ -9,18 +9,58 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.3.1** (all committed + pushed) |
-| Version | pyproject = 1.3.1; `core.__version__` = 1.3.1; both `.iss` = 1.3.1 |
-| Last PUBLISHED release | **v1.3.1** on GitHub — built + smoke-tested (built + installed tree) + published 2026-05-25 |
-| GitHub releases now | `v1.3.1` (latest) + `basic-v0.1.0`; v1.3.0 + earlier releases/tags were pruned |
-| Installed test copy | `C:\Temp\wp_v131_test` (silent-installed v1.3.1, KEPT for the user — do NOT delete). Launch: `C:\Temp\wp_v131_test\python\pythonw.exe C:\Temp\wp_v131_test\gui.py`. (Older `wp_v130_test` / `wp_v120_test` may still exist.) |
+| Branch | `chore/cleanup-hardening` — carries **v1.3.2** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
+| Version | pyproject = 1.3.2; `core.__version__` = 1.3.2; both `.iss` = 1.3.2 |
+| Last PUBLISHED release | **v1.3.2** on GitHub — built + smoke-tested (embed E2E `2 passed, 1 skipped`) + #28 clip end-to-end verified; published 2026-05-25. NOTE: the user said "release, don't wait for the install test", so the silent-install + installed-tree smoke were SKIPPED this release. |
+| GitHub releases now | `v1.3.2` (latest) + `basic-v0.1.0`; v1.3.1 + earlier releases/tags were pruned |
+| Installed test copy | none built for v1.3.2 (skipped per user). The user installs the published EXE themselves. Older `wp_v131_test` / `wp_v130_test` may still exist. |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
-### What shipped in v1.3.1 (PUBLISHED 2026-05-25)
+### What shipped in v1.3.2 (PUBLISHED 2026-05-25)
+
+Security + features, after a second bug-hunt (4 more parallel shards:
+concurrency, resource-leaks, hostile-input, security). Full list:
+`docs/CHANGELOG.md` + `docs/RELEASE_NOTES_v1.3.2.md`. Headlines:
+**SECURITY** — yt-dlp option injection closed (a "-"-prefixed pasted URL
+could hit `--exec`; `"--"` end-of-options added in all 3 yt-dlp argv
+builders, regression-tested) + zip-slip guard on model-archive extract;
+**Transcribe-tab time range** (#28) — clip_timestamps through the worker,
+end-to-end verified (transcribed only 120–180s of a 10-min file, original
+timeline, progress→100%); **multi-site download error visibility** — the
+queue now shows yt-dlp's real ERROR line + a "Cookies from browser" hint
+for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
+**progress %% kept visible** during the startup marquee; a contributed
+**hub_folder/model_path** fix (collaborator commit 5b59fbc).
+
+### Still pending (next session)
+- **#37 worker cancel/pause/checkpoint (MED-HIGH).** cancel()/pause()
+  only mutate the parent-side task; the worker subprocess never receives
+  a cancel/pause over stdin, so pause() is a no-op on a running worker and
+  cancel works only by killing+restarting (the worker-side cancelled
+  checkpoint-flush is dead code → the partial checkpoint is lost on
+  cancel). Fix: send a real cancel/pause action over stdin, or document
+  pause as a no-op. Also `ensure_worker_ready(headless=True)` can deadlock
+  if ever called on the Tk main thread.
+- **Resource leaks (MED).** Killing a worker orphans its grandchild
+  ffmpeg/demucs (no process-group/job-object kill); `partials/` grows
+  unbounded (a killed worker leaves the checkpoint JSON + `.slice.wav`; no
+  startup sweep; declining crash-resume doesn't delete the JSON);
+  HistoryDB connection isn't closed in on_exit; demucs cache unbounded.
+- **#38 selector tuning** — the download selector already falls back to a
+  combined stream (`/best`) so it isn't YouTube-locked; the real fix
+  shipped is the ERROR SURFACING. Once a user retries Dailymotion on
+  v1.3.2 and the queue shows the actual error, fix that specific cause
+  (don't change the selector blind — risks the proven YouTube path).
+- **burn_subs filter escaping (MED, deferred)** — the SRT path injected
+  into ffmpeg's `subtitles=` filter escapes only `\` and `:`, not `'[],`;
+  a crafted on-disk filename could break out. Needs a burn-subs test
+  harness before changing (don't break normal paths).
+
+### What shipped in v1.3.1 (PUBLISHED 2026-05-25, now pruned from GitHub)
 
 Reliability bug-hunt on top of v1.3.0 (traced each UI action through the
 code + four parallel audit agents). Full list: `docs/CHANGELOG.md` +
@@ -122,33 +162,33 @@ Collaborator-driven UX + memory release on top of v1.0.2.
 
 See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
 
-## 3. v1.3.1 RELEASE — DONE (2026-05-25). Only GUI-manual checks remain.
+## 3. v1.3.2 RELEASE — DONE (2026-05-25).
 
-The full pipeline ran green and v1.3.1 is live on GitHub. The installed
-copy at `C:\Temp\wp_v131_test` is KEPT for the user to test — do NOT
-uninstall/delete it. For reference, the steps (all COMPLETE) were:
+v1.3.2 is live on GitHub. The user asked to "release, don't wait for the
+install test", so the silent-install + installed-tree smoke were SKIPPED
+(the build was still validated — see steps below). Steps that ran:
 
 1. ✅ embed rebuild (`build_embed_installer.bat`) — "embed_import_ok" /
    "build complete".
-2. ✅ Installer compiled clean (576 s) →
-   `dist_installer\WhisperProject-v1.3.1-Setup-Standard.exe` (~349 MB).
-3. ✅ Smoke E2E on the built tree AND the installed tree — both
-   `2 passed, 1 skipped` (real transcription works on v1.3.1).
-4. ✅ Silent-installed to `C:\Temp\wp_v131_test` and KEPT. Launch:
-   `C:\Temp\wp_v131_test\python\pythonw.exe C:\Temp\wp_v131_test\gui.py`
-   (or Start-menu → "Whisper Project 1.3.1").
-5. ✅ Published — tag `v1.3.1` pushed + `gh release create` with the
-   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.1.md`.
-6. ✅ Pruned v1.3.0 (`gh release delete v1.3.0 --cleanup-tag --yes`) —
-   GitHub now has only `v1.3.1` + `basic-v0.1.0` (archive tags kept).
-7. **GUI-manual checks the user will do** (not automatable) — the v1.3.1
-   fixes especially: download a video whose TITLE has an apostrophe /
-   accent / emoji with "Transcribe after download" on and confirm a
-   transcript is written; pick a NON-English language (e.g. Chinese,
-   Persian) and confirm it transcribes instead of failing; open the
-   video+subtitle viewer and confirm VLC now works (64-bit VLC was just
-   installed); cancel a download mid-transcribe; re-run a trimmed
-   download and confirm only the slice is fetched.
+2. ✅ Installer compiled clean (805 s) →
+   `dist_installer\WhisperProject-v1.3.2-Setup-Standard.exe` (~349 MB).
+   IMPORTANT: ISCC writes the EXE incrementally — wait for the "Successful
+   compile" line / a stable file size before publishing (a mid-write EXE
+   looks ~218 MB and would ship corrupt).
+3. ✅ Smoke E2E on the embed tree — `2 passed, 1 skipped`. Plus an
+   end-to-end #28 clip check (transcribed only 120–180s of a 10-min file;
+   segments on the original timeline; progress reached 100%).
+4. ⏭️ Silent-install + installed-tree smoke — SKIPPED (per user).
+5. ✅ Published — tag `v1.3.2` + `gh release create` with the
+   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.2.md`.
+6. ✅ Pruned v1.3.1 (`gh release delete v1.3.1 --cleanup-tag --yes`) —
+   GitHub now has only `v1.3.2` + `basic-v0.1.0` (archive tags kept).
+7. **GUI-manual checks for the user** (not automatable): the Transcribe
+   tab time-range (transcribe a slice of a long file); a download from a
+   non-YouTube site (the queue now shows the REAL error if it fails — feed
+   that error back for a precise fix); a login site (Facebook) → the
+   cookie hint; the progress %% visible during start-up; special-char /
+   non-English titles transcribing (the v1.3.1 fixes).
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
 `core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
