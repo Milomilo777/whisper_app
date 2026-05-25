@@ -166,6 +166,7 @@ Quality bars at v1.0.3:
 This project's own source code is licensed under the **BSD 3-Clause
 License** — see the [LICENSE](LICENSE) file for the full text.
 
-Bundled binaries (`ffmpeg`, `ffprobe`, `yt-dlp`) and the Whisper model
-are subject to their respective upstream licenses — see the corresponding
-upstream projects for terms.
+Bundled binaries (`ffmpeg`, `ffprobe`, `yt-dlp`), the bundled Python
+runtime + packages, and the Whisper model keep their own upstream
+licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for a
+summary and what to include when redistributing.
