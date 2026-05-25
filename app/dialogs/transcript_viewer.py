@@ -89,6 +89,44 @@ def _segment_min_probability(seg: dict[str, Any]) -> float | None:
     return min(probs)
 
 
+def _locate_vlc_dir() -> str | None:
+    """Best-effort path to an installed VLC dir that contains libvlc.dll.
+
+    python-vlc ctypes-loads libvlc.dll at *import* time; if VLC is
+    installed in a standard location that isn't on PATH the import fails
+    with OSError even though VLC is present (the user's "VLC says not
+    installed" report). Look it up via the registry + Program Files so the
+    import below can find it.
+    """
+    if os.name != "nt":
+        return None
+    candidates: list[str] = []
+    try:
+        import winreg  # type: ignore[import-not-found]
+
+        for flag in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\VideoLAN\VLC",
+                    0, winreg.KEY_READ | flag,
+                ) as key:
+                    install_dir, _ = winreg.QueryValueEx(key, "InstallDir")
+                    if install_dir:
+                        candidates.append(str(install_dir))
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    for env_var in ("PROGRAMW6432", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+        base = os.environ.get(env_var)
+        if base:
+            candidates.append(os.path.join(base, "VideoLAN", "VLC"))
+    for d in candidates:
+        if d and os.path.isfile(os.path.join(d, "libvlc.dll")):
+            return d
+    return None
+
+
 def _try_load_vlc() -> tuple[Any, str]:
     """Return ``(vlc_module_or_None, error_message)``.
 
@@ -98,17 +136,28 @@ def _try_load_vlc() -> tuple[Any, str]:
     subclass of OSError) at import time when libvlc.dll is
     missing on Windows — catch both.
     """
+    # Point python-vlc at a standard VLC install before importing, so an
+    # installed-but-not-on-PATH VLC is still found.
+    vlc_dir = _locate_vlc_dir()
+    if vlc_dir:
+        os.environ.setdefault("PYTHON_VLC_LIB_PATH", os.path.join(vlc_dir, "libvlc.dll"))
+        os.environ.setdefault("PYTHON_VLC_MODULE_PATH", os.path.join(vlc_dir, "plugins"))
+        try:
+            os.add_dll_directory(vlc_dir)  # type: ignore[attr-defined]
+        except (OSError, AttributeError):
+            pass
     try:
         import vlc  # type: ignore[import-not-found]
     except ImportError as e:
         return None, f"python-vlc binding not installed: {e}"
     except OSError:
-        # libvlc.dll not on PATH — the python-vlc import itself
-        # ctypes-loads the native library and dies here.
+        # libvlc.dll not loadable — either VLC isn't installed, or it's the
+        # wrong architecture (this app is 64-bit, so it needs 64-bit VLC).
         return None, (
-            "VLC media player isn't installed on this system "
-            "(libvlc.dll not found). Install VLC to enable embedded "
-            "playback. The viewer still works in read-only mode."
+            "VLC media player isn't installed (or is the 32-bit build — "
+            "this app is 64-bit and needs the 64-bit VLC). Install the "
+            "64-bit VLC to enable embedded playback. The viewer still "
+            "works in read-only mode."
         )
     try:
         inst = vlc.Instance()
@@ -117,9 +166,10 @@ def _try_load_vlc() -> tuple[Any, str]:
         return vlc, ""
     except Exception:  # noqa: BLE001
         return None, (
-            "VLC media player isn't installed on this system "
-            "(libvlc.dll not found). Install VLC to enable embedded "
-            "playback. The viewer still works in read-only mode."
+            "VLC loaded but could not start (its plugins may be missing or "
+            "the architecture doesn't match — this app is 64-bit). "
+            "Reinstall the 64-bit VLC to enable embedded playback. The "
+            "viewer still works in read-only mode."
         )
 
 
