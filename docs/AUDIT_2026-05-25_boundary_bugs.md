@@ -66,10 +66,15 @@ Status legend: **FIXED** (in v1.0.4) · **DEFER** (real, queued) ·
   `Event.wait(120 s)` on the Tk main thread as the original bug. All
   three paths now share `App._when_worker_ready`, an `after()`-polling
   helper that never blocks the loop.
-- **FIXED (v1.0.4)** `HardwareWizard._reprobe` → `probe_tiers()` ran
-  synchronous `torch` / `onnxruntime` / `openvino` imports on the main
-  thread (Advanced → "Re-detect hardware"), a seconds-long stall. Now
-  threaded with a `post_to_main` bounce-back, mirroring the benchmark.
+- **DEFER (async attempt reverted)** `HardwareWizard._reprobe` →
+  `probe_tiers()` runs synchronous `torch` / `onnxruntime` / `openvino`
+  imports on the main thread (Advanced → "Re-detect hardware"), a
+  seconds-long stall. Threading it was tried and reverted: an async
+  probe leaves the wizard's tree empty at construction, breaking the
+  synchronous contract that `test_hardware_wizard_constructs_without_crashing`
+  (and the real open→Save flow) depends on. A proper fix must thread the
+  probe AND update that test to pump the loop / await the result. Low
+  priority — the stall only hits the optional "Re-detect" button.
 
 ### Class B — config persistence
 - **FIXED (v1.0.4)** `download_folder` had the same trap that
@@ -117,9 +122,10 @@ change blindly — the time-range feature is shipped and E2E-tested.
 
 ## 4. Landed in v1.0.4
 Original four bugs + the two extra freeze sites (Class A) + the
-download-folder persistence trap (Class B) + the hardware-probe stall
-(Class A). Still queued: worker-lifecycle hardening (Class D items 2–3)
-and the download-row stats skew (D1); Class C is gated on a real
+download-folder persistence trap (Class B) + the truncated-SMTV-download
+fix (round 2). Still queued: the hardware-probe stall (async attempt
+reverted — see Class A above), worker-lifecycle hardening (Class D items
+2–3), and the download-row stats skew (D1); Class C is gated on a real
 yt-dlp/ffprobe verification harness.
 
 ## 5. Recommended follow-ups (highest value first)

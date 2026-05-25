@@ -55,9 +55,6 @@ age-gated YouTube Shorts) can download.
   permanently. The cleared value is no longer persisted while the drive
   is merely unmounted — the folder returns when the drive does. (Same
   class as the `model_path` fix above.)
-- **"Re-detect hardware" briefly froze the wizard.** The accelerator
-  probe (which imports torch / onnxruntime) ran on the UI thread; it
-  now runs off-thread and fills the table in when done.
 - **A truncated Supreme Master TV download was treated as success.** If
   the CDN dropped the connection mid-transfer, the partial file was
   renamed to the final name and auto-transcribed — a clean-looking but

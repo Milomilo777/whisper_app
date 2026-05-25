@@ -110,8 +110,7 @@ class HardwareWizard(tk.Toplevel):
 
         tools = ttk.Frame(body)
         tools.pack(fill="x", pady=(8, 4))
-        self.reprobe_btn = ttk.Button(tools, text="Re-probe", command=self._reprobe)
-        self.reprobe_btn.pack(side="left")
+        ttk.Button(tools, text="Re-probe", command=self._reprobe).pack(side="left")
         self.bench_btn = ttk.Button(
             tools, text=f"Run {_BENCHMARK_SECONDS} s benchmark",
             command=self._run_benchmark,
@@ -130,46 +129,12 @@ class HardwareWizard(tk.Toplevel):
     # ---------- behaviour ----------------------------------------------
 
     def _reprobe(self) -> None:
-        """Re-run the hardware probe off the main thread and refresh.
-
-        ``probe_tiers()`` imports torch / onnxruntime / openvino, which
-        can take several seconds on a cold cache. Running it on the Tk
-        main thread froze the wizard (and its parent) while probing — so
-        we thread it and bounce the result back via the App's
-        main-thread queue, mirroring the benchmark.
-        """
+        """Re-run the probe and refresh the table."""
         try:
-            self.reprobe_btn.state(["disabled"])
-        except tk.TclError:
-            pass
-        self.status_var.set("Detecting hardware…")
-        threading.Thread(target=self._reprobe_worker, daemon=True).start()
-
-    def _reprobe_worker(self) -> None:
-        try:
-            tiers = _hw.probe_tiers()
+            self._tiers = _hw.probe_tiers()
         except Exception as e:  # noqa: BLE001
             logger.exception("Hardware probe failed: %s", e)
-            try:
-                tiers = _hw._probe_cpu()
-            except Exception:  # noqa: BLE001
-                tiers = []
-        if self.app is not None:
-            self.app.post_to_main(lambda: self._reprobe_done(tiers))
-        else:
-            # Standalone / test: no App main-thread queue — fall back to
-            # the after() hop (fine on CPython 3.13 and earlier).
-            try:
-                self.after(0, lambda: self._reprobe_done(tiers))
-            except Exception:  # noqa: BLE001
-                logger.exception("Re-probe done callback failed to schedule")
-
-    def _reprobe_done(self, tiers: "list[_hw.Tier]") -> None:
-        try:
-            self.reprobe_btn.state(["!disabled"])
-        except tk.TclError:
-            return  # wizard closed mid-probe
-        self._tiers = tiers
+            self._tiers = _hw._probe_cpu()
         self._refresh_tree()
         if not self._tiers:
             self.status_var.set("No tier detected — falling back to CPU.")
