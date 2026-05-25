@@ -216,6 +216,12 @@ v1.3.4 is live on GitHub (Standard + Portable). Steps that ran:
    both assets `state=uploaded`, sizes match local.
 7. ✅ Pruned v1.3.3 (`gh release delete v1.3.3 --cleanup-tag --yes`) —
    GitHub now has only `v1.3.4` + `basic-v0.1.0` (archive tags kept).
+   **POLICY CHANGE (2026-05-25): this was the LAST prune.** Right after
+   v1.3.4 shipped the user said "از این به بعد نسخه‌های قدیمی را پاک نکن" —
+   do NOT delete old releases going forward. Future releases publish the
+   new version and **leave every prior release + tag in place**. (The
+   pruned v1.3.3 local artefacts still sit under `dist_installer/` if the
+   user ever wants v1.3.3 re-published.)
 8. **GUI-manual checks for the user** (not automatable): pick docx in
    Advanced settings → confirm a .docx lands next to the media; select
    Word-timestamp alignment → confirm the on-demand download prompt appears
@@ -225,7 +231,8 @@ v1.3.4 is live on GitHub (Standard + Portable). Steps that ran:
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
 `core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
-`.iss` reads `#define MyAppVersion`), then repeat steps 1–7. Use absolute
+`.iss` reads `#define MyAppVersion`), then repeat steps 1–6 (NOT step 7 —
+do NOT prune old releases anymore; keep every prior version). Use absolute
 paths via `cmd.exe` (a background cmd may not inherit cwd); `<REPO>` =
 `C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`.
 Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
