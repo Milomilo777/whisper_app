@@ -4,6 +4,46 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-05-25
+
+Reliability release — a focused bug-hunt (tracing each UI action through
+the code, four parallel audits) on top of v1.3.0.
+
+### Fixed
+
+- **Auto-transcribe after a download silently produced no transcript when
+  the title had a non-ASCII character** (apostrophe, accent, emoji, CJK).
+  yt-dlp wrote stdout in the Windows code page, so the saved path came back
+  mojibake'd and didn't match the real file. Now forces UTF-8 output, plus
+  a **self-healing fallback** that finds the actual downloaded file when
+  the parsed path is wrong — so even an unheard-of character can't lose the
+  transcript.
+- **Picking a non-English language crashed transcription with no output.**
+  A region tag ("en-US") or a multi-value picker code ("zh-Hans,zh-CN",
+  "pt,pt-BR,pt-PT", "he,iw") was passed straight to faster-whisper, which
+  rejected it. Language hints are now normalized to a base ISO code on
+  every transcription path.
+- **The viewer said "VLC isn't installed" when VLC was installed.** It now
+  locates VLC via the registry / Program Files, and the message spells out
+  that a 64-bit VLC is required (a 32-bit VLC can't load into the 64-bit
+  app).
+- **Cancelling a download that had moved on to transcribing** left the
+  transcription running and silently undid the cancel; **re-running a
+  time-range download** fetched the full video. Both fixed.
+- **Optional features no longer crash the app on probe.** Speaker
+  diarization / alternate engines that fail to load a native library now
+  just show as unavailable instead of taking the app down.
+- **The Transcribe tab rejects a missing / mistyped file** with a clear
+  message instead of failing deep in the worker.
+
+### Added
+
+- **An animated "working" bar** in the queue while a task is starting up
+  (model load) so it's clear something is happening before the percentage
+  begins.
+- **The download time-range Start / End fields are pre-filled with
+  0:00:00** so they're easier to edit (leaving both = the full video).
+
 ## [1.3.0] — 2026-05-25
 
 UX + reliability release on top of v1.2.0 — bug fixes and visibility
