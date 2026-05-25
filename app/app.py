@@ -1199,6 +1199,14 @@ class App(tk.Tk):
         item = self.tree.identify_row(e.y)
         if not item:
             return
+        sel = self.tree.selection()
+        # If the right-clicked row is part of a multi-row selection, act
+        # on the whole selection (bulk) rather than resetting to one row.
+        if item in sel and len(sel) > 1:
+            tasks = [t for t in (self.row_map.get(i) for i in sel) if t]
+            if tasks:
+                self._bulk_task_menu(tasks, e)
+            return
         self.tree.selection_set(item)
         task = self.row_map.get(item)
         if not task:
@@ -1256,6 +1264,12 @@ class App(tk.Tk):
         item = self.download_tree.identify_row(e.y)
         if not item:
             return
+        sel = self.download_tree.selection()
+        if item in sel and len(sel) > 1:
+            tasks = [t for t in (self.download_row_map.get(i) for i in sel) if t]
+            if tasks:
+                self._bulk_download_menu(tasks, e)
+            return
         task = self.download_row_map.get(item)
         if not task:
             return
@@ -1275,6 +1289,89 @@ class App(tk.Tk):
             )
             m.add_command(label="Re-run", command=lambda: self._rerun_download(task))
             m.add_command(label="Remove", command=lambda: self.remove_download(task))
+        m.tk_popup(e.x_root, e.y_root)
+
+    # --- bulk (multi-select) queue actions -----------------------------------
+    def _bulk_apply(self, tasks: list[Any], fn: Callable[[Any], Any]) -> None:
+        for t in list(tasks):
+            try:
+                fn(t)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _resumable_tasks(self, tasks: list[Any]) -> list[Any]:
+        try:
+            from core.transcriber import has_resumable_checkpoint
+        except Exception:  # noqa: BLE001
+            return []
+        out: list[Any] = []
+        for t in tasks:
+            if getattr(t, "status", "") == "cancelled":
+                try:
+                    if has_resumable_checkpoint(t.file_path):
+                        out.append(t)
+                except Exception:  # noqa: BLE001
+                    pass
+        return out
+
+    def _bulk_rerun(self, tasks: list[Any]) -> None:
+        if not self.transcription_service.ensure_worker_ready(self):
+            self.log("Re-run cancelled: model load was cancelled")
+            return
+        for t in tasks:
+            nt = TranscriptionTask(t.file_path)
+            if getattr(t, "language", None):
+                nt.language = t.language
+            self.queue.append(nt)
+        self.refresh()
+
+    def _bulk_resume(self, tasks: list[Any]) -> None:
+        if not self.transcription_service.ensure_worker_ready(self):
+            self.log("Resume cancelled: model load was cancelled")
+            return
+        for t in tasks:
+            nt = TranscriptionTask(t.file_path)
+            if getattr(t, "language", None):
+                nt.language = t.language
+            nt.resume = True
+            nt.cancelled = False
+            self.queue.append(nt)
+        self.refresh()
+
+    def _bulk_task_menu(self, tasks: list[Any], e: tk.Event) -> None:
+        active = [t for t in tasks if t.status in ("waiting", "running", "paused")]
+        terminal = [t for t in tasks if t.status in ("finished", "cancelled", "error")]
+        if not active and not terminal:
+            return
+        m = tk.Menu(self, tearoff=0)
+        if active:
+            m.add_command(label=f"Cancel selected ({len(active)})",
+                          command=lambda ts=active: self._bulk_apply(ts, self.cancel))
+        if terminal:
+            m.add_command(label=f"Re-run selected ({len(terminal)})",
+                          command=lambda ts=terminal: self._bulk_rerun(ts))
+            resumable = self._resumable_tasks(terminal)
+            if resumable:
+                m.add_command(label=f"Resume selected ({len(resumable)})",
+                              command=lambda ts=resumable: self._bulk_resume(ts))
+            m.add_command(label=f"Remove selected ({len(terminal)})",
+                          command=lambda ts=terminal: self._bulk_apply(ts, self.remove_task))
+        m.tk_popup(e.x_root, e.y_root)
+
+    def _bulk_download_menu(self, tasks: list[Any], e: tk.Event) -> None:
+        active = [t for t in tasks if t.status in ("waiting", "running")]
+        terminal = [t for t in tasks if t.status in ("finished", "cancelled", "error")]
+        if not active and not terminal:
+            return
+        m = tk.Menu(self, tearoff=0)
+        if active:
+            m.add_command(label=f"Cancel selected ({len(active)})",
+                          command=lambda ts=active: self._bulk_apply(ts, self.cancel_download))
+        if terminal:
+            m.add_command(label=f"Re-run selected ({len(terminal)})",
+                          command=lambda ts=terminal: self._bulk_apply(ts, self._rerun_download))
+            m.add_command(label=f"Remove selected ({len(terminal)})",
+                          command=lambda ts=terminal: self._bulk_apply(ts, self.remove_download))
         m.tk_popup(e.x_root, e.y_root)
 
     def _open_folder(self, folder: str) -> None:
