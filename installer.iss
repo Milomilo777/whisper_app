@@ -14,7 +14,8 @@
 AppId={{734B46B9-5E70-4C4E-8833-0A7506A64376}
 AppName=SMTV Whisper Project
 AppVersion=1.3.5
-AppPublisher=smtv.bot@Gmail.com
+AppPublisher=translation-robot
+AppPublisherURL=https://github.com/translation-robot
 DefaultDirName={autopf}\WhisperProject
 DefaultGroupName=Whisper Project
 OutputBaseFilename=WhisperProject-v1.3.5-Setup-Compact

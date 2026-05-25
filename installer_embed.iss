@@ -20,7 +20,8 @@
 AppId={{734B46B9-5E70-4C4E-8833-0A7506A64376}
 AppName=Whisper Project
 AppVersion={#MyAppVersion}
-AppPublisher=Whisper Project
+AppPublisher=translation-robot
+AppPublisherURL=https://github.com/translation-robot
 DefaultDirName={autopf}\WhisperProject
 DefaultGroupName=Whisper Project
 OutputBaseFilename=WhisperProject-v{#MyAppVersion}-Setup-Standard

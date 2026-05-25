@@ -791,6 +791,19 @@ class App(tk.Tk):
         footer = ttk.Frame(dlg, padding=(16, 4, 16, 14))
         footer.pack(fill="x")
         ttk.Button(footer, text="OK", command=dlg.destroy).pack(side="right")
+        # Author credit — the project was written by translation-robot.
+        credit = ttk.Label(
+            footer,
+            text="Created by translation-robot — github.com/translation-robot",
+            foreground="#1a6fb5", cursor="hand2",
+        )
+        credit.pack(side="left")
+
+        def _open_author(_e: object) -> None:
+            import webbrowser
+            webbrowser.open("https://github.com/translation-robot")
+
+        credit.bind("<Button-1>", _open_author)
 
         dlg.bind("<Escape>", lambda _e: dlg.destroy())
         dlg.update_idletasks()

@@ -161,6 +161,10 @@ Quality bars at v1.0.3:
 
 ---
 
+## Author
+
+Written by **translation-robot** — <https://github.com/translation-robot>.
+
 ## License
 
 This project's own source code is licensed under the **BSD 3-Clause
