@@ -73,7 +73,9 @@ def runtime_available() -> bool:
     """True iff sherpa_onnx imports cleanly."""
     try:
         import sherpa_onnx  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
+    except Exception:  # noqa: BLE001 — a wrong-arch / missing native DLL
+        # raises OSError/RuntimeError at import, not ImportError (the VLC
+        # bug class); a probe must degrade to "unavailable", never crash.
         return False
     return True
 
@@ -238,7 +240,17 @@ def _load_audio_as_float32(audio_path: str) -> tuple[Any, int]:
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    proc = subprocess.run(cmd, **kwargs)
+    try:
+        proc = subprocess.run(cmd, **kwargs)
+    except (FileNotFoundError, OSError) as e:
+        # bundled_binary falls back to the bare "ffmpeg" name when the
+        # binary isn't in the frozen bin/ tree; without ffmpeg this raises
+        # before check= fires. Surface a clean error instead of crashing
+        # the worker with a raw traceback.
+        raise RuntimeError(
+            "ffmpeg is required to decode audio for the Parakeet backend "
+            "but was not found. Use the default engine, or install ffmpeg."
+        ) from e
     arr = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
     return arr, 16000
 

@@ -46,7 +46,9 @@ def is_available() -> bool:
     """True iff pywhispercpp imports cleanly. Doesn't check the model file."""
     try:
         import pywhispercpp  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
+    except Exception:  # noqa: BLE001 — a wrong-arch / missing native DLL
+        # raises OSError/RuntimeError at import, not ImportError; a probe
+        # must degrade to "unavailable", never crash.
         return False
     return True
 

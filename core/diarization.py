@@ -54,7 +54,8 @@ def is_available() -> bool:
     """
     try:
         import sherpa_onnx  # type: ignore[import-untyped] # noqa: F401
-    except ImportError:
+    except Exception:  # noqa: BLE001 — wrong-arch / missing native DLL can
+        # raise OSError/RuntimeError, not ImportError (the VLC bug class).
         return False
     return all(
         os.path.isfile(_model_path(f)) for f in (SEGMENTATION_MODEL, EMBEDDING_MODEL)
@@ -65,7 +66,7 @@ def availability_reason() -> str:
     """Human-readable reason diarization isn't available, or ``""`` if it is."""
     try:
         import sherpa_onnx  # type: ignore[import-untyped] # noqa: F401
-    except ImportError:
+    except Exception:  # noqa: BLE001 — see is_available()
         return "sherpa-onnx Python package not installed"
     for f in (SEGMENTATION_MODEL, EMBEDDING_MODEL):
         if not os.path.isfile(_model_path(f)):
