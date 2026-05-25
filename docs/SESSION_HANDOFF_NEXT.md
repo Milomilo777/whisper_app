@@ -9,12 +9,12 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.3.5** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
+| Branch | `master` — **the single mainline** (2026-05-25: `chore/cleanup-hardening` + `basic-edition` were folded into master and deleted; tips kept as tags `archive/cleanup-hardening-final` / `archive/basic-edition`). Carries **v1.3.5**, all committed + pushed. |
 | Version | pyproject = 1.3.5; `core.__version__` = 1.3.5; both `.iss` = 1.3.5 |
 | Last PUBLISHED release | **v1.3.5** on GitHub (Standard + Portable) — real Pause/Resume/Cancel + a five-shard post-slim audit pass; built + slim past-bug E2E PASS + a live pause/resume/cancel E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-25. |
 | GitHub releases now | `v1.3.5` (latest) + `v1.3.4` + `v1.3.3` + `basic-v0.1.0` — **old releases are now KEPT, not pruned** (user decision 2026-05-25; see §3). |
 | Installed test copy | none built for v1.3.5 (validated by the past-bug E2E `tools/e2e_slim_pastbugs.py` + the pause/cancel E2E `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
-| Default GitHub branch | `master` (untouched) |
+| Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
@@ -294,35 +294,38 @@ Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
 ## 4. Branch + tag map
 
 ```
-origin/master                       (historical, untouched)
-origin/chore/cleanup-hardening      ← HEAD carries v1.3.5 (latest release)
+origin/master                       ← THE single branch; HEAD; carries v1.3.5
   tag v1.3.5                        ← the current release commit
-  tag v1.3.4, v1.3.3                ← kept (no longer pruned)
+  tag v1.3.4, v1.3.3                ← kept (releases are never pruned)
   tag v1.0.3                        ← earlier release commit (7295872)
+  tag archive/cleanup-hardening-final ← old chore/cleanup-hardening tip (= master now)
+  tag archive/basic-edition         ← old basic-edition tip (998 tests + downloads)
+  tag archive/master-pre-merge      ← old (pre-2026-05-25) master Session-9 lineage
   tag archive/release-v0.7-baseline ← pre-orphan snapshot (recovery aid)
   tag v0.7.1, v0.7.0                ← historical releases
 ```
 
-The `chore/cleanup-hardening` branch is an **orphan** — its git
-history begins with a single squashed commit (no parents). The
-full prior history is preserved at `master` + the archive tag,
-never lost.
+master's current history is the former `chore/cleanup-hardening` orphan
+lineage (a squashed base + the v1.0.3 → v1.3.5 commits) — that's the
+preserved project progress. The superseded pre-merge master (Session-9
+era) and the deleted branches all live on as the `archive/*` tags above,
+so nothing was lost.
 
 ## 5. The 1-line restart prompt
 
 ```
-Read docs/SESSION_HANDOFF_NEXT.md first, then continue on the chore/cleanup-hardening branch. Don't touch master. Don't force-push (v1.0.3 is public).
+Read docs/SESSION_HANDOFF_NEXT.md first, then continue on master (the single mainline). Normal pushes to master are fine; don't force-push / rewrite master and don't move or delete published release tags (v1.0.3+ are public) without an explicit ask.
 ```
 
 ## 6. Forbidden actions (durable; mirrors CLAUDE.md)
 
-- Don't merge to master
-- Don't checkout master
-- Don't push to master
+- Don't `git push --force` / rewrite history on `master` (without an
+  explicit ask) — normal pushes are fine now that master is the mainline
+- Don't move or delete a **published release tag** (`v1.0.3`+ are public;
+  moving them invalidates downloaded artefacts)
+- Don't delete old GitHub releases — keep every version (2026-05-25)
 - Don't touch `.git/config`
 - Don't code-sign the EXE
-- Don't `git push --force` (v1.0.3 is public; force-pushing would
-  invalidate the user's downloaded artefacts)
 
 ## 7. Sanity-check commands for the next session
 
