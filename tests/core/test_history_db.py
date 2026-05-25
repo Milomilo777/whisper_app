@@ -109,6 +109,36 @@ def test_dismiss_interrupted_is_noop_for_empty_and_non_interrupted(db):
     assert db.list_transcriptions()[0]["status"] == "finished"
 
 
+def test_dismiss_interrupted_only_flips_interrupted_among_mixed_states(db):
+    a = db.insert_transcription("/tmp/a.wav")
+    db.mark_interrupted()                       # a -> interrupted
+    b = db.insert_transcription("/tmp/b.wav")   # stays running
+    fin = db.insert_transcription("/tmp/c.wav")
+    db.finish_transcription(fin, "finished")
+    # Pass a mix: interrupted + running + finished + a nonexistent id.
+    touched = db.dismiss_interrupted_transcriptions([a, b, fin, 9999])
+    assert touched == 1
+    st = {r["id"]: r["status"] for r in db.list_transcriptions()}
+    assert st[a] == "cancelled"
+    assert st[b] == "running"
+    assert st[fin] == "finished"
+
+
+def test_dismiss_interrupted_handles_duplicate_ids(db):
+    a = db.insert_transcription("/tmp/a.wav")
+    db.mark_interrupted()
+    assert db.dismiss_interrupted_transcriptions([a, a, a]) == 1
+    assert db.list_transcriptions()[0]["status"] == "cancelled"
+
+
+def test_dismiss_interrupted_second_call_is_noop(db):
+    a = db.insert_transcription("/tmp/a.wav")
+    db.mark_interrupted()
+    assert db.dismiss_interrupted_transcriptions([a]) == 1
+    # Row is now 'cancelled', no longer 'interrupted' -> nothing to do.
+    assert db.dismiss_interrupted_transcriptions([a]) == 0
+
+
 def test_stats_basic_counts(db):
     a = db.insert_download("https://a")
     db.finish_download(a, "finished", output_paths=["/tmp/a.mp4"])

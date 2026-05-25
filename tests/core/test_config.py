@@ -104,6 +104,87 @@ def test_save_preserves_custom_model_path(isolated_dirs, monkeypatch):
     assert on_disk["model_path"] == custom
 
 
+def test_persistable_model_path_strips_trailing_and_redundant_separators(isolated_dirs):
+    """A hand-edited model_path equal to the hub-derived path but with a
+    trailing / doubled / dotted separator is still recognised as derived
+    and dropped to ''."""
+    from core import hub as _hub
+    hub_folder = str(isolated_dirs / "hub")
+    name = cfg.DEFAULT_CONFIG["model"]["name"]
+    base = str(_hub.model_folder_for(hub_folder, name))
+    for variant in (base + os.sep, base + os.sep * 2, os.path.join(base, ".", "")):
+        config = dict(cfg.DEFAULT_CONFIG)
+        config["hub_folder"] = hub_folder
+        config["model_path"] = variant
+        assert cfg._persistable_model_path(config) == "", variant
+
+
+def test_persistable_model_path_recognises_verbatim_models_prefix(isolated_dirs):
+    """A model name already starting with 'models--' is used verbatim by
+    model_folder_for; the derived path must still be recognised."""
+    from core import hub as _hub
+    hub_folder = str(isolated_dirs / "hub")
+    name = "models--Systran--faster-whisper-medium"
+    config = dict(cfg.DEFAULT_CONFIG)
+    config["model"] = {"name": name}
+    config["hub_folder"] = hub_folder
+    config["model_path"] = str(_hub.model_folder_for(hub_folder, name))
+    assert cfg._persistable_model_path(config) == ""
+
+
+def test_persistable_model_path_preserves_path_for_a_different_model(isolated_dirs):
+    """A model_path under the hub but for a DIFFERENT model than the one
+    configured is a real explicit folder and must be preserved."""
+    from core import hub as _hub
+    hub_folder = str(isolated_dirs / "hub")
+    other = str(_hub.model_folder_for(hub_folder, "faster-whisper-tiny"))
+    config = dict(cfg.DEFAULT_CONFIG)  # configured model is large-v3
+    config["hub_folder"] = hub_folder
+    config["model_path"] = other
+    assert cfg._persistable_model_path(config) == other
+
+
+def test_persistable_model_path_defaults_name_when_model_key_missing(isolated_dirs):
+    """A config with no usable 'model' dict falls back to 'whisper-model';
+    the matching derived path is still recognised."""
+    from core import hub as _hub
+    hub_folder = str(isolated_dirs / "hub")
+    config = {
+        "hub_folder": hub_folder,
+        "model": None,
+        "model_path": str(_hub.model_folder_for(hub_folder, "whisper-model")),
+    }
+    assert cfg._persistable_model_path(config) == ""
+
+
+def test_save_load_model_path_converges(isolated_dirs, monkeypatch):
+    """Repeated save/load cycles must not flap model_path: once the hub
+    is chosen every cycle re-derives the same path and persists ''."""
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    user_hub = str(isolated_dirs / "hub")
+    config = cfg.load_config()
+    config["hub_folder"] = user_hub
+    cfg.save_config(config)
+    first = cfg.load_config()
+    cfg.save_config(first)
+    second = cfg.load_config()
+    assert first["model_path"] == second["model_path"]
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["model_path"] == ""
+
+
+@pytest.mark.skipif(os.name != "nt", reason="normcase only folds case on Windows")
+def test_persistable_model_path_is_case_insensitive_on_windows(isolated_dirs):
+    from core import hub as _hub
+    hub_folder = str(isolated_dirs / "Hub")
+    name = cfg.DEFAULT_CONFIG["model"]["name"]
+    derived = str(_hub.model_folder_for(hub_folder, name))
+    config = dict(cfg.DEFAULT_CONFIG)
+    config["hub_folder"] = hub_folder
+    config["model_path"] = derived.upper()
+    assert cfg._persistable_model_path(config) == ""
+
+
 def test_load_corrupt_json_falls_back(isolated_dirs, monkeypatch):
     monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
     Path(cfg.config_path()).write_text("{not valid json", encoding="utf-8")

@@ -93,6 +93,37 @@ def test_build_download_command_video_uses_neutral_selectors_for_webm():
     assert "ext=mp4" not in f
 
 
+def test_build_download_command_groups_video_audio_selectors_mp4():
+    """Regression for the missing-audio bug. The merge selector MUST wrap
+    each stream group in parentheses; without them yt-dlp parses '/' at
+    a higher level than '+', picks the first video-only candidate, and
+    the merged file ends up silent."""
+    task = _task(output="mp4")
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    f = cmd[cmd.index("-f") + 1]
+    assert f == (
+        "(bv*[ext=mp4]/bestvideo[ext=mp4]/bv*/bestvideo)"
+        "+(ba[ext=m4a]/bestaudio[ext=m4a]/ba/bestaudio)/best"
+    )
+
+
+def test_build_download_command_groups_video_audio_selectors_webm():
+    task = _task(output="webm")
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    f = cmd[cmd.index("-f") + 1]
+    assert f == "(bv*/bestvideo)+(ba/bestaudio)/best"
+
+
+def test_build_download_command_groups_specific_format_ids():
+    """Explicit per-stream format ids must still be grouped so the
+    trailing '/best' fallback can't silently drop the audio stream."""
+    task = _task(output="mp4", audio_kind="specific", audio_id="251",
+                 video_kind="specific", video_id="137")
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    f = cmd[cmd.index("-f") + 1]
+    assert f == "(137)+(251)/best"
+
+
 def test_build_download_command_supports_progress_template():
     task = _task()
     cmd = build_download_command(
