@@ -264,6 +264,7 @@ class App(tk.Tk):
         # here; _drain_main_calls() runs them on the Tk main thread.
         self._main_thread_calls: Queue = Queue(maxsize=2000)
         self._install_tray()
+        self._install_clipboard_keys()
         self._restart_watched_folder()
         self.after(250, self._drain_watched_paths)
         self.after(50, self._drain_main_calls)
@@ -369,13 +370,13 @@ class App(tk.Tk):
                       command=self.integrations_service.open_otranscribe)
         h.add_separator()
         h.add_command(label="Open log folder", command=self.open_log_folder)
-        a = tk.Menu(m, tearoff=0)
-        a.add_command(label="About", command=self._show_about)
-
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
-        m.add_cascade(label="About", menu=a)
+        # Direct menubar command — clicking "About" opens the dialog in
+        # one click. (It used to be a cascade whose only item was
+        # another "About", so the user had to click About twice.)
+        m.add_command(label="About", command=self._show_about)
         self.config(menu=m)
 
     def _populate_recent_menu(self) -> None:
@@ -553,9 +554,10 @@ class App(tk.Tk):
 
         header = ttk.Frame(dlg, padding=(16, 14, 16, 8))
         header.pack(fill="x")
+        from core import __version__ as _app_ver
         ttk.Label(
             header,
-            text="Whisper Project — v1.0.3",
+            text=f"Whisper Project — v{_app_ver}",
             font=("TkDefaultFont", 13, "bold"),
         ).pack(anchor="w")
         ttk.Label(
@@ -673,6 +675,9 @@ class App(tk.Tk):
                     "Subtitle download + burn-in to video",
                     "SponsorBlock category skipping",
                     "Auto-transcribe after download",
+                    "Cookies from browser — download login-walled / "
+                    "age-gated content (Facebook / Instagram / TikTok, "
+                    "some YouTube Shorts)",
                 ]),
             ]),
             ("Transcript viewer", [
@@ -1944,6 +1949,56 @@ class App(tk.Tk):
             ),
             loading_label=f"resuming {n} interrupted transcription(s) when ready.",
         )
+
+    _CLIPBOARD_VK = {86: "paste", 67: "copy", 88: "cut", 65: "selectall"}
+
+    @staticmethod
+    def _clipboard_action(keysym: str, keycode: int) -> str | None:
+        """Map a Ctrl+key press to a clipboard action, layout-independently.
+
+        Returns None when Tk's own Latin-keysym binding already handles
+        the key (English layout) — so we don't act twice — or when it
+        isn't a clipboard key. Otherwise it dispatches by the physical
+        key's keycode, which is identical whatever the active keyboard
+        layout. This fixes paste / copy / cut / select-all under a
+        non-Latin layout (Persian, Arabic, Russian, …), where Tk's
+        built-in ``<Control-v>`` keysym binding never fires because the
+        layout doesn't produce the Latin 'v' keysym.
+        """
+        if (keysym or "").lower() in ("a", "c", "v", "x"):
+            return None
+        return App._CLIPBOARD_VK.get(keycode)
+
+    def _install_clipboard_keys(self) -> None:
+        virt = {"paste": "<<Paste>>", "copy": "<<Copy>>", "cut": "<<Cut>>"}
+
+        def _on_ctrl_key(event: tk.Event) -> str | None:
+            action = self._clipboard_action(
+                event.keysym or "", getattr(event, "keycode", -1)
+            )
+            if action is None:
+                return None
+            w = event.widget
+            if action == "selectall":
+                try:
+                    w.select_range(0, "end")  # type: ignore[attr-defined]
+                    w.icursor("end")  # type: ignore[attr-defined]
+                    return "break"
+                except (tk.TclError, AttributeError):
+                    pass
+                try:
+                    w.tag_add("sel", "1.0", "end-1c")  # type: ignore[attr-defined]
+                    return "break"
+                except (tk.TclError, AttributeError):
+                    pass
+                return None
+            try:
+                w.event_generate(virt[action])
+                return "break"
+            except tk.TclError:
+                return None
+
+        self.bind_all("<Control-KeyPress>", _on_ctrl_key, add="+")
 
     def _install_icon(self) -> None:
         """Set the window-title-bar + taskbar icon from ``assets/whisper.ico``.

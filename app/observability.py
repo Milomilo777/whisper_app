@@ -91,8 +91,13 @@ def _app_version() -> str:
         return md.version("whisper-project")
     except Exception:  # noqa: BLE001
         pass
-    # Fall back to the hard-coded About-dialog string.
-    return "0.7.1"
+    # Fall back to the bundled version constant — works in the frozen /
+    # embed build, where importlib.metadata has no package to read.
+    try:
+        from core import __version__
+        return __version__
+    except Exception:  # noqa: BLE001
+        return "0.0.0"
 
 
 def init_sentry() -> bool:
