@@ -1023,12 +1023,17 @@ class DownloadService:
 
         saved_path: str | None = None
         saved_is_final = False
+        last_error_line = ""
+        last_line = ""
         for line in task.process.stdout:  # type: ignore[union-attr]
             line = line.rstrip()
             parsed = parse_progress_line(line)
             if parsed and "percent" in parsed:
                 app.download_events.put(("progress", task, float(parsed["percent"])))
             elif line:
+                last_line = line
+                if "ERROR" in line:
+                    last_error_line = line
                 dest = parse_destination_line(line)
                 if dest is not None:
                     path, is_final = dest
@@ -1044,7 +1049,24 @@ class DownloadService:
         if task.cancelled:
             app.download_events.put(("done", task, "cancelled"))
         elif return_code:
-            app.download_events.put(("error", task, f"yt-dlp exited with code {return_code}"))
+            # Surface the real reason (yt-dlp's ERROR line) rather than a
+            # bare exit code, so a login-walled site (Facebook → enable
+            # "Cookies from browser") or a site-specific failure
+            # (Dailymotion HLS) is actually diagnosable from the queue.
+            reason = last_error_line or last_line
+            msg = f"Download failed (yt-dlp exit code {return_code})"
+            if reason:
+                msg = f"{msg}: {reason}"
+            low = reason.lower()
+            if any(k in low for k in (
+                "login", "log in", "sign in", "cookies", "private",
+                "members-only", "account", "authenticate", "age",
+            )):
+                msg += (
+                    "  — this site likely needs a logged-in session: turn on "
+                    "'Cookies from browser' in Advanced settings and retry."
+                )
+            app.download_events.put(("error", task, msg))
         else:
             payload = {"status": "finished", "saved_path": saved_path}
             app.download_events.put(("done_full", task, payload))
