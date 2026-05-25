@@ -31,6 +31,7 @@ from core.config import load_config, save_config
 from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 from core.paths import bin_dir as _resource_bin_dir
+from core.paths import bundled_binary as _bundled_binary
 from core.watcher import FolderWatcher
 
 logger = logging.getLogger(__name__)
@@ -970,11 +971,16 @@ class App(tk.Tk):
 
     # Generic helpers ---------------------------------------------------------
     def yt_dlp_path(self) -> str:
-        exe = "yt-dlp.exe" if os.name == "nt" else "yt-dlp"
-        return os.path.join(_resource_bin_dir(), exe)
+        # Bundled bin/yt-dlp[.exe] when present, else the bare name so
+        # Linux/Mac fall back to a yt-dlp on PATH.
+        return _bundled_binary("yt-dlp")
 
     def bin_path(self) -> str:
-        return _resource_bin_dir()
+        # Point yt-dlp's --ffmpeg-location at our bin/ ONLY when a bundled
+        # ffmpeg actually lives there. On Linux/Mac with ffmpeg on PATH
+        # (no bundled copy) return "" so the flag is omitted and yt-dlp
+        # discovers ffmpeg itself instead of failing on an empty bin dir.
+        return _resource_bin_dir() if os.path.dirname(_bundled_binary("ffmpeg")) else ""
 
     def browse(self) -> None:
         """Pick one or more files.

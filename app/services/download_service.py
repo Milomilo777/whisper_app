@@ -225,7 +225,10 @@ def build_subtitle_command(
 ) -> list[str]:
     output = os.path.join(task.folder, "%(title)s.%(ext)s")
     sub_langs = subtitle_lang_args(lang)
-    command = [yt_dlp_path, "--ffmpeg-location", bin_path, "--newline"]
+    command = [yt_dlp_path]
+    if bin_path:
+        command += ["--ffmpeg-location", bin_path]
+    command += ["--newline"]
     command.extend(_cookies_from_browser_args(cookies_from_browser))
     command.extend([
         "--skip-download",
@@ -254,7 +257,10 @@ def build_download_command(
     cookies_from_browser: str | None = None,
 ) -> list[str]:
     output = os.path.join(task.folder, "%(title)s.%(ext)s")
-    command = [yt_dlp_path, "--ffmpeg-location", bin_path, "--newline", "-o", output]
+    command = [yt_dlp_path]
+    if bin_path:
+        command += ["--ffmpeg-location", bin_path]
+    command += ["--newline", "-o", output]
     command.extend(_cookies_from_browser_args(cookies_from_browser))
     if progress_template:
         command.extend(["--progress-template", progress_template])

@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Optional
@@ -89,41 +90,96 @@ def _segment_min_probability(seg: dict[str, Any]) -> float | None:
     return min(probs)
 
 
-def _locate_vlc_dir() -> str | None:
-    """Best-effort path to an installed VLC dir that contains libvlc.dll.
-
-    python-vlc ctypes-loads libvlc.dll at *import* time; if VLC is
-    installed in a standard location that isn't on PATH the import fails
-    with OSError even though VLC is present (the user's "VLC says not
-    installed" report). Look it up via the registry + Program Files so the
-    import below can find it.
-    """
-    if os.name != "nt":
-        return None
-    candidates: list[str] = []
+def _dir_has_vlc_lib(d: str) -> bool:
+    """True if dir ``d`` contains the platform's libvlc shared library."""
+    if not d or not os.path.isdir(d):
+        return False
+    if os.name == "nt":
+        return os.path.isfile(os.path.join(d, "libvlc.dll"))
     try:
-        import winreg  # type: ignore[import-not-found]
+        for entry in os.listdir(d):
+            # libvlc.dylib (mac) / libvlc.so, libvlc.so.5 (linux)
+            if entry.startswith("libvlc.") and (".so" in entry or entry.endswith(".dylib")):
+                return True
+    except OSError:
+        return False
+    return False
 
-        for flag in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
-            try:
-                with winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\VideoLAN\VLC",
-                    0, winreg.KEY_READ | flag,
-                ) as key:
-                    install_dir, _ = winreg.QueryValueEx(key, "InstallDir")
-                    if install_dir:
-                        candidates.append(str(install_dir))
-            except OSError:
-                pass
-    except ImportError:
-        pass
-    for env_var in ("PROGRAMW6432", "PROGRAMFILES", "PROGRAMFILES(X86)"):
-        base = os.environ.get(env_var)
-        if base:
-            candidates.append(os.path.join(base, "VideoLAN", "VLC"))
+
+def _locate_vlc_dir() -> str | None:
+    """Best-effort path to the dir holding the libvlc shared library.
+
+    python-vlc ctypes-loads libvlc at *import* time; if VLC is installed in
+    a standard location that the loader doesn't search, the import fails
+    even though VLC is present (the user's "VLC says not installed"
+    report). Returning its dir lets _try_load_vlc point python-vlc at it.
+    Covers Windows (registry + Program Files), macOS (VLC.app), and Linux
+    (the usual library dirs).
+    """
+    candidates: list[str] = []
+    if os.name == "nt":
+        try:
+            import winreg  # type: ignore[import-not-found]
+
+            for flag in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\VideoLAN\VLC",
+                        0, winreg.KEY_READ | flag,
+                    ) as key:
+                        install_dir, _ = winreg.QueryValueEx(key, "InstallDir")
+                        if install_dir:
+                            candidates.append(str(install_dir))
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+        for env_var in ("PROGRAMW6432", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+            base = os.environ.get(env_var)
+            if base:
+                candidates.append(os.path.join(base, "VideoLAN", "VLC"))
+    elif sys.platform == "darwin":
+        candidates += [
+            "/Applications/VLC.app/Contents/MacOS/lib",
+            os.path.expanduser("~/Applications/VLC.app/Contents/MacOS/lib"),
+        ]
+    else:  # linux / other unix — usual shared-library dirs
+        candidates += [
+            "/usr/lib", "/usr/lib64", "/usr/local/lib",
+            "/usr/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu",
+            "/snap/vlc/current/usr/lib",
+        ]
     for d in candidates:
-        if d and os.path.isfile(os.path.join(d, "libvlc.dll")):
+        if _dir_has_vlc_lib(d):
             return d
+    return None
+
+
+def _vlc_lib_file(d: str) -> str | None:
+    """Absolute path to the libvlc shared library inside dir ``d``."""
+    if os.name == "nt":
+        p = os.path.join(d, "libvlc.dll")
+        return p if os.path.isfile(p) else None
+    try:
+        for entry in sorted(os.listdir(d)):
+            if entry.startswith("libvlc.") and (".so" in entry or entry.endswith(".dylib")):
+                return os.path.join(d, entry)
+    except OSError:
+        return None
+    return None
+
+
+def _vlc_plugins_dir(d: str) -> str | None:
+    """Best-effort VLC plugins dir. Layouts: <vlc>/plugins (Windows),
+    <...>/MacOS/plugins (sibling of the lib dir on macOS), and
+    <libdir>/vlc/plugins (Linux)."""
+    for cand in (
+        os.path.join(d, "plugins"),
+        os.path.join(os.path.dirname(d), "plugins"),
+        os.path.join(d, "vlc", "plugins"),
+    ):
+        if os.path.isdir(cand):
+            return cand
     return None
 
 
@@ -140,12 +196,17 @@ def _try_load_vlc() -> tuple[Any, str]:
     # installed-but-not-on-PATH VLC is still found.
     vlc_dir = _locate_vlc_dir()
     if vlc_dir:
-        os.environ.setdefault("PYTHON_VLC_LIB_PATH", os.path.join(vlc_dir, "libvlc.dll"))
-        os.environ.setdefault("PYTHON_VLC_MODULE_PATH", os.path.join(vlc_dir, "plugins"))
-        try:
-            os.add_dll_directory(vlc_dir)  # type: ignore[attr-defined]
-        except (OSError, AttributeError):
-            pass
+        lib_file = _vlc_lib_file(vlc_dir)
+        if lib_file:
+            os.environ.setdefault("PYTHON_VLC_LIB_PATH", lib_file)
+        plugins = _vlc_plugins_dir(vlc_dir)
+        if plugins:
+            os.environ.setdefault("PYTHON_VLC_MODULE_PATH", plugins)
+        if os.name == "nt":
+            try:
+                os.add_dll_directory(vlc_dir)  # type: ignore[attr-defined]
+            except (OSError, AttributeError):
+                pass
     try:
         import vlc  # type: ignore[import-not-found]
     except ImportError as e:
