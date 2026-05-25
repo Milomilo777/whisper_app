@@ -265,6 +265,7 @@ class App(tk.Tk):
         self._main_thread_calls: Queue = Queue(maxsize=2000)
         self._install_tray()
         self._install_clipboard_keys()
+        self._install_text_context_menu()
         self._restart_watched_folder()
         self.after(250, self._drain_watched_paths)
         self.after(50, self._drain_main_calls)
@@ -2005,6 +2006,46 @@ class App(tk.Tk):
                 return None
 
         self.bind_all("<Control-KeyPress>", _on_ctrl_key, add="+")
+
+    def _install_text_context_menu(self) -> None:
+        """Right-click Copy / Cut / Paste / Select all on every text field.
+
+        A mouse-driven, keyboard-layout-independent way to use the
+        clipboard. The keyboard shortcuts also work (see
+        _install_clipboard_keys), but a right-click menu is what a
+        non-technical user reaches for and it never depends on the active
+        layout — e.g. selecting + copying the download-folder path. Bound
+        on the Entry / Text widget classes so it covers every field; the
+        Treeview queue menus use a different class and are unaffected.
+        """
+        def _popup(event: tk.Event) -> str:
+            w = event.widget
+
+            def _select_all() -> None:
+                try:
+                    w.select_range(0, "end")  # type: ignore[attr-defined]
+                    w.icursor("end")  # type: ignore[attr-defined]
+                except (tk.TclError, AttributeError):
+                    try:
+                        w.tag_add("sel", "1.0", "end-1c")  # type: ignore[attr-defined]
+                    except (tk.TclError, AttributeError):
+                        pass
+
+            menu = tk.Menu(w, tearoff=0)
+            menu.add_command(label="Cut", command=lambda: w.event_generate("<<Cut>>"))
+            menu.add_command(label="Copy", command=lambda: w.event_generate("<<Copy>>"))
+            menu.add_command(label="Paste", command=lambda: w.event_generate("<<Paste>>"))
+            menu.add_separator()
+            menu.add_command(label="Select all", command=_select_all)
+            try:
+                w.focus_set()
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+            return "break"
+
+        for cls in ("TEntry", "Entry", "Text"):
+            self.bind_class(cls, "<Button-3>", _popup, add="+")
 
     def _install_icon(self) -> None:
         """Set the window-title-bar + taskbar icon from ``assets/whisper.ico``.
