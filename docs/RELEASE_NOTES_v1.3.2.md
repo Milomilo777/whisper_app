@@ -28,8 +28,15 @@ Security + features release on top of v1.3.1. Install the
   are now always treated as links, never options.
 - Hardened model-archive extraction against malicious archive paths.
 
+## Downloads
+
+- **Setup-Standard** (`...-Setup-Standard.exe`) — installs to Program Files,
+  upgrades the previous version cleanly (single Add/Remove entry).
+- **Portable** (`...-Portable.zip`) — no install: extract the ZIP anywhere
+  and double-click **Run Whisper Project.bat**. It's the full Python
+  environment, so you can update later by dropping in newer `app\` /
+  `core\` / `gui.py` files without recompiling.
+
 ## Notes
 
-- Only the **Setup-Standard** installer is published.
-- Upgrades the previous version cleanly (single Add/Remove entry).
 - Full technical detail: `docs/CHANGELOG.md`.
