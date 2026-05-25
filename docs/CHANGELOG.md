@@ -4,11 +4,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
-## [1.0.4] — 2026-05-25
+## [1.1.0] — 2026-05-25
 
-Bug-fix release. Restores audio in video downloads, removes several UI
-freezes and nags, and makes the model-hub and download-folder choices
-stick. Adds opt-in browser-cookie support so login-walled sites work.
+Maintenance release — bug fixes plus one opt-in feature. Restores audio
+in video downloads, removes several UI freezes and nags, makes the
+model-hub and download-folder choices stick, fails a truncated SMTV
+download instead of shipping a corrupt file, and adds browser-cookie
+support so login-walled sites (Facebook / Instagram / TikTok stories,
+age-gated YouTube Shorts) can download.
 
 ### Added
 
