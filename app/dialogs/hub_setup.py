@@ -198,6 +198,10 @@ class HubSetupDialog(tk.Toplevel):
         path = _hub.normalise_hub_path(self._path_var.get())
         self._chosen_path = path
         self._config["hub_folder"] = path
+
+        # Also update the model folder
+        self._config["model_path"] = str(_hub.model_folder_for(path, "faster-whisper-large-v3"))
+
         try:
             self._save(self._config)
             self._saved = True
