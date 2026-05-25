@@ -231,6 +231,9 @@ class AdvancedDialog(tk.Toplevel):
             values=[lbl for _slug, lbl in labeled],
             width=56,
         ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        ttk.Button(
+            extras, text="Download now", command=self._download_selected_model,
+        ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=4)
 
         ttk.Label(extras, text="Batch size (CUDA only)").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         ttk.Spinbox(extras, from_=1, to=64, increment=1, textvariable=self._batch_size, width=6).grid(
@@ -419,6 +422,36 @@ class AdvancedDialog(tk.Toplevel):
             return (folder / "model.bin").exists()
         except Exception:  # noqa: BLE001
             return False
+
+    def _download_selected_model(self) -> None:
+        """Download / install the model chosen in the picker, on demand —
+        instead of waiting for the first transcription to trigger it."""
+        slug = self._model_label_to_slug.get(
+            self._model_display.get() or "", DEFAULT_MODEL_SLUG
+        )
+        entry = resolve_model_entry(slug)
+        if entry is None:
+            return
+        if self._model_downloaded(slug):
+            self.app.log("That model is already downloaded.")
+            return
+        cfg = self.app.app_config
+        cfg["whisper_model"] = slug
+        cfg["model"] = entry
+        cfg["model_path"] = ""  # let ensure_model fetch it into the hub
+        try:
+            save_config(cfg)
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"Could not save model choice: {e}")
+            return
+        # Close Advanced first, then open the download modal on the app so
+        # two modal grabs don't stack.
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+        self.app.after(0, lambda: self.app.ensure_model_with_modal(mandatory=False))
 
     def _save_and_close(self) -> None:
         cfg = self.app.app_config
