@@ -23,6 +23,13 @@ from core.transcriber import _normalize_language
         ("en", "en"),
         ("fa", "fa"),
         ("yue", "yue"),     # multi-letter code kept
+        # Multi-value yt-dlp subtitle codes from the language picker — these
+        # crashed faster-whisper before; reduce to the base language.
+        ("zh-Hans,zh-CN", "zh"),
+        ("pt,pt-BR,pt-PT", "pt"),
+        ("he,iw", "he"),
+        ("no,nb", "no"),
+        ("id,in", "id"),
     ],
 )
 def test_normalize_language_valid(raw, expected):

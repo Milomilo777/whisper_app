@@ -1078,6 +1078,46 @@ class DownloadService:
 
         app.after(300, self.poll)
 
+    def _recover_saved_path(self, task: "VideoDownloadTask", parsed: str | None) -> str | None:
+        """Find the file a finished download actually produced on disk.
+
+        saved_path is parsed from yt-dlp stdout and can be wrong (a
+        postprocessor rename, or a filename character that slips past the
+        utf-8 fix). Downloads run one at a time, so the newest media file in
+        the target folder touched since this task started is the real
+        output. Returns None when nothing plausible is found.
+        """
+        folder = getattr(task, "folder", "") or (
+            os.path.dirname(parsed) if parsed else ""
+        )
+        if not folder or not os.path.isdir(folder):
+            return None
+        media_exts = {
+            ".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv",
+            ".m4a", ".mp3", ".opus", ".aac", ".flac", ".wav", ".ogg",
+        }
+        started = float(getattr(task, "start_time", None) or 0.0)
+        best: tuple[float, str] | None = None
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            return None
+        for name in names:
+            if os.path.splitext(name)[1].lower() not in media_exts:
+                continue
+            full = os.path.join(folder, name)
+            try:
+                if not os.path.isfile(full):
+                    continue
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            if mtime + 5.0 < started:  # untouched since the download began
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, full)
+        return best[1] if best else None
+
     def _finish(self, task: "VideoDownloadTask", status: str, saved_path: str | None) -> None:
         app = self.app
         task.status = status
@@ -1094,6 +1134,18 @@ class DownloadService:
                 pass
         if status == "finished":
             task.progress = 100
+            # Self-healing: saved_path is parsed from yt-dlp stdout, which can
+            # mismatch the real file (a postprocessor rename, or an exotic
+            # filename character that still slips past the utf-8 fix). If the
+            # parsed path isn't on disk, fall back to the newest media file the
+            # download just produced so the size readout AND auto-transcribe
+            # still find it.
+            if not saved_path or not os.path.exists(saved_path):
+                recovered = self._recover_saved_path(task, saved_path)
+                if recovered:
+                    if not saved_path or os.path.basename(recovered) != os.path.basename(saved_path):
+                        app.log(f"(recovered downloaded file: {os.path.basename(recovered)})")
+                    saved_path = recovered
             if saved_path:
                 task.saved_path = saved_path
                 # Friendly completion line — the user actually wants

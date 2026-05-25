@@ -71,7 +71,12 @@ def _normalize_language(code: str | None) -> str | None:
     """
     if not code:
         return None
-    base = code.strip().lower().replace("_", "-").split("-", 1)[0]
+    # Take the first segment, splitting on any of , - _ space — so BCP-47
+    # region tags ("en-US"), script tags ("zh-Hans"), and multi-value
+    # yt-dlp codes ("zh-Hans,zh-CN", "pt,pt-BR,pt-PT", "he,iw") all reduce
+    # to their base language.
+    normalized = code.strip().lower().replace(",", "-").replace("_", "-").replace(" ", "-")
+    base = normalized.split("-", 1)[0]
     return base if base in _WHISPER_LANGS else None
 
 
@@ -975,7 +980,13 @@ def _build_transcribe_kwargs(task: "TranscriptionTask") -> dict[str, Any]:
     }
     if kwargs["vad_filter"]:
         kwargs["vad_parameters"] = _vad_parameters()
-    forced_lang = getattr(task, "language", None)
+    # Normalise here: this is the central kwargs builder for the default
+    # faster-whisper path. The language picker / a download's detected
+    # language can carry BCP-47 region tags or multi-value yt-dlp codes
+    # ("en-US", "zh-Hans,zh-CN", "pt,pt-BR,pt-PT") that faster-whisper
+    # rejects with a ValueError (silent no-output). Coerce to a single
+    # accepted ISO code, or None (auto-detect).
+    forced_lang = _normalize_language(getattr(task, "language", None))
     if forced_lang:
         kwargs["language"] = forced_lang
     initial_prompt = config.get("initial_prompt") or None
