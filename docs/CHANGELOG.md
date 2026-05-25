@@ -4,6 +4,42 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-05-25
+
+Security + features release. A dedicated security/concurrency/resource
+bug-hunt (four more parallel audit shards) plus the most-requested
+feature.
+
+### Added
+
+- **Transcribe a time-slice of a file.** The Transcribe tab now has
+  Start / End fields (default 0:00:00 = whole file), so you can transcribe
+  e.g. 5 minutes out of a 10-hour recording. Segment timestamps stay on
+  the original timeline.
+
+### Security
+
+- **yt-dlp option injection closed.** A pasted "URL" beginning with "-"
+  was handed to yt-dlp without a "--" end-of-options separator, so it
+  could be parsed as a flag (e.g. `--exec` → command execution) — and the
+  format probe fires on paste. All three yt-dlp argv builders now insert
+  "--" before the URL.
+- **Zip-slip guard** on model-archive extraction: members that would
+  resolve outside the cache dir are now rejected.
+
+### Fixed
+
+- **Failed downloads now say WHY.** Instead of "yt-dlp exited with code
+  N", the queue shows yt-dlp's real error line; for login-walled sites
+  (Facebook / Instagram) it adds a hint to enable "Cookies from browser"
+  in Advanced settings.
+- **Progress percentage stays visible during start-up.** The "working"
+  animation kept the number (it had briefly hidden it behind a moving
+  bar), so you can always see how far along a transcription is.
+- **Corrupt-but-readable media** (ffprobe reports "N/A" duration) no
+  longer aborts the run with an opaque error — it transcribes anyway.
+- **Model-path fix when a hub folder is selected** (contributed).
+
 ## [1.3.1] — 2026-05-25
 
 Reliability release — a focused bug-hunt (tracing each UI action through
