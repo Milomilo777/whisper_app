@@ -323,6 +323,25 @@ def test_select_saved_path_real_world_reel_regression():
     assert select_saved_path(lines) == f"{base}.mp4"
 
 
+# --- security: end-of-options "--" separator before the URL ---------------
+
+
+def test_download_command_separates_url_with_double_dash():
+    # A pasted "URL" starting with '-' must reach yt-dlp AFTER a "--" so it
+    # can't be parsed as a flag (e.g. --exec → arbitrary command execution).
+    cmd = build_download_command(_task(url="-evil"), yt_dlp_path="ytdlp", bin_path="bin")
+    assert cmd[-1] == "-evil"
+    assert cmd[-2] == "--"
+
+
+def test_subtitle_command_separates_url_with_double_dash():
+    cmd = build_subtitle_command(
+        _task(url="-evil"), "en", yt_dlp_path="ytdlp", bin_path="bin"
+    )
+    assert cmd[-1] == "-evil"
+    assert cmd[-2] == "--"
+
+
 # --- timecode helpers (v1.0.3 --download-sections) -------------------------
 
 

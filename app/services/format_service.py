@@ -74,6 +74,10 @@ class FormatService:
                     "--dump-single-json",
                     "--no-playlist",
                     "--no-warnings",
+                    # End-of-options: this probe auto-fires on paste, so a
+                    # "URL" starting with '-' must not be read as a flag
+                    # (e.g. --exec → arbitrary command execution).
+                    "--",
                     url,
                 ]
                 r = subprocess.run(

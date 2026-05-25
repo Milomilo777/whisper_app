@@ -302,6 +302,14 @@ def ensure_model(
         _notify(progress_cb, phase="extract", status="Extracting model...", percent=100, detail="Unpacking downloaded archive")
         _remove_path(model_path)
         with zipfile.ZipFile(zip_path,'r') as z:
+            # Zip-slip guard: reject any member that would resolve OUTSIDE
+            # cache_dir (e.g. a tampered archive with "..\\.." entries)
+            # before extracting anything.
+            _cache_resolved = Path(cache_dir).resolve()
+            for _member in z.namelist():
+                _target = (_cache_resolved / _member).resolve()
+                if _target != _cache_resolved and _cache_resolved not in _target.parents:
+                    raise RuntimeError(f"Unsafe path in model archive: {_member!r}")
             z.extractall(cache_dir)
 
         if not model_path.exists():

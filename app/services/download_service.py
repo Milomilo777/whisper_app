@@ -226,6 +226,9 @@ def build_subtitle_command(
         "--no-playlist",
         "-o",
         output,
+        # End-of-options: a pasted "URL" starting with '-' must not be
+        # parsed as a yt-dlp flag (e.g. --exec → arbitrary command).
+        "--",
         task.url,
     ])
     return command
@@ -293,6 +296,9 @@ def build_download_command(
     if sections_arg is not None:
         command.extend(["--download-sections", sections_arg])
 
+    # End-of-options separator: a URL starting with '-' must not be parsed
+    # as a yt-dlp flag (e.g. --exec → arbitrary command execution).
+    command.append("--")
     command.append(task.url)
     return command
 
