@@ -1518,8 +1518,66 @@ class App(tk.Tk):
         sec = int(s % 60)
         return f"{h:02}:{m:02}:{sec:02}"
 
+    def _download_row_progress(self, task: Any) -> float:
+        # While an auto-transcribe runs, the download row mirrors the
+        # linked transcription's live progress (else it sits at 100%).
+        tr = getattr(task, "transcription_task", None)
+        if task.status == "transcribing" and tr is not None:
+            return tr.progress
+        return task.progress
+
+    def _row_progress_text(self, status: str, progress: float) -> str:
+        """Progress text for a queue row: the real bar, or an indeterminate
+        marquee while the row is working but has no percentage yet (e.g.
+        during the model load before the first segment)."""
+        from app.widgets.tabs import marquee_cell, progress_cell
+
+        if status in ("running", "transcribing") and (progress or 0) <= 0:
+            return marquee_cell(getattr(self, "_anim_frame", 0))
+        return progress_cell(progress)
+
+    def _ensure_animation(self) -> None:
+        """Start the marquee loop if any row is working without a real %."""
+        if getattr(self, "_anim_running", False):
+            return
+        needs = any(
+            t.status == "running" and (t.progress or 0) <= 0 for t in self.queue
+        ) or any(
+            d.status in ("running", "transcribing")
+            and (self._download_row_progress(d) or 0) <= 0
+            for d in self.download_queue
+        )
+        if needs:
+            self._anim_running = True
+            self._animate_tick()
+
+    def _animate_tick(self) -> None:
+        from app.widgets.tabs import marquee_cell
+
+        self._anim_frame = getattr(self, "_anim_frame", 0) + 1
+        bar = marquee_cell(self._anim_frame)
+        active = False
+        for item_id, t in list(getattr(self, "row_map", {}).items()):
+            if t.status == "running" and (t.progress or 0) <= 0:
+                active = True
+                try:
+                    self.tree.set(item_id, "progress", bar)
+                except tk.TclError:
+                    pass
+        for item_id, d in list(getattr(self, "download_row_map", {}).items()):
+            if d.status in ("running", "transcribing") and (self._download_row_progress(d) or 0) <= 0:
+                active = True
+                try:
+                    self.download_tree.set(item_id, "progress", bar)
+                except tk.TclError:
+                    pass
+        if active:
+            self.after(250, self._animate_tick)
+        else:
+            self._anim_running = False
+
     def refresh(self) -> None:
-        from app.widgets.tabs import progress_cell, status_label
+        from app.widgets.tabs import status_label
 
         self.tree.delete(*self.tree.get_children())
         self.row_map = {}
@@ -1533,7 +1591,7 @@ class App(tk.Tk):
                 values=(
                     os.path.basename(t.file_path),
                     status_label(t.status),
-                    progress_cell(t.progress),
+                    self._row_progress_text(t.status, t.progress),
                     lang_str,
                     self.fmt_time(t),
                 ),
@@ -1552,9 +1610,10 @@ class App(tk.Tk):
         # the app minimised see "Whisper — 34% transcribing foo.mp4"
         # in their taskbar / Alt-Tab.
         self._refresh_window_title()
+        self._ensure_animation()
 
     def refresh_download_queue(self) -> None:
-        from app.widgets.tabs import progress_cell, status_label
+        from app.widgets.tabs import status_label
 
         self.download_tree.delete(*self.download_tree.get_children())
         self.download_row_map = {}
@@ -1562,8 +1621,7 @@ class App(tk.Tk):
             # While auto-transcribe runs, mirror the linked transcription's
             # live progress on the download row (otherwise a finished
             # download would sit at 100% and look idle while it transcribes).
-            tr = getattr(task, "transcription_task", None)
-            prog = tr.progress if (task.status == "transcribing" and tr is not None) else task.progress
+            prog = self._download_row_progress(task)
             item_id = self.download_tree.insert(
                 "",
                 "end",
@@ -1572,12 +1630,13 @@ class App(tk.Tk):
                     task.url,
                     task.format_label,
                     status_label(task.status),
-                    progress_cell(prog),
+                    self._row_progress_text(task.status, prog),
                     self.fmt_time(task),
                 ),
             )
             self.download_row_map[item_id] = task
         self._refresh_window_title()
+        self._ensure_animation()
 
     # -- UX helpers (Phase v0.7.1 — user-friendly result surfacing) ----------
 

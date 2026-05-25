@@ -6,7 +6,7 @@ graphical trend and the number in one column.
 """
 from __future__ import annotations
 
-from app.widgets.tabs import progress_cell
+from app.widgets.tabs import marquee_cell, progress_cell
 
 
 def _bar(cell: str) -> str:
@@ -52,3 +52,25 @@ def test_progress_cell_has_constant_width():
     # Constant width keeps the column from jittering as the number grows.
     widths = {len(progress_cell(p)) for p in (0, 5, 50, 99, 100)}
     assert widths == {15}
+
+
+# --- marquee_cell: indeterminate "working" animation ----------------------
+
+
+def test_marquee_cell_always_three_lit_blocks():
+    for frame in range(0, 25):
+        assert marquee_cell(frame).count("█") == 3
+
+
+def test_marquee_cell_constant_width():
+    assert len({len(marquee_cell(f)) for f in range(0, 25)}) == 1
+
+
+def test_marquee_cell_advances_with_frame():
+    # Consecutive frames differ, so the bar visibly moves.
+    assert marquee_cell(0) != marquee_cell(1)
+
+
+def test_marquee_cell_wraps_each_track_length():
+    # The lit window has a 10-segment period, so it loops smoothly.
+    assert marquee_cell(0) == marquee_cell(10)

@@ -543,6 +543,14 @@ class DownloadService:
                 raw_end = ""
         section_start = _parse_timecode(raw_start)
         section_end = _parse_timecode(raw_end)
+        # The fields default to "0:00:00"; treat a zero (or blank) bound as
+        # "unset" so the default = the full video. A real 0:00:00 start is
+        # the beginning anyway (== open-left) and a 0:00:00 end is
+        # nonsensical, so collapsing both to None loses nothing.
+        if not section_start:
+            section_start = None
+        if not section_end:
+            section_end = None
         any_range = section_start is not None or section_end is not None
 
         # Decorate the visible title with the trim badge so the
