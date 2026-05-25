@@ -25,6 +25,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def transcribe_command(t: Any) -> dict[str, Any]:
+    """Build the JSON command dispatched to a transcription worker.
+
+    Pure + module-level so a test can assert that every field the worker
+    needs (language / resume / clip bounds) actually crosses the process
+    boundary. A field dropped here is invisible to helper-only tests and to
+    the worker-side test — which is exactly how past "the value never
+    reached the worker" bugs shipped.
+    """
+    return {
+        "action": "transcribe",
+        "file_path": t.file_path,
+        "language": getattr(t, "language", None),
+        # Resume-from-cancellation flag (App.resume_task / crash-resume).
+        "resume": bool(getattr(t, "resume", False)),
+        # Time-slice (Transcribe-tab range); the worker has its own task
+        # object, so the bounds must cross the process boundary.
+        "clip_start": getattr(t, "clip_start", None),
+        "clip_end": getattr(t, "clip_end", None),
+    }
+
+
 # How long the headless ensure_worker_ready path (crash-resume, watched
 # folder) will wait for a freshly-spawned worker to emit its ``ready``
 # event before giving up and aborting the enqueue. Generous — a cold
@@ -579,21 +601,7 @@ class TranscriptionService:
             # write to a daemon thread — same pattern stop_worker
             # uses for its shutdown command. If the write fails OR
             # blocks > 5 s, we restart the worker.
-            command = {
-                "action": "transcribe",
-                "file_path": t.file_path,
-                "language": getattr(t, "language", None),
-                # Resume-from-cancellation: when the task carries a
-                # ``resume`` flag (set by App.resume_task or by the
-                # crash-resume hook), forward it so the worker calls
-                # ``resume_transcription`` instead of ``transcribe``.
-                "resume": bool(getattr(t, "resume", False)),
-                # Time-slice (Transcribe-tab time range). The worker has its
-                # OWN task object, so the clip bounds must cross the process
-                # boundary or clip_timestamps is never applied.
-                "clip_start": getattr(t, "clip_start", None),
-                "clip_end": getattr(t, "clip_end", None),
-            }
+            command = transcribe_command(t)
             self._dispatch_command_async(worker, t, command)
 
     def _dispatch_command_async(
