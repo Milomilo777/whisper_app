@@ -1441,6 +1441,10 @@ class App(tk.Tk):
             subtitles_enabled=task.subtitles_enabled,
             subtitle_lang=task.subtitle_lang,
             detected_language=task.detected_language,
+            # Preserve the time-range slice — without this a re-run silently
+            # fetched the full video instead of the slice the user picked.
+            section_start=task.section_start,
+            section_end=task.section_end,
         )
         self.download_queue.append(copy)
         self.refresh_download_queue()
@@ -1454,6 +1458,17 @@ class App(tk.Tk):
             task.end_time = time.time()
         if task.process and task.process.poll() is None:
             task.process.terminate()
+        # If the download had already handed off to auto-transcribe, stop
+        # that too and unlink it — otherwise the transcription keeps running
+        # and finish_task would later overwrite this "cancelled" status.
+        tr = getattr(task, "transcription_task", None)
+        if tr is not None:
+            task.transcription_task = None
+            try:
+                tr.source_download = None
+                self.cancel(tr)
+            except Exception:  # noqa: BLE001
+                pass
         self.refresh_download_queue()
 
     def remove_download(self, task: VideoDownloadTask) -> None:

@@ -693,7 +693,9 @@ class TranscriptionService:
         # terminal now (finished / error / cancelled) — restore that row to
         # "finished" (the download itself succeeded) and unlink.
         dl = getattr(task, "source_download", None)
-        if dl is not None:
+        # Only restore a row still showing "transcribing" — never clobber a
+        # download the user cancelled/removed while it was transcribing.
+        if dl is not None and getattr(dl, "status", None) == "transcribing":
             dl.status = "finished"
             dl.transcription_task = None
             dl.progress = 100
