@@ -481,6 +481,19 @@ def _render_filename_template(
     return rendered
 
 
+def _indexed_path(path: str, index: int) -> str:
+    """Insert a `` (N)`` suffix before the extension for de-duplication.
+
+    ``index <= 0`` returns ``path`` unchanged (the first, normal write).
+    Otherwise: ``video.srt`` -> ``video (1).srt`` -> ``video (2).srt`` …
+    so a re-run never overwrites a previous output.
+    """
+    if index <= 0:
+        return path
+    root, ext = os.path.splitext(path)
+    return f"{root} ({index}){ext}"
+
+
 def _write_outputs(
     base: str,
     segments_data: list[dict[str, Any]],
@@ -521,17 +534,26 @@ def _write_outputs(
             f"None of the requested output formats are known: "
             f"{formats!r}. Supported: {sorted(available)!r}."
         )
+    # Render every requested format's path up front, then pick ONE
+    # shared index so re-running a transcription never overwrites the
+    # previous output: name.srt + name.json become name (1).srt +
+    # name (1).json together (a consistent set, not mismatched indices).
+    planned: list[tuple[str, str]] = []
     for fmt_name in formats:
         if fmt_name not in available:
             continue
         ext = "json" if fmt_name == "json" else fmt_name
-        path = _render_filename_template(
-            template,
-            base=base,
-            ext=ext,
-            lang=lang,
-            speaker_count=speaker_count,
-        )
+        planned.append((fmt_name, _render_filename_template(
+            template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
+        )))
+    index = 0
+    while index < 10000 and any(
+        os.path.exists(_indexed_path(p, index)) for _, p in planned
+    ):
+        index += 1
+
+    for fmt_name, rendered in planned:
+        path = _indexed_path(rendered, index)
         # Honour template-supplied subdirectories. Defensive: only
         # makedirs when the dirname is non-empty and differs from the
         # source folder we're already writing into.
