@@ -9,6 +9,9 @@
 ; WhisperProject-Setup.exe under dist_installer\.
 
 [Setup]
+; Stable AppId — keeps a single, upgradable Add/Remove Programs entry
+; across versions (and shared with the Standard installer, same product).
+AppId={{734B46B9-5E70-4C4E-8833-0A7506A64376}
 AppName=SMTV Whisper Project
 AppVersion=1.2.0
 AppPublisher=smtv.bot@Gmail.com

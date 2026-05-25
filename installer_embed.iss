@@ -10,6 +10,9 @@
 ; bundled bin\ binaries. Shortcuts launch pythonw.exe gui.py.
 
 [Setup]
+; Stable AppId — keeps a single, upgradable Add/Remove Programs entry
+; across versions (and shared with the Compact installer, same product).
+AppId={{734B46B9-5E70-4C4E-8833-0A7506A64376}
 AppName=Whisper Project
 AppVersion=1.2.0
 AppPublisher=Whisper Project
