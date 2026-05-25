@@ -4,6 +4,40 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-25
+
+UX + accessibility release on top of v1.1.0 — mostly things the operator
+hit while using the app on a Persian keyboard.
+
+### Added
+
+- **Copy / paste works everywhere now** — a right-click menu (Copy / Cut
+  / Paste / Select all) on every text field, plus a copyable log console
+  (right-click → Copy / Copy all / Clear). Mouse-driven, so it never
+  depends on the keyboard layout.
+- **Bulk queue actions.** Select multiple rows in the transcription or
+  download queue and Cancel / Re-run / Resume / Remove them all at once.
+- **Scrollable queues.** Both queue lists get an auto-hiding vertical
+  scrollbar that appears only when the list outgrows the visible area.
+- **Model visibility + on-demand install.** The Advanced model picker
+  marks each model "downloaded" / "needs download", and a "Download now"
+  button installs the selected model without starting a transcription.
+- **Open file from the Download tab** — a finished download's context
+  menu can open the media file directly (not just its folder).
+
+### Fixed
+
+- **Clipboard shortcuts under a non-Latin keyboard layout.** Ctrl+C / V /
+  X / A keyed off the Latin keysym, so copy/paste/cut/select-all were
+  dead while a Persian (or Arabic, Russian, …) layout was active. They
+  now dispatch by physical keycode.
+- **Transcript outputs no longer overwrite a previous run** — a re-run
+  writes `name (1).srt` / `name (1).json` (a shared index) instead of
+  clobbering the earlier files.
+- **The About dialog** shows the live app version (it was hard-coded to
+  an old number) and opens in one click (it used to be a menu whose only
+  item was another "About").
+
 ## [1.1.0] — 2026-05-25
 
 Maintenance release — bug fixes plus one opt-in feature. Restores audio
