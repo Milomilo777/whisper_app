@@ -44,6 +44,10 @@ def transcribe_command(t: Any) -> dict[str, Any]:
         # object, so the bounds must cross the process boundary.
         "clip_start": getattr(t, "clip_start", None),
         "clip_end": getattr(t, "clip_end", None),
+        # Output formats: the long-lived worker's config snapshot is frozen
+        # at spawn time, so the user's saved docx/pdf/etc. selection must be
+        # sent per task or it's silently ignored (the docx-never-written bug).
+        "output_formats": getattr(t, "output_formats", None),
     }
 
 
@@ -601,6 +605,12 @@ class TranscriptionService:
             # write to a daemon thread — same pattern stop_worker
             # uses for its shutdown command. If the write fails OR
             # blocks > 5 s, we restart the worker.
+            # Stamp the CURRENT output-format selection onto the task so the
+            # long-lived worker writes what the user has now (its import-time
+            # config is stale). None-safe default mirrors core.config.
+            t.output_formats = list(
+                self.app.app_config.get("output_formats") or ["srt", "json"]
+            )
             command = transcribe_command(t)
             self._dispatch_command_async(worker, t, command)
 

@@ -43,3 +43,9 @@ class TranscriptionTask:
         # processed; segment timestamps stay on the original timeline.
         self.clip_start: float | None = None
         self.clip_end: float | None = None
+        # Output formats for THIS task (srt/json/docx/pdf/...). Set at
+        # dispatch from the live config so the long-lived worker writes the
+        # formats the user currently has selected — its import-time
+        # config snapshot would otherwise be stale (the docx-never-written
+        # bug). None = fall back to the worker's config default.
+        self.output_formats: list[str] | None = None

@@ -176,6 +176,8 @@ def main() -> int:
             # span via clip_timestamps. None = whole file.
             task.clip_start = command.get("clip_start")
             task.clip_end = command.get("clip_end")
+            # Per-task output formats (worker's config snapshot is stale).
+            task.output_formats = command.get("output_formats")
             # A clipped run must NOT resume: the checkpoint is keyed to the
             # whole file with no clip marker, so resuming would transcribe
             # past clip_end. Clips are short — re-transcribe the slice fresh.

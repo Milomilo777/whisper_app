@@ -1219,6 +1219,7 @@ def transcribe(
             base,
             segments_data,
             task.file_path,
+            getattr(task, "output_formats", None),
             lang=detected_lang,
             speaker_count=speaker_count,
         )
@@ -1325,6 +1326,7 @@ def _transcribe_via_alt_backend(
         base,
         segments_data,
         task.file_path,
+        getattr(task, "output_formats", None),
         lang=detected_lang,
         speaker_count=speaker_count,
     )
@@ -1588,6 +1590,7 @@ def resume_transcription(
             base,
             final_segments,
             task.file_path,
+            getattr(task, "output_formats", None),
             lang=detected_lang,
             speaker_count=speaker_count,
         )

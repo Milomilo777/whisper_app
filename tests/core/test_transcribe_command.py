@@ -17,7 +17,7 @@ from app.services.transcription_service import transcribe_command
 def _task(**kw):
     base = dict(
         file_path="clip.mp4", language=None, resume=False,
-        clip_start=None, clip_end=None,
+        clip_start=None, clip_end=None, output_formats=None,
     )
     base.update(kw)
     return types.SimpleNamespace(**base)
@@ -33,6 +33,13 @@ def test_command_carries_all_worker_fields():
     assert cmd["resume"] is True
     assert cmd["clip_start"] == 30.0
     assert cmd["clip_end"] == 90.0
+
+
+def test_command_carries_output_formats():
+    # The docx-never-written bug: the worker's config snapshot is stale, so
+    # the selected formats MUST ride the command.
+    cmd = transcribe_command(_task(output_formats=["srt", "docx"]))
+    assert cmd["output_formats"] == ["srt", "docx"]
 
 
 def test_command_defaults_for_a_plain_task():
@@ -54,4 +61,5 @@ def test_command_has_exactly_the_expected_keys():
     cmd = transcribe_command(_task())
     assert set(cmd) == {
         "action", "file_path", "language", "resume", "clip_start", "clip_end",
+        "output_formats",
     }
