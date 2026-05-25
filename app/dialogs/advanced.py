@@ -210,19 +210,26 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Label(extras, text="Whisper model").grid(
             row=0, column=0, sticky="w", padx=8, pady=4
         )
-        self._model_labels = list_models()
-        self._model_slug_to_label = {slug: label for slug, label in self._model_labels}
-        self._model_label_to_slug = {label: slug for slug, label in self._model_labels}
+        # Augment each model's label with its on-disk status so the user
+        # can see which models are already downloaded vs. which will
+        # download (the ~size is already in the label) on first use.
+        labeled = [
+            (slug, f"{base}   "
+                   f"[{'OK - downloaded' if self._model_downloaded(slug) else 'needs download'}]")
+            for slug, base in list_models()
+        ]
+        self._model_slug_to_label = {slug: lbl for slug, lbl in labeled}
+        self._model_label_to_slug = {lbl: slug for slug, lbl in labeled}
         current_label = self._model_slug_to_label.get(
-            self._whisper_model.get(), self._model_labels[0][1]
+            self._whisper_model.get(), labeled[0][1]
         )
         self._model_display = tk.StringVar(value=current_label)
         ttk.Combobox(
             extras,
             textvariable=self._model_display,
             state="readonly",
-            values=[label for _slug, label in self._model_labels],
-            width=46,
+            values=[lbl for _slug, lbl in labeled],
+            width=56,
         ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
 
         ttk.Label(extras, text="Batch size (CUDA only)").grid(row=1, column=0, sticky="w", padx=8, pady=4)
@@ -395,6 +402,23 @@ class AdvancedDialog(tk.Toplevel):
         var.trace_add("write", _refresh)
         ttk.Label(parent, textvariable=echo_var, width=8).grid(row=row, column=2, padx=8, pady=4)
         parent.columnconfigure(1, weight=1)
+
+    def _model_downloaded(self, slug: str) -> bool:
+        """True when the model's weights are already on disk under the
+        configured hub folder, so the dropdown can mark it downloaded."""
+        entry = resolve_model_entry(slug)
+        if not entry:
+            return False
+        try:
+            from core import hub as _hub
+            cfg = self.app.app_config
+            hub_folder = (cfg.get("hub_folder") or "").strip() or str(
+                _hub.default_hub_folder()
+            )
+            folder = _hub.model_folder_for(hub_folder, entry["name"])
+            return (folder / "model.bin").exists()
+        except Exception:  # noqa: BLE001
+            return False
 
     def _save_and_close(self) -> None:
         cfg = self.app.app_config
