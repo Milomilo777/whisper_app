@@ -12,7 +12,7 @@
 ; Single version knob — drives AppVersion, the output filename, and the
 ; (version-stamped) shortcut name so the user can see which build is
 ; installed. Bump alongside core/__init__.py + pyproject.toml.
-#define MyAppVersion "1.3.4"
+#define MyAppVersion "1.3.5"
 
 [Setup]
 ; Stable AppId — keeps a single, upgradable Add/Remove Programs entry
