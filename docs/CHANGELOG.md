@@ -8,7 +8,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 Bug-fix release. Restores audio in video downloads, removes several UI
 freezes and nags, and makes the model-hub and download-folder choices
-stick.
+stick. Adds opt-in browser-cookie support so login-walled sites work.
+
+### Added
+
+- **Download from login-walled / age-gated sites via browser cookies.**
+  A new "Cookies from browser" picker in Advanced → Downloads passes
+  yt-dlp's `--cookies-from-browser`, so Facebook / Instagram / TikTok
+  stories and age-restricted YouTube Shorts can download using your
+  logged-in browser session. Off by default; pick your browser
+  (Chrome / Edge / Firefox / …) to enable.
 
 ### Fixed
 

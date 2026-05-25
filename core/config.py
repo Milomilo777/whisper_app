@@ -37,6 +37,12 @@ DEFAULT_CONFIG = {
     "download_subtitle_lang": "Automatic",
     "auto_update_yt_dlp": False,
     "last_yt_dlp_update_check": "",
+    # Browser to read cookies from for yt-dlp, so login-walled / age-gated
+    # content downloads using the user's logged-in session (Facebook,
+    # Instagram, TikTok stories; some YouTube Shorts). Empty = off. One of
+    # brave/chrome/chromium/edge/firefox/opera/safari/vivaldi/whale,
+    # optionally with yt-dlp's :PROFILE suffix.
+    "cookies_from_browser": "",
     "theme": "dark",
     "log_level": "INFO",
     # Phase 2a — Whisper masterpiece

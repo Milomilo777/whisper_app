@@ -179,20 +179,44 @@ def _time_range_badge(
 # Module-level pure builders (tested in tests/test_download_command.py) ---------
 
 
+_COOKIE_BROWSERS = frozenset({
+    "brave", "chrome", "chromium", "edge", "firefox", "opera",
+    "safari", "vivaldi", "whale",
+})
+
+
+def _cookies_from_browser_args(value: str | None) -> list[str]:
+    """``--cookies-from-browser`` args for yt-dlp, or [] when unset.
+
+    Lets the app download login-walled / age-gated content (Facebook,
+    Instagram, TikTok stories; some YouTube Shorts) using the user's
+    logged-in browser session. ``value`` accepts yt-dlp's
+    ``BROWSER[+KEYRING][:PROFILE][::CONTAINER]`` syntax; the leading
+    browser token is validated against the supported set so a typo in a
+    hand-edited config can't pass a bogus flag.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return []
+    browser = raw.split("+", 1)[0].split(":", 1)[0].strip().lower()
+    if browser not in _COOKIE_BROWSERS:
+        return []
+    return ["--cookies-from-browser", raw]
+
+
 def build_subtitle_command(
     task: "VideoDownloadTask",
     lang: str,
     *,
     yt_dlp_path: str,
     bin_path: str,
+    cookies_from_browser: str | None = None,
 ) -> list[str]:
     output = os.path.join(task.folder, "%(title)s.%(ext)s")
     sub_langs = subtitle_lang_args(lang)
-    return [
-        yt_dlp_path,
-        "--ffmpeg-location",
-        bin_path,
-        "--newline",
+    command = [yt_dlp_path, "--ffmpeg-location", bin_path, "--newline"]
+    command.extend(_cookies_from_browser_args(cookies_from_browser))
+    command.extend([
         "--skip-download",
         "--write-auto-subs",
         "--write-subs",
@@ -202,7 +226,8 @@ def build_subtitle_command(
         "-o",
         output,
         task.url,
-    ]
+    ])
+    return command
 
 
 def build_download_command(
@@ -212,9 +237,11 @@ def build_download_command(
     bin_path: str,
     sponsorblock_categories: list[str] | None = None,
     progress_template: str | None = None,
+    cookies_from_browser: str | None = None,
 ) -> list[str]:
     output = os.path.join(task.folder, "%(title)s.%(ext)s")
     command = [yt_dlp_path, "--ffmpeg-location", bin_path, "--newline", "-o", output]
+    command.extend(_cookies_from_browser_args(cookies_from_browser))
     if progress_template:
         command.extend(["--progress-template", progress_template])
     if sponsorblock_categories:
@@ -326,7 +353,10 @@ class DownloadService:
 
     def build_subtitle_command(self, task: "VideoDownloadTask", lang: str) -> list[str]:
         return build_subtitle_command(
-            task, lang, yt_dlp_path=self.app.yt_dlp_path(), bin_path=self.app.bin_path()
+            task, lang,
+            yt_dlp_path=self.app.yt_dlp_path(),
+            bin_path=self.app.bin_path(),
+            cookies_from_browser=self.app.app_config.get("cookies_from_browser", ""),
         )
 
     def build_download_command(self, task: "VideoDownloadTask") -> list[str]:
@@ -336,6 +366,7 @@ class DownloadService:
             bin_path=self.app.bin_path(),
             sponsorblock_categories=list(self.app.app_config.get("sponsorblock_categories") or []),
             progress_template="%(progress)j",
+            cookies_from_browser=self.app.app_config.get("cookies_from_browser", ""),
         )
 
     def maybe_update_yt_dlp(self, task: "VideoDownloadTask") -> None:

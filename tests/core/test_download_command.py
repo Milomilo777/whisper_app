@@ -7,6 +7,7 @@ import types
 import pytest
 
 from app.services.download_service import (
+    _cookies_from_browser_args,
     _download_sections_arg,
     _fmt_timecode,
     _parse_timecode,
@@ -122,6 +123,52 @@ def test_build_download_command_groups_specific_format_ids():
     cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
     f = cmd[cmd.index("-f") + 1]
     assert f == "(137)+(251)/best"
+
+
+# --- browser-cookie support (yt-dlp --cookies-from-browser) -----------------
+
+
+def test_cookies_from_browser_args_valid_browser():
+    assert _cookies_from_browser_args("chrome") == ["--cookies-from-browser", "chrome"]
+    assert _cookies_from_browser_args("edge") == ["--cookies-from-browser", "edge"]
+
+
+def test_cookies_from_browser_args_empty_or_invalid_is_dropped():
+    assert _cookies_from_browser_args("") == []
+    assert _cookies_from_browser_args(None) == []
+    assert _cookies_from_browser_args("   ") == []
+    assert _cookies_from_browser_args("(off)") == []
+    assert _cookies_from_browser_args("netscape") == []   # not a real browser
+
+
+def test_cookies_from_browser_args_accepts_profile_and_keyring_syntax():
+    assert _cookies_from_browser_args("chrome:Default") == [
+        "--cookies-from-browser", "chrome:Default"
+    ]
+    assert _cookies_from_browser_args("firefox+gnomekeyring") == [
+        "--cookies-from-browser", "firefox+gnomekeyring"
+    ]
+
+
+def test_build_download_command_emits_cookies_flag():
+    task = _task()
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin",
+                                 cookies_from_browser="edge")
+    assert "--cookies-from-browser" in cmd
+    assert cmd[cmd.index("--cookies-from-browser") + 1] == "edge"
+
+
+def test_build_download_command_omits_cookies_when_unset():
+    task = _task()
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "--cookies-from-browser" not in cmd
+
+
+def test_build_subtitle_command_emits_cookies_flag():
+    task = _task()
+    cmd = build_subtitle_command(task, "en", yt_dlp_path="ytdlp", bin_path="bin",
+                                 cookies_from_browser="chrome")
+    assert cmd[cmd.index("--cookies-from-browser") + 1] == "chrome"
 
 
 def test_build_download_command_supports_progress_template():

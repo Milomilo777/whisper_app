@@ -55,6 +55,9 @@ class AdvancedDialog(tk.Toplevel):
         self._auto_transcribe = tk.BooleanVar(
             value=bool(cfg.get("auto_transcribe_after_download", False))
         )
+        self._cookies_browser = tk.StringVar(
+            value=(cfg.get("cookies_from_browser") or "").strip() or "(off)"
+        )
         existing_formats = set(cfg.get("output_formats") or ["srt", "json"])
         self._format_vars: dict[str, tk.BooleanVar] = {
             f: tk.BooleanVar(value=(f in existing_formats)) for f in supported_formats()
@@ -363,6 +366,17 @@ class AdvancedDialog(tk.Toplevel):
             ttk.Checkbutton(download, text=label, variable=self._sb_vars[cat]).grid(
                 row=2 + i // 3, column=i % 3, sticky="w", padx=8, pady=2
             )
+        ttk.Label(
+            download,
+            text=("Cookies from browser (for login-walled sites — Facebook /"
+                  " Instagram / TikTok stories, some YouTube Shorts):"),
+        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 2))
+        ttk.Combobox(
+            download, textvariable=self._cookies_browser, state="readonly",
+            width=14,
+            values=["(off)", "chrome", "edge", "firefox", "brave",
+                    "chromium", "opera", "vivaldi"],
+        ).grid(row=7, column=0, sticky="w", padx=8, pady=(0, 4))
 
         buttons = ttk.Frame(main)
         buttons.pack(fill="x", pady=(8, 0))
@@ -393,6 +407,8 @@ class AdvancedDialog(tk.Toplevel):
         cfg["hotwords"] = self._hotwords.get().strip()
         cfg["auto_transcribe_after_download"] = bool(self._auto_transcribe.get())
         cfg["sponsorblock_categories"] = [c for c, v in self._sb_vars.items() if v.get()]
+        _cb = self._cookies_browser.get().strip()
+        cfg["cookies_from_browser"] = "" if _cb in ("", "(off)") else _cb
         tpl = (self._filename_template.get() or "").strip() or "{base}.{ext}"
         cfg["output_filename_template"] = tpl
         cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
