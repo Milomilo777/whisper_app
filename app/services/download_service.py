@@ -809,6 +809,16 @@ class DownloadService:
                             percent = (downloaded / total) * 100.0
                             app.download_events.put(("progress", task, percent))
                             last_emit = now
+                # A clean EOF before Content-Length bytes have arrived
+                # means the CDN dropped the connection mid-transfer — no
+                # exception is raised in that case. Treat the partial file
+                # as a failed download; otherwise _run_smtv_task renames
+                # it to the final name and auto-transcribes a corrupt clip.
+                if not task.cancelled and total is not None and downloaded < total:
+                    raise RuntimeError(
+                        f"SMTV CDN download truncated: received {downloaded} "
+                        f"of {total} bytes"
+                    )
                 if total:
                     app.download_events.put(("progress", task, 100.0))
         except urllib.error.HTTPError as e:

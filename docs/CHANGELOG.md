@@ -46,6 +46,11 @@ stick.
 - **"Re-detect hardware" briefly froze the wizard.** The accelerator
   probe (which imports torch / onnxruntime) ran on the UI thread; it
   now runs off-thread and fills the table in when done.
+- **A truncated Supreme Master TV download was treated as success.** If
+  the CDN dropped the connection mid-transfer, the partial file was
+  renamed to the final name and auto-transcribed — a clean-looking but
+  corrupt result. The download now fails and reports an error when fewer
+  than the advertised (Content-Length) bytes arrive.
 
 ### Changed
 

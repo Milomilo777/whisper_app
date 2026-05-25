@@ -135,3 +135,39 @@ yt-dlp/ffprobe verification harness.
    blast radius).
 5. Keep a short **manual usage checklist** per release — the four
    original bugs were all found by using the app.
+
+## 6. Round 2 — subsystem audit
+
+Three more parallel agents covered subsystems untouched by round 1.
+
+### SMTV scraper (core/integrations/smtv.py + download_service.py)
+- **FIXED** Truncated CDN download treated as success: a clean
+  mid-transfer EOF renamed the partial file to final and auto-
+  transcribed it (silent corruption). `_stream_smtv_file` now raises
+  when fewer than Content-Length bytes arrive.
+- **DEFER** Cancel latency on a *stalled* SMTV socket: the cancel flag
+  is honoured every 256 KB chunk, so a flowing download cancels
+  promptly; only a fully-stalled socket waits up to the 60 s read
+  timeout. Not a correctness bug — cancel works, just slow on a dead
+  connection. Low priority.
+- **DEFER** No retry on a transient network failure; and a site-layout
+  change makes the article-text transcript silently empty (the video
+  still downloads). Both low severity.
+
+### Encoding / non-ASCII — CLEAN
+Audited every file write, subprocess text decode, and JSON dump. Already
+hardened: explicit `encoding="utf-8"` everywhere, `errors="replace"` on
+all subprocess/network decodes, `ensure_ascii=False` on persisted JSON.
+No crash-class bug. Latent note: `core/worker.py` emits events via
+`print(json.dumps(...))` relying on the default `ensure_ascii=True`; if
+anyone ever sets `ensure_ascii=False` there, also add
+`sys.stdout.reconfigure(encoding="utf-8")` or the worker will crash on
+the first non-ASCII segment.
+
+### Optional-feature degradation — CLEAN
+diarization / voiceprint / LLM / Demucs all use guarded lazy imports and
+log-and-continue wrappers; a missing dependency or model skips the step,
+never crashing or hanging a normal transcribe. Two non-blocking notes:
+`LLMRunner` chat has no timeout (only reachable with `ai_enabled=True`,
+default off), and `voiceprint_enabled` is currently read nowhere (an
+inert flag).
