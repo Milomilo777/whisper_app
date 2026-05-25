@@ -9,18 +9,52 @@ this repo. Read this file before anything else.
 
 | Item | Value |
 |---|---|
-| Branch | `chore/cleanup-hardening` — carries **v1.3.2** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
-| Version | pyproject = 1.3.2; `core.__version__` = 1.3.2; both `.iss` = 1.3.2 |
-| Last PUBLISHED release | **v1.3.2** on GitHub — built + smoke-tested (embed E2E `2 passed, 1 skipped`) + #28 clip end-to-end verified; published 2026-05-25. NOTE: the user said "release, don't wait for the install test", so the silent-install + installed-tree smoke were SKIPPED this release. |
-| GitHub releases now | `v1.3.2` (latest) + `basic-v0.1.0`; v1.3.1 + earlier releases/tags were pruned |
-| Installed test copy | none built for v1.3.2 (skipped per user). The user installs the published EXE themselves. Older `wp_v131_test` / `wp_v130_test` may still exist. |
+| Branch | `chore/cleanup-hardening` — carries **v1.3.4** (all committed + pushed; a collaborator also pushes here — fetch/rebase before pushing) |
+| Version | pyproject = 1.3.4; `core.__version__` = 1.3.4; both `.iss` = 1.3.4 |
+| Last PUBLISHED release | **v1.3.4** on GitHub (Standard + Portable) — slim ~800 MB build; built + the slim past-bug E2E PASS (docx + all formats + `en-US` normalisation + clip 0–20s + apostrophe-in-filename, via the real worker over its JSON protocol) + hermetic suite green + pyright 0/0/0; published 2026-05-25. |
+| GitHub releases now | `v1.3.4` (latest) + `basic-v0.1.0`; v1.3.3 + earlier releases/tags were pruned |
+| Installed test copy | none built for v1.3.4 (the slim build was validated by the past-bug E2E driver against the embed tree directly — `tools/e2e_slim_pastbugs.py`). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (untouched) |
 | Working tree | clean (only `.claude/` untracked) |
 | Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
-### What shipped in v1.3.2 (PUBLISHED 2026-05-25)
+### What shipped in v1.3.4 (PUBLISHED 2026-05-25)
+
+Slim install + on-demand optional deps + the docx fix. Full list:
+`docs/CHANGELOG.md` + `docs/RELEASE_NOTES_v1.3.4.md`. Headlines:
+**slim ~800 MB install** (was ~1.5 GB) — `build_embed_installer.bat`
+now prunes the heavy optional libraries (torch, torchaudio,
+openai-whisper, stable-ts, numba, llvmlite, sympy, networkx, mpmath)
+after pip install; the Standard installer dropped 348 MB → 219 MB and
+the Portable ZIP 557 MB → 326 MB. **On-demand optional features**
+(`core/optional_deps.py`) — Word-timestamp alignment (stable-ts) and the
+openai-whisper backend now `pip install --target` into a user pylibs dir
+(~700 MB, one time) the first time they're used; `app/app.py`
+`_offer_optional_install` asks first (askyesno + a threaded Toplevel
+progress), then restarts the worker. The core stack (faster-whisper) is
+still bundled so transcription/subtitles/diarisation/downloads/the
+time-range slider all work out of the box. **DOCX (+ PDF) output fix** —
+the worker's config snapshot was stale, so `output_formats` never crossed
+the process boundary and docx was silently dropped; `output_formats` is
+now threaded transcribe_command → worker → `_write_outputs`.
+New: `tools/e2e_slim_pastbugs.py` (slim-build past-bug release gate) +
+`tests/core/test_optional_deps.py`.
+
+### What shipped in v1.3.3 (PUBLISHED 2026-05-25, now pruned from GitHub)
+
+Position slider on the Download tab (#39) + clip/range review fixes, and
+the first Portable ZIP of the embed tree. Full list: `docs/CHANGELOG.md`
++ `docs/RELEASE_NOTES_v1.3.3.md`. Headlines: a **draggable Start/End
+position slider** on the Download tab (`set_download_duration` /
+`_on_download_scale`, guarded by `_suppress_scale_cb` + a
+`_download_duration<=0` disable) wired to the time-range fields; review
+fixes from three code-review shards — the slider `set()` no longer
+clobbers typed values, a clipped run forces `resume=False` (no checkpoint
+keyed to the whole file), and `start>=end` is dropped to open-ended.
+
+### What shipped in v1.3.2 (PUBLISHED 2026-05-25, now pruned from GitHub)
 
 Security + features, after a second bug-hunt (4 more parallel shards:
 concurrency, resource-leaks, hostile-input, security). Full list:
@@ -131,68 +165,67 @@ crash-resume nag, truncated-SMTV-download, About repo-URL removal, and
 the opt-in "Cookies from browser" feature. Bug-hunt method + findings:
 `docs/AUDIT_2026-05-25_boundary_bugs.md`.
 
-## 2. Shipped deliverable — Standard only going forward
+## 2. Shipped deliverables — Standard + Portable (both embed-based)
 
-v1.0.3 historically shipped **both** Portable and Standard (both are
-GitHub assets of that release). **As of 2026-05-24 the policy changed:
-future releases publish Setup-Standard only.** Portable now joins the
-Compact pipeline as maintained-but-unshipped — both specs stay in the
-repo and keep building so they don't bit-rot, but neither produces a
-published EXE anymore.
+Two published assets per release, both built from the slim
+`embed_build\` tree (embeddable CPython 3.11 + deps):
 
-| Asset | Local path | Size | Shipped going forward? |
+| Asset | Local path | Size (v1.3.4) | Notes |
 |---|---|---|---|
-| Setup-Standard | `dist_installer/WhisperProject-v1.0.3-Setup-Standard.exe` | 349 MB | yes — the only published deliverable |
-| Portable | `dist/WhisperProject-v1.0.3-Portable.exe` | 447 MB | no — v1.0.3 was its last release |
+| Setup-Standard | `dist_installer/WhisperProject-v1.3.4-Setup-Standard.exe` | 219 MB | installs to Program Files (admin), shell-extension + shortcuts |
+| Portable | `dist_installer/WhisperProject-v1.3.4-Portable.zip` | 326 MB | `shutil.make_archive` of `embed_build\`; extract + run `Run Whisper Project.bat`, no install |
+
+History: v1.0.3 shipped a PyInstaller Portable EXE; 2026-05-24 the policy
+was "Standard only"; **the user then asked for Portable back as a ZIP of
+the embed tree (v1.3.2+).** Both ship now. The PyInstaller Compact
+(`whisper_project_onedir.spec` + `installer.iss`) and onefile Portable
+(`whisper_project_onefile.spec`) pipelines remain maintained-but-unshipped
+(keep their hidden-import lists current so they don't bit-rot).
 
 Download from:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
 
-### What's in v1.0.3
+## 3. v1.3.4 RELEASE — DONE (2026-05-25).
 
-Collaborator-driven UX + memory release on top of v1.0.2.
+v1.3.4 is live on GitHub (Standard + Portable). Steps that ran:
 
-- **Time-range video download** — optional Start / End on the
-  Download tab; yt-dlp's `--download-sections` fetches only the
-  slice. SMTV URLs aren't sliced this release (clear warning).
-- **Lazy Whisper-model load** — no preload on launch. First
-  transcribe of a session shows a modal "Loading Whisper
-  model…"; subsequent transcribes reuse the alive worker. Idle
-  RAM drops by ~2 GB.
-
-See `docs/RELEASE_NOTES_v1.0.3.md` for the full list.
-
-## 3. v1.3.2 RELEASE — DONE (2026-05-25).
-
-v1.3.2 is live on GitHub. The user asked to "release, don't wait for the
-install test", so the silent-install + installed-tree smoke were SKIPPED
-(the build was still validated — see steps below). Steps that ran:
-
-1. ✅ embed rebuild (`build_embed_installer.bat`) — "embed_import_ok" /
-   "build complete".
-2. ✅ Installer compiled clean (805 s) →
-   `dist_installer\WhisperProject-v1.3.2-Setup-Standard.exe` (~349 MB).
-   IMPORTANT: ISCC writes the EXE incrementally — wait for the "Successful
-   compile" line / a stable file size before publishing (a mid-write EXE
-   looks ~218 MB and would ship corrupt).
-3. ✅ Smoke E2E on the embed tree — `2 passed, 1 skipped`. Plus an
-   end-to-end #28 clip check (transcribed only 120–180s of a 10-min file;
-   segments on the original timeline; progress reached 100%).
-4. ⏭️ Silent-install + installed-tree smoke — SKIPPED (per user).
-5. ✅ Published — tag `v1.3.2` + `gh release create` with the
-   Setup-Standard EXE + `docs/RELEASE_NOTES_v1.3.2.md`.
-6. ✅ Pruned v1.3.1 (`gh release delete v1.3.1 --cleanup-tag --yes`) —
-   GitHub now has only `v1.3.2` + `basic-v0.1.0` (archive tags kept).
-7. **GUI-manual checks for the user** (not automatable): the Transcribe
-   tab time-range (transcribe a slice of a long file); a download from a
-   non-YouTube site (the queue now shows the REAL error if it fails — feed
-   that error back for a precise fix); a login site (Facebook) → the
-   cookie hint; the progress %% visible during start-up; special-char /
-   non-English titles transcribing (the v1.3.1 fixes).
+1. ✅ Gate green: pyright `app/ core/` 0/0/0; hermetic suite (tests/ minus
+   tests/smoke) exit 0.
+2. ✅ Slim embed rebuild (`build_embed_installer.bat`, now prunes the
+   heavy libs) — `embed_build\` = **805 MB** (was 1.6 GB), "embed_import_ok"
+   + "build complete". Verified: torch/stable_whisper/whisper absent,
+   faster_whisper present, `optional_deps.is_available("alignment"/"whisper_backend")`
+   both False (on-demand path live).
+3. ✅ Standard installer compiled clean (290 s) →
+   `dist_installer\WhisperProject-v1.3.4-Setup-Standard.exe` (**219 MB**,
+   size-stable + MZ magic). IMPORTANT: ISCC writes the EXE incrementally —
+   wait for the "Successful compile" line / a stable size before publishing
+   (a mid-write EXE looks smaller and ships corrupt). Here the background
+   task exited 0 AND printed "Successful compile", so the size was final.
+4. ✅ Portable ZIP via `embed_build\python\python.exe -c "shutil.make_archive(...)"`
+   → `dist_installer\WhisperProject-v1.3.4-Portable.zip` (**326 MB**,
+   testzip OK, has `Run Whisper Project.bat` + `gui.py`, no torch).
+5. ✅ Past-bug E2E on the slim embed tree (`tools/e2e_slim_pastbugs.py`,
+   run with the embed python) — drives the REAL worker over JSON stdin/
+   stdout and asserts every output format lands. PASS: docx (36954 B, valid
+   PK magic) + srt + json + txt all written; `en-US` normalised to `en` (no
+   crash); clip 0–20s produced output (progress→100); apostrophe+space
+   filename round-tripped.
+6. ✅ Published — `gh release create v1.3.4 <Standard.exe> <Portable.zip>
+   --target chore/cleanup-hardening --notes-file docs/RELEASE_NOTES_v1.3.4.md`;
+   both assets `state=uploaded`, sizes match local.
+7. ✅ Pruned v1.3.3 (`gh release delete v1.3.3 --cleanup-tag --yes`) —
+   GitHub now has only `v1.3.4` + `basic-v0.1.0` (archive tags kept).
+8. **GUI-manual checks for the user** (not automatable): pick docx in
+   Advanced settings → confirm a .docx lands next to the media; select
+   Word-timestamp alignment → confirm the on-demand download prompt appears
+   (and works) on a machine without torch; the Download-tab position slider;
+   a non-YouTube / login-walled download (the queue shows the real error +
+   cookie hint).
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
 `core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
-`.iss` reads `#define MyAppVersion`), then repeat steps 1–6. Use absolute
+`.iss` reads `#define MyAppVersion`), then repeat steps 1–7. Use absolute
 paths via `cmd.exe` (a background cmd may not inherit cwd); `<REPO>` =
 `C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`.
 Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
@@ -215,8 +248,9 @@ Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
 
 ```
 origin/master                       (historical, untouched)
-origin/chore/cleanup-hardening      ← v1.0.3 lives here
-  tag v1.0.3                        ← the release commit (7295872)
+origin/chore/cleanup-hardening      ← HEAD carries v1.3.4 (latest release)
+  tag v1.3.4                        ← the current release commit
+  tag v1.0.3                        ← earlier release commit (7295872)
   tag archive/release-v0.7-baseline ← pre-orphan snapshot (recovery aid)
   tag v0.7.1, v0.7.0                ← historical releases
 ```
@@ -252,7 +286,10 @@ pyright app/ core/
 python -m pytest tests/ --ignore=tests/smoke
 ```
 
-Expected: 578 tests pass, pyright 0/0/0, working tree clean.
+Expected: the full hermetic suite passes (exit 0), pyright 0/0/0,
+working tree clean. Optionally re-run the slim-build release gate
+`embed_build\python\python.exe tools\e2e_slim_pastbugs.py` (PASS) after a
+rebuild.
 
 ## 8. Key documents
 
@@ -264,7 +301,7 @@ Expected: 578 tests pass, pyright 0/0/0, working tree clean.
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Process model + threading |
 | [docs/CONFIG.md](CONFIG.md) | Every config key documented |
 | [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) | How to ship the next release |
-| [docs/RELEASE_NOTES_v1.0.3.md](RELEASE_NOTES_v1.0.3.md) | v1.0.3 user-facing notes |
+| [docs/RELEASE_NOTES_v1.3.4.md](RELEASE_NOTES_v1.3.4.md) | v1.3.4 user-facing notes (latest) |
 | [docs/CHANGELOG.md](CHANGELOG.md) | Full version history |
 | [docs/STABILITY_AUDIT_2026-05-23.md](STABILITY_AUDIT_2026-05-23.md) | Multi-day stability audit + the P1 punch list |
 | [CLAUDE.md](../CLAUDE.md) | Durable rules for any Claude Code session |
