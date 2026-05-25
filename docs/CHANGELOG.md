@@ -4,6 +4,36 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.6] — 2026-05-26
+
+A new Video Tiling tab + the groundwork for running on Linux and macOS.
+
+### Added
+
+- **Video Tiling tab.** Paste a live-stream URL (YouTube, X/Twitter, and
+  the other yt-dlp sites), pick a grid size, and the stream fills the
+  screen as an N×N "video wall" (ports the maintainer's `video-tiler`).
+  Uses **ffplay**, which isn't bundled — the tab shows how to add it when
+  it's missing, so the base download stays the same size.
+- **Linux support** (`platform/linux/`): a one-step `install.sh` (venv +
+  deps + `yt-dlp` + a static `ffmpeg` fallback + desktop launcher), a
+  headless `whisper-transcribe` CLI for servers, plus `update.sh` /
+  `uninstall.sh` and a README.
+- **macOS groundwork** (`platform/macos/`): a double-click `install.command`,
+  a Gatekeeper `unblock.command` (`xattr -dr com.apple.quarantine`), and a
+  README covering the unsigned-app install flow. Marked needs-real-Mac
+  validation.
+
+### Changed
+
+- **Cross-platform core hardening.** `yt-dlp`/`ffmpeg`/`ffprobe` resolve to
+  the right per-OS binary (bundled or on PATH); `--ffmpeg-location` is only
+  passed when a bundled ffmpeg exists; VLC discovery now covers macOS
+  (`VLC.app`) and Linux library dirs as well as the Windows registry. The
+  Windows build is unchanged.
+- Added a `.gitattributes` pinning LF on shell/`.command` scripts so they
+  run on Linux/macOS regardless of git's autocrlf.
+
 ## [1.3.5] — 2026-05-25
 
 Real pause/resume/cancel + a post-slim hardening pass (five parallel

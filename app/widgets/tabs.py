@@ -574,3 +574,61 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.update_subtitle_state()
     app.after(200, app.format_service.poll)
     app.after(300, app.download_service.poll)
+
+
+def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
+    """Video Tiling: fill the screen with an N×N grid of one live stream."""
+    frame = ttk.Frame(parent, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame, text="Video Tiling", font=("TkDefaultFont", 13, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text=(
+            "Play one live stream as a full-screen N×N grid (a video wall). "
+            "Paste a stream URL (YouTube, X / Twitter, and the other yt-dlp "
+            "sites), pick the grid size, and Start. Press Q or Esc in the "
+            "video window — or the Stop button — to end it."
+        ),
+        wraplength=620, justify="left", foreground="#666",
+    ).pack(anchor="w", pady=(4, 10))
+
+    row = ttk.Frame(frame)
+    row.pack(fill="x", pady=(0, 8))
+    ttk.Label(row, text="Stream URL:").pack(side="left")
+    app.tiling_url_var = tk.StringVar()
+    ttk.Entry(row, textvariable=app.tiling_url_var).pack(
+        side="left", fill="x", expand=True, padx=(8, 0)
+    )
+
+    row2 = ttk.Frame(frame)
+    row2.pack(fill="x", pady=(0, 8))
+    ttk.Label(row2, text="Grid (N×N):").pack(side="left")
+    app.tiling_divisions_var = tk.IntVar(value=3)
+    ttk.Spinbox(
+        row2, from_=1, to=8, width=5, textvariable=app.tiling_divisions_var,
+    ).pack(side="left", padx=(8, 0))
+    ttk.Button(row2, text="Start tiling", command=app.start_tiling).pack(
+        side="left", padx=(16, 4)
+    )
+    ttk.Button(row2, text="Stop", command=app.stop_tiling).pack(side="left")
+
+    app.tiling_status_var = tk.StringVar(value="")
+    ttk.Label(
+        frame, textvariable=app.tiling_status_var, foreground="#666",
+    ).pack(anchor="w", pady=(6, 0))
+
+    from core.tiling import ffplay_available
+    if not ffplay_available():
+        ffplay_name = "ffplay.exe" if os.name == "nt" else "ffplay"
+        ttk.Label(
+            frame,
+            text=(
+                f"Note: Video Tiling needs ffplay, which isn't bundled. Put "
+                f"{ffplay_name} in the app's bin folder (it comes with the "
+                f"full ffmpeg build) or install ffmpeg so ffplay is on PATH."
+            ),
+            wraplength=620, justify="left", foreground="#b5651a",
+        ).pack(anchor="w", pady=(10, 0))

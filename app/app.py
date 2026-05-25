@@ -24,7 +24,12 @@ from app.services.transcription_service import TranscriptionService
 from app.dialogs.statistics import show_statistics as _show_stats
 from app.widgets.console import build_console
 from app.widgets.platform import open_folder as _open_folder_helper
-from app.widgets.tabs import build_download_tab, build_queue_tab, build_transcribe_tab
+from app.widgets.tabs import (
+    build_download_tab,
+    build_queue_tab,
+    build_tiling_tab,
+    build_transcribe_tab,
+)
 from app.widgets.tray import TrayController
 from core import __version__ as _APP_VERSION
 from core.config import load_config, save_config
@@ -90,6 +95,10 @@ class App(tk.Tk):
     # Transcribe-tab time-slice (created by tabs.build_transcribe_tab).
     transcribe_start_time_var: tk.StringVar
     transcribe_end_time_var: tk.StringVar
+    # Video Tiling tab (created by tabs.build_tiling_tab).
+    tiling_url_var: tk.StringVar
+    tiling_divisions_var: tk.IntVar
+    tiling_status_var: tk.StringVar
     # Download-tab position sliders (created by tabs.build_download_tab).
     download_start_scale: "ttk.Scale"
     download_end_scale: "ttk.Scale"
@@ -218,6 +227,8 @@ class App(tk.Tk):
         self.format_service = FormatService(self)
         self.download_service = DownloadService(self)
         self.transcription_service = TranscriptionService(self)
+        from core.tiling import TilingController
+        self.tiling = TilingController()
         self.integrations_service = IntegrationsService(self)
 
         # SQLite history (Phase 3a). Mark any pre-crash row as interrupted on launch.
@@ -888,6 +899,10 @@ class App(tk.Tk):
         for task in self.download_queue:
             if task.process and task.process.poll() is None:
                 task.process.terminate()
+        try:
+            self.tiling.stop()
+        except Exception:  # noqa: BLE001
+            pass
         self.transcription_service.stop_all()
         self.destroy()
 
@@ -926,12 +941,15 @@ class App(tk.Tk):
         self.t1 = ttk.Frame(self.nb)
         self.t2 = ttk.Frame(self.nb)
         self.t3 = ttk.Frame(self.nb)
+        self.t4 = ttk.Frame(self.nb)
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
         self.nb.add(self.t3, text="Download Videos")
+        self.nb.add(self.t4, text="Video Tiling")
         build_transcribe_tab(self, self.t1)
         build_queue_tab(self, self.t2)
         build_download_tab(self, self.t3)
+        build_tiling_tab(self, self.t4)
 
     def _save_auto_transcribe_pref(self) -> None:
         self.app_config["auto_transcribe_after_download"] = bool(self.auto_transcribe_var.get())
@@ -1695,6 +1713,29 @@ class App(tk.Tk):
     def clear_completed(self) -> None:
         self.queue[:] = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         self.refresh()
+
+    # Video tiling ------------------------------------------------------------
+    def start_tiling(self) -> None:
+        try:
+            self.tiling.start(
+                self.tiling_url_var.get(),
+                self.tiling_divisions_var.get(),
+                log=self.log,
+            )
+            n = self.tiling_divisions_var.get()
+            self.tiling_status_var.set(f"Tiling running ({n}×{n}). Stop with the button or Q/Esc in the video window.")
+        except (FileNotFoundError, RuntimeError) as e:
+            self.tiling_status_var.set(str(e))
+        except Exception as e:  # noqa: BLE001
+            self.tiling_status_var.set(f"Could not start tiling: {e}")
+            self.log(f"Tiling error: {e}")
+
+    def stop_tiling(self) -> None:
+        try:
+            self.tiling.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.tiling_status_var.set("Stopped.")
 
     # Rendering ---------------------------------------------------------------
     def fmt_time(self, t: Any) -> str:
