@@ -21,6 +21,25 @@ if TYPE_CHECKING:
 # --- shared UX helpers -----------------------------------------------------
 
 
+class _AutoScrollbar(ttk.Scrollbar):
+    """A scrollbar that hides itself when the whole view already fits.
+
+    Gives the queue lists a vertical scrollbar that appears only when the
+    list grows past the visible area. Must be managed by grid — it
+    grid_remove()s itself when not needed and grid()s back when it is.
+    """
+
+    def set(self, first: float | str, last: float | str) -> None:
+        try:
+            if float(first) <= 0.0 and float(last) >= 1.0:
+                self.grid_remove()
+            else:
+                self.grid()
+        except (ValueError, tk.TclError):
+            pass
+        super().set(first, last)
+
+
 # Glanceable status icons for both Treeviews. Plain Unicode so they
 # render without an embedded image set, and so they survive the
 # packaging mode that ships no icon assets.
@@ -243,7 +262,11 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     )
 
     cols = ("file", "status", "progress", "language", "time")
-    app.tree = ttk.Treeview(parent, columns=cols, show="headings")
+    tree_frame = ttk.Frame(parent)
+    tree_frame.pack(fill="both", expand=True, padx=10)
+    tree_frame.rowconfigure(0, weight=1)
+    tree_frame.columnconfigure(0, weight=1)
+    app.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
     headings = {
         "file": "File",
         "status": "Status",
@@ -257,7 +280,10 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     app.tree.column("progress", width=80, anchor="center")
     app.tree.column("time", width=80, anchor="center")
     app.tree.column("status", width=120)
-    app.tree.pack(fill="both", expand=True, padx=10)
+    _vsb = _AutoScrollbar(tree_frame, orient="vertical", command=app.tree.yview)
+    app.tree.configure(yscrollcommand=_vsb.set)
+    app.tree.grid(row=0, column=0, sticky="nsew")
+    _vsb.grid(row=0, column=1, sticky="ns")
 
     # Empty-state hint shown on top of the Treeview when there are no
     # rows yet. App.refresh hides it as soon as a task is enqueued.
@@ -451,6 +477,8 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     bottom.pack(fill="both", expand=True)
 
     cols = ("name", "url", "format", "status", "progress", "time")
+    bottom.rowconfigure(0, weight=1)
+    bottom.columnconfigure(0, weight=1)
     app.download_tree = ttk.Treeview(bottom, columns=cols, show="headings", height=8)
     for c in cols:
         app.download_tree.heading(c, text=c)
@@ -460,7 +488,10 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.download_tree.column("status", width=100)
     app.download_tree.column("progress", width=80)
     app.download_tree.column("time", width=80)
-    app.download_tree.pack(fill="both", expand=True)
+    _dvsb = _AutoScrollbar(bottom, orient="vertical", command=app.download_tree.yview)
+    app.download_tree.configure(yscrollcommand=_dvsb.set)
+    app.download_tree.grid(row=0, column=0, sticky="nsew")
+    _dvsb.grid(row=0, column=1, sticky="ns")
     app.download_tree.bind("<Button-3>", app.download_menu_row)
     # See `app.row_map` above — annotation belongs on the class.
     app.download_row_map = {}
