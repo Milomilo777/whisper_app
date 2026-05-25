@@ -342,6 +342,15 @@ def test_subtitle_command_separates_url_with_double_dash():
     assert cmd[-2] == "--"
 
 
+def test_download_sections_drops_nonsensical_end_le_start():
+    # end <= start (fat-fingered, or end slider dragged below start) would
+    # make yt-dlp's "*start-end" download nothing — degrade to open-ended.
+    assert _download_sections_arg(90.0, 30.0) == "*0:01:30-"
+    assert _download_sections_arg(60.0, 60.0) == "*0:01:00-"
+    # A valid range is untouched.
+    assert _download_sections_arg(30.0, 90.0) == "*0:00:30-0:01:30"
+
+
 # --- timecode helpers (v1.0.3 --download-sections) -------------------------
 
 

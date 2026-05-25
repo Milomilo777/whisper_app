@@ -104,6 +104,11 @@ class FormatService:
     def _apply_smtv_formats(self, episode: smtv_mod.SmtvEpisode) -> None:
         """Populate the Download tab dropdowns from a parsed SMTV episode."""
         app = self.app
+        # SMTV ignores time-range slicing, so disable the position sliders.
+        try:
+            app.set_download_duration(0.0)
+        except AttributeError:
+            pass
         audio_map: dict[str, dict[str, object]] = {}
         video_map: dict[str, dict[str, object]] = {}
 
@@ -242,6 +247,13 @@ class FormatService:
                 app.audio_format_var.set(audio_values[0])
             if video_values:
                 app.video_format_var.set(video_values[0])
+            # Feed the probed video length to the Download-tab position
+            # sliders (0 / missing → live or unknown → sliders disabled).
+            duration = payload.get("duration")
+            try:
+                app.set_download_duration(float(duration) if duration else 0.0)
+            except (AttributeError, TypeError, ValueError):
+                pass
             app.update_download_mode()
             if audio_values or video_values:
                 app.format_status_var.set(

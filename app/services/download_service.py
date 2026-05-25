@@ -147,6 +147,11 @@ def _download_sections_arg(
     """Build the ``--download-sections`` value, or ``None`` if both bounds unset."""
     if start is None and end is None:
         return None
+    # A nonsensical end <= start (fat-fingered, or end slider dragged below
+    # start) would make yt-dlp's "*start-end" download nothing/error — drop
+    # the end so it degrades to "from start to the end of the video".
+    if start is not None and end is not None and end <= start:
+        end = None
     start_str = _fmt_timecode(start) if start is not None else ""
     end_str = _fmt_timecode(end) if end is not None else ""
     return f"*{start_str}-{end_str}"
@@ -1058,9 +1063,12 @@ class DownloadService:
             if reason:
                 msg = f"{msg}: {reason}"
             low = reason.lower()
+            # Specific phrases only — bare "age"/"account" matched unrelated
+            # errors ("storage", "page", "message").
             if any(k in low for k in (
-                "login", "log in", "sign in", "cookies", "private",
-                "members-only", "account", "authenticate", "age",
+                "login", "log in", "sign in", "sign-in", "cookies",
+                "private video", "members-only", "age-restrict",
+                "age restrict", "this video is private", "confirm your age",
             )):
                 msg += (
                     "  — this site likely needs a logged-in session: turn on "

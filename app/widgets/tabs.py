@@ -437,11 +437,31 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         trim_frame, textvariable=app.download_end_time_var, width=12
     )
     end_entry.grid(row=1, column=1, sticky="w", padx=(4, 8), pady=(2, 0))
+    # Position sliders (0 .. video length) that fill the Start/End fields by
+    # dragging. Disabled until a video is probed — the format probe calls
+    # app.set_download_duration() with the real length (0 = live/unknown).
+    trim_frame.columnconfigure(2, weight=1)
+    app.download_start_scale = ttk.Scale(
+        trim_frame, from_=0.0, to=1.0, orient="horizontal", length=180,
+        command=lambda v: app._on_download_scale("start", v),
+    )
+    app.download_start_scale.state(["disabled"])
+    app.download_start_scale.grid(row=0, column=2, sticky="ew", padx=(8, 0))
+    app.download_end_scale = ttk.Scale(
+        trim_frame, from_=0.0, to=1.0, orient="horizontal", length=180,
+        command=lambda v: app._on_download_scale("end", v),
+    )
+    app.download_end_scale.state(["disabled"])
+    app.download_end_scale.grid(row=1, column=2, sticky="ew", padx=(8, 0), pady=(2, 0))
     ttk.Label(
         trim_frame,
         text="format H:MM:SS — e.g. 0:00:51 to 0:01:25; leave at 0:00:00 for full video",
         foreground="#888",
     ).grid(row=2, column=0, columnspan=3, sticky="w", pady=(4, 0))
+    app.download_duration_var = tk.StringVar(value="")
+    ttk.Label(trim_frame, textvariable=app.download_duration_var, foreground="#888").grid(
+        row=3, column=0, columnspan=3, sticky="w"
+    )
 
     ttk.Label(top, text="Subtitles").grid(row=6, column=0, sticky="w", pady=(8, 0))
     sub_frame = ttk.Frame(top)

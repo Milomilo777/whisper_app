@@ -89,6 +89,10 @@ class App(tk.Tk):
     # Transcribe-tab time-slice (created by tabs.build_transcribe_tab).
     transcribe_start_time_var: tk.StringVar
     transcribe_end_time_var: tk.StringVar
+    # Download-tab position sliders (created by tabs.build_download_tab).
+    download_start_scale: "ttk.Scale"
+    download_end_scale: "ttk.Scale"
+    download_duration_var: tk.StringVar
     download_mode_var: tk.StringVar
     download_mode_combo: "ttk.Combobox"
     audio_format_var: tk.StringVar
@@ -1462,6 +1466,53 @@ class App(tk.Tk):
         self.download_queue.append(copy)
         self.refresh_download_queue()
         self.download_service.process_queue()
+
+    def set_download_duration(self, seconds: float) -> None:
+        """Point the Download-tab position sliders at the probed video
+        length. seconds <= 0 (live / unknown / SMTV) leaves them disabled."""
+        dur = max(0.0, float(seconds or 0.0))
+        self._download_duration = dur
+        start = getattr(self, "download_start_scale", None)
+        end = getattr(self, "download_end_scale", None)
+        if start is None or end is None:
+            return
+        # Reset the slider knobs to 0 WITHOUT firing _on_download_scale —
+        # otherwise the (debounced) probe would wipe a range the user just
+        # typed into the Start/End fields.
+        self._suppress_scale_cb = True
+        try:
+            for sc in (start, end):
+                sc.configure(to=dur if dur > 0 else 1.0)
+                sc.set(0.0)
+                sc.state(["!disabled"] if dur > 0 else ["disabled"])
+        finally:
+            self._suppress_scale_cb = False
+        if getattr(self, "download_duration_var", None) is not None:
+            from app.services.download_service import _fmt_timecode
+            self.download_duration_var.set(
+                f"video length {_fmt_timecode(dur)} — drag to set the range"
+                if dur > 0 else ""
+            )
+
+    def _on_download_scale(self, which: str, value: str) -> None:
+        """A position slider moved — write its timecode into the matching
+        Start/End field (0:00:00 stays the 'unset' sentinel)."""
+        if getattr(self, "_suppress_scale_cb", False):
+            return
+        # No probed video length → ignore stray drags (a disabled ttk.Scale
+        # still accepts the mouse, and the range would be a useless 0..1s).
+        if getattr(self, "_download_duration", 0.0) <= 0:
+            return
+        from app.services.download_service import _fmt_timecode
+        try:
+            secs = float(value)
+        except (TypeError, ValueError):
+            return
+        tc = _fmt_timecode(secs)
+        if which == "start":
+            self.download_start_time_var.set(tc)
+        else:
+            self.download_end_time_var.set(tc)
 
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True
