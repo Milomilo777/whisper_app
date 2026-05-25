@@ -176,6 +176,11 @@ def main() -> int:
             # span via clip_timestamps. None = whole file.
             task.clip_start = command.get("clip_start")
             task.clip_end = command.get("clip_end")
+            # A clipped run must NOT resume: the checkpoint is keyed to the
+            # whole file with no clip marker, so resuming would transcribe
+            # past clip_end. Clips are short — re-transcribe the slice fresh.
+            if task.clip_start or task.clip_end:
+                task.resume = False
             emit("started", file_path=file_path)
 
             def language_cb(lang: str, prob: float) -> None:

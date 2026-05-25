@@ -1163,10 +1163,9 @@ def transcribe(
         for seg in segments:
             if task.cancelled:
                 # Final-flush: persist whatever we have so the user can
-                # resume from this point. If the periodic writer fired
-                # less than a second ago this is essentially a no-op
-                # for the on-disk state.
-                if segments_data:
+                # resume from this point. Skipped for a clipped run (no
+                # resumable checkpoint — see the periodic block below).
+                if segments_data and clip is None:
                     _write_periodic_checkpoint(
                         task,
                         segments_data,
@@ -1194,7 +1193,10 @@ def transcribe(
             segments_since_checkpoint += 1
 
             now = time.time()
-            if (
+            # No checkpoints for a clipped run: the checkpoint is keyed to
+            # the whole file with no clip marker, so a later resume would
+            # transcribe past clip_end. Clips are short — no resume needed.
+            if clip is None and (
                 segments_since_checkpoint >= _CHECKPOINT_EVERY_N_SEGMENTS
                 or (now - last_checkpoint_time) >= _CHECKPOINT_EVERY_N_SECONDS
             ):
