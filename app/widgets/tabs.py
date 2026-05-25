@@ -69,6 +69,27 @@ def status_label(status: str) -> str:
     return STATUS_ICON.get(status, "") + status
 
 
+_PROGRESS_SEGMENTS = 10
+
+
+def progress_cell(percent: float | int) -> str:
+    """Render progress as a text bar + number for a Treeview cell.
+
+    A Treeview cell can't host a real ttk.Progressbar, so we draw a
+    fixed-width block bar (█ filled / ░ empty) and append the exact
+    percentage — a glanceable graphical trend *and* the number in one
+    column.
+    """
+    try:
+        pct = int(round(float(percent)))
+    except (TypeError, ValueError):
+        pct = 0
+    pct = max(0, min(100, pct))
+    filled = (pct * _PROGRESS_SEGMENTS + 50) // 100
+    bar = "█" * filled + "░" * (_PROGRESS_SEGMENTS - filled)
+    return f"{bar} {pct:>3d}%"
+
+
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     """Beginner-friendly Transcribe tab.
 
@@ -116,9 +137,9 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     app.diarization_var = tk.BooleanVar(
         value=bool(_diar_available) and bool(app.app_config.get("diarization_enabled", False))
     )
-    app.transcribe_lang_var = tk.StringVar(
-        value=str(app.app_config.get("transcribe_language", "Auto"))
-    )
+    # Always start at "Auto" — the language is deliberately NOT restored
+    # from config (user request: every launch defaults to auto-detect).
+    app.transcribe_lang_var = tk.StringVar(value="Auto")
     app.device_var = tk.StringVar(value=str(app.app_config.get("device", "auto")))
     app.compute_type_var = tk.StringVar(
         value=str(app.app_config.get("compute_type", "int8"))
@@ -238,10 +259,12 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     )
     app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=10)
     app.last_result_frame.grid(
-        row=5, column=0, columnspan=3, sticky="nsew",
+        row=5, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(0, 12),
     )
-    parent.rowconfigure(5, weight=1)
+    # The card sizes to its content instead of greedily filling the whole
+    # lower half of the tab (it previously expanded via rowconfigure
+    # weight=1, which dominated the window).
     app.last_result_empty_var = tk.StringVar(
         value="No transcription finished yet. Drop a file above and click Transcribe."
     )
@@ -277,7 +300,7 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     for c in cols:
         app.tree.heading(c, text=headings[c])
     app.tree.column("language", width=140)
-    app.tree.column("progress", width=80, anchor="center")
+    app.tree.column("progress", width=150, anchor="w")
     app.tree.column("time", width=80, anchor="center")
     app.tree.column("status", width=120)
     _vsb = _AutoScrollbar(tree_frame, orient="vertical", command=app.tree.yview)
@@ -486,7 +509,7 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.download_tree.column("url", width=420)
     app.download_tree.column("format", width=180)
     app.download_tree.column("status", width=100)
-    app.download_tree.column("progress", width=80)
+    app.download_tree.column("progress", width=150, anchor="w")
     app.download_tree.column("time", width=80)
     _dvsb = _AutoScrollbar(bottom, orient="vertical", command=app.download_tree.yview)
     app.download_tree.configure(yscrollcommand=_dvsb.set)

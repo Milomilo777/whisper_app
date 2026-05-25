@@ -919,8 +919,9 @@ class App(tk.Tk):
         self.app_config["word_timestamps"] = bool(self.word_timestamps_var.get())
         if getattr(self, "diarization_var", None) is not None:
             self.app_config["diarization_enabled"] = bool(self.diarization_var.get())
-        if getattr(self, "transcribe_lang_var", None) is not None:
-            self.app_config["transcribe_language"] = self.transcribe_lang_var.get()
+        # transcribe_language is intentionally NOT persisted: the picker
+        # resets to "Auto" every launch (user request). The choice still
+        # lives in transcribe_lang_var for the rest of the session.
         if getattr(self, "device_var", None) is not None:
             self.app_config["device"] = self.device_var.get()
         if getattr(self, "compute_type_var", None) is not None:
@@ -1499,7 +1500,7 @@ class App(tk.Tk):
         return f"{h:02}:{m:02}:{sec:02}"
 
     def refresh(self) -> None:
-        from app.widgets.tabs import status_label
+        from app.widgets.tabs import progress_cell, status_label
 
         self.tree.delete(*self.tree.get_children())
         self.row_map = {}
@@ -1513,7 +1514,7 @@ class App(tk.Tk):
                 values=(
                     os.path.basename(t.file_path),
                     status_label(t.status),
-                    f"{t.progress}%",
+                    progress_cell(t.progress),
                     lang_str,
                     self.fmt_time(t),
                 ),
@@ -1534,7 +1535,7 @@ class App(tk.Tk):
         self._refresh_window_title()
 
     def refresh_download_queue(self) -> None:
-        from app.widgets.tabs import status_label
+        from app.widgets.tabs import progress_cell, status_label
 
         self.download_tree.delete(*self.download_tree.get_children())
         self.download_row_map = {}
@@ -1547,7 +1548,7 @@ class App(tk.Tk):
                     task.url,
                     task.format_label,
                     status_label(task.status),
-                    f"{task.progress}%",
+                    progress_cell(task.progress),
                     self.fmt_time(task),
                 ),
             )
