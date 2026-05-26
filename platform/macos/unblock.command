@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "[whisper] removing the quarantine flag from the repo…"
 xattr -dr com.apple.quarantine "$REPO_ROOT" 2>/dev/null || true
-LAUNCHER="$HOME/Applications/Whisper Project.command"
-[ -e "$LAUNCHER" ] && xattr -dr com.apple.quarantine "$LAUNCHER" 2>/dev/null || true
+APP="$HOME/Applications/Whisper Project.app"
+[ -e "$APP" ] && xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 echo "[whisper] done. Try opening the app again."
 echo "[whisper] still blocked? System Settings → Privacy & Security → 'Open Anyway'."

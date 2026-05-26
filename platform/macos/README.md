@@ -11,8 +11,15 @@ certificate), so macOS Gatekeeper needs a one-time nudge — see below.
 ## Install
 
 You need Python 3.11+ **with Tk**. The easiest is the official installer
-from <https://www.python.org/downloads/macos/> (it bundles Tk). With
-Homebrew instead: `brew install python python-tk`.
+from <https://www.python.org/downloads/macos/> (it bundles a good Tk 8.6).
+With Homebrew instead: `brew install python python-tk`.
+
+> **Don't use Apple's built-in `python3` for the GUI.** It links Apple's
+> deprecated Tk 8.5, which *imports* fine but renders a blurry/unstable
+> window. The installer detects this and warns; pass the python.org one
+> explicitly if needed:
+> `PYTHON=/usr/local/bin/python3 bash platform/macos/install.command`.
+> (The headless CLI doesn't use Tk, so any python3 is fine for it.)
 
 Get the repo **via Terminal** (this matters — see Gatekeeper note), then run
 the installer:
@@ -25,8 +32,11 @@ bash platform/macos/install.command
 
 The installer makes a `.venv`, installs the deps + `yt-dlp`, gets `ffmpeg`
 (Homebrew if present, else a static build into `bin/`), and creates:
-- `~/Applications/Whisper Project.command` — double-click to launch the GUI;
-- `~/.local/bin/whisper-transcribe` — headless CLI for servers.
+- `~/Applications/Whisper Project.app` — a real double-clickable app bundle
+  (no lingering Terminal window), built locally so it isn't quarantined;
+- `~/.local/bin/whisper-transcribe` — headless CLI for servers. If your
+  shell can't find it, add `~/.local/bin` to PATH in **`~/.zshrc`**
+  (macOS uses zsh): `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`.
 
 ## Gatekeeper (unsigned app) — why and how
 
@@ -58,8 +68,15 @@ whisper-transcribe /path/to/media.mp4 --formats srt json --language en
 
 ## Notes / what still needs a real Mac
 
-- The static-ffmpeg fallback uses evermeet.cx; Homebrew's `ffmpeg` is
-  preferred when available.
+- The static-ffmpeg fallback (evermeet.cx) is **Intel x86_64** and runs
+  under Rosetta on Apple Silicon. The installer tries Homebrew first, which
+  gives a native arm64 ffmpeg — prefer that on M-series Macs.
+- **Homebrew is the cleanest unsigned-app channel** (brew installs aren't
+  quarantined + it handles python/ffmpeg natively + `brew upgrade`), BUT a
+  Homebrew tap needs a **public** source. This repo is private, so a tap
+  isn't an option today; if it's ever made public, a formula is the
+  recommended Mac install. Until then the source + venv flow here is the
+  right call.
 - The embedded VLC preview needs VLC at `/Applications/VLC.app` (the app
   now looks there); without it the transcript viewer is read-only.
 - Apple-silicon vs Intel: faster-whisper/ctranslate2 ship arm64 + x86_64
