@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -88,6 +89,16 @@ def _segment_min_probability(seg: dict[str, Any]) -> float | None:
     if not probs:
         return None
     return min(probs)
+
+
+def _os_open(path: str) -> None:
+    """Open a file or folder with the OS default handler (cross-platform)."""
+    if sys.platform == "darwin":
+        subprocess.run(["open", path], check=False)
+    elif os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+    else:
+        subprocess.run(["xdg-open", path], check=False)
 
 
 def _dir_has_vlc_lib(d: str) -> bool:
@@ -542,8 +553,7 @@ class TranscriptViewer(tk.Toplevel):
     def _open_json_folder(self) -> None:
         folder = os.path.dirname(self.json_path) or "."
         try:
-            if os.name == "nt":
-                os.startfile(folder)  # type: ignore[attr-defined]
+            _os_open(folder)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Open failed", str(e), parent=self)
 
@@ -556,8 +566,7 @@ class TranscriptViewer(tk.Toplevel):
             )
             return
         try:
-            if os.name == "nt":
-                os.startfile(self.media_path)  # type: ignore[attr-defined]
+            _os_open(self.media_path)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("Open failed", str(e), parent=self)
 
@@ -671,11 +680,17 @@ class TranscriptViewer(tk.Toplevel):
             self.vlc_player = self.vlc_instance.media_player_new()
             media = self.vlc_instance.media_new(self.media_path)
             self.vlc_player.set_media(media)
-            # Bind player to the right-side canvas via the canvas's
-            # window ID (HWND on Windows).
+            # Bind the player to the right-side canvas via its native window
+            # handle. The libvlc call differs per platform: HWND on Windows,
+            # an NSObject (NSView) on macOS, an X11 window id on Linux.
             try:
-                hwnd = self.video_canvas.winfo_id()
-                self.vlc_player.set_hwnd(hwnd)
+                handle = self.video_canvas.winfo_id()
+                if sys.platform == "darwin":
+                    self.vlc_player.set_nsobject(handle)
+                elif os.name == "nt":
+                    self.vlc_player.set_hwnd(handle)
+                else:
+                    self.vlc_player.set_xwindow(handle)
             except Exception:  # noqa: BLE001
                 pass
             # Position-update loop

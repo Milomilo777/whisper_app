@@ -14,6 +14,7 @@ the rest of the App keeps booting.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -94,6 +95,13 @@ class TrayController:
         self._active = False
 
     def is_supported(self) -> bool:
+        # macOS: pystray's AppKit backend must run its event loop on the
+        # MAIN thread, but Tk already owns it. Running the tray off-thread
+        # (as start() does) silently no-ops there — worse, it would let
+        # minimise-to-tray hide the window with no tray to restore it. So
+        # the tray is disabled on macOS; the app lives in the Dock instead.
+        if sys.platform == "darwin":
+            return False
         return self._pystray is not None and self._pil is not None
 
     # -- icon lifecycle --------------------------------------------------
