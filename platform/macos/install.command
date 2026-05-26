@@ -59,7 +59,10 @@ else
 fi
 
 # ---- venv + deps --------------------------------------------------------
+# Rebuild from scratch so a re-run after switching Python (e.g. Apple →
+# python.org) doesn't silently reuse a stale venv built against the old Tk.
 say "creating virtualenv at $VENV"
+rm -rf "$VENV"
 "$PY" -m venv "$VENV"
 # shellcheck disable=SC1091
 . "$VENV/bin/activate"
@@ -76,6 +79,11 @@ elif command -v brew >/dev/null 2>&1; then
   say "installing ffmpeg via Homebrew…"
   brew install ffmpeg || warn "brew install ffmpeg failed — install it manually."
 else
+  if [ "$(uname -m)" = "arm64" ]; then
+    warn "no Homebrew on Apple Silicon: the static ffmpeg below is Intel"
+    warn "(x86_64) and needs Rosetta 2 (softwareupdate --install-rosetta)."
+    warn "Better: install Homebrew then 'brew install ffmpeg' for a native build."
+  fi
   say "no ffmpeg + no Homebrew — fetching a static build into bin/…"
   TMP="$(mktemp -d)"
   ok=1
@@ -119,6 +127,11 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 EOF
+# Ad-hoc sign the bundle ('-s -') so it has a STABLE code identity. Without
+# this an unsigned app's TCC grants (Files & Folders, Desktop/Downloads)
+# reset whenever the binary changes — e.g. on every re-install. Harmless if
+# codesign is unavailable.
+codesign --force --deep -s - "$APP" 2>/dev/null || true
 
 # Headless CLI for servers / scripting.
 cat > "$BIN_LOCAL/whisper-transcribe" <<EOF

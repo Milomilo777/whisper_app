@@ -15,6 +15,8 @@
 # At each release, update `url` to the new tag and refresh `sha256`:
 #   curl -fsSL <url> | shasum -a 256
 class WhisperProject < Formula
+  include Language::Python::Virtualenv
+
   desc "Offline Whisper transcription + yt-dlp/ffmpeg downloader & video tiling"
   homepage "https://github.com/Milomilo777/whisper_project_direct_download_v2"
   url "https://github.com/Milomilo777/whisper_project_direct_download_v2/archive/refs/tags/v1.3.6.tar.gz"
@@ -26,29 +28,32 @@ class WhisperProject < Formula
   depends_on "python-tk@3.12" # Tk 8.6 for the desktop GUI
 
   def install
-    python = Formula["python@3.12"].opt_bin/"python3.12"
-    venv = libexec/"venv"
-    system python, "-m", "venv", venv
-    system venv/"bin/pip", "install", "--upgrade", "pip", "wheel"
-    system venv/"bin/pip", "install", "-r", "requirements.txt"
-    system venv/"bin/pip", "install", "yt-dlp"
+    # virtualenv_create (not a raw `python -m venv`) builds the venv against
+    # python@3.12's stable opt-path AND registers it for Homebrew's relink
+    # on a python revision bump — so `brew upgrade python@3.12` doesn't orphan
+    # the interpreter / dangle the native wheels (faster-whisper, ctranslate2,
+    # sherpa-onnx). We still pip-install from PyPI (fine for a tap; not core).
+    venv = virtualenv_create(libexec/"venv", "python3.12")
+    system venv.root/"bin/pip", "install", "--upgrade", "pip", "wheel"
+    system venv.root/"bin/pip", "install", "-r", "requirements.txt"
+    system venv.root/"bin/pip", "install", "yt-dlp"
 
     # Install the app source under libexec and expose two entry points.
     libexec.install Dir["*"]
     (bin/"whisper-project").write <<~SH
       #!/bin/bash
-      exec "#{venv}/bin/python" "#{libexec}/gui.py" "$@"
+      exec "#{libexec}/venv/bin/python" "#{libexec}/gui.py" "$@"
     SH
     (bin/"whisper-transcribe").write <<~SH
       #!/bin/bash
-      exec "#{venv}/bin/python" "#{libexec}/gui.py" transcribe "$@"
+      exec "#{libexec}/venv/bin/python" "#{libexec}/gui.py" transcribe "$@"
     SH
-    chmod 0755, bin/"whisper-project"
-    chmod 0755, bin/"whisper-transcribe"
   end
 
   test do
     # The CLI prints usage and exits cleanly with --help.
     assert_match "transcribe", shell_output("#{bin}/whisper-project --help")
+    # ffmpeg brings ffplay, which the Video Tiling tab needs.
+    assert_path_exists Formula["ffmpeg"].opt_bin/"ffplay"
   end
 end
