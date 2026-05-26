@@ -71,12 +71,15 @@ whisper-transcribe /path/to/media.mp4 --formats srt json --language en
 - The static-ffmpeg fallback (evermeet.cx) is **Intel x86_64** and runs
   under Rosetta on Apple Silicon. The installer tries Homebrew first, which
   gives a native arm64 ffmpeg — prefer that on M-series Macs.
-- **Homebrew is the cleanest unsigned-app channel** (brew installs aren't
-  quarantined + it handles python/ffmpeg natively + `brew upgrade`), BUT a
-  Homebrew tap needs a **public** source. This repo is private, so a tap
-  isn't an option today; if it's ever made public, a formula is the
-  recommended Mac install. Until then the source + venv flow here is the
-  right call.
+- **Two install methods are kept** (pick either):
+  1. **This script** (`bash platform/macos/install.command`) — works on a
+     private repo, no Homebrew needed.
+  2. **Homebrew** — the cleanest channel (no quarantine; native
+     python/ffmpeg, and brew's ffmpeg includes `ffplay` so Video Tiling
+     works out of the box; `brew upgrade` to update). The ready-to-publish
+     formula + instructions live in `platform/macos/homebrew/`. It needs
+     the repo **public** (a tap can't reach a private repo), so it's staged
+     for when/if that happens.
 - The embedded VLC preview needs VLC at `/Applications/VLC.app` (the app
   now looks there); without it the transcript viewer is read-only.
 - Apple-silicon vs Intel: faster-whisper/ctranslate2 ship arm64 + x86_64
