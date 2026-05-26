@@ -12,7 +12,7 @@ this repo. Read this file before anything else.
 | Branch | `master` — **the single mainline** (2026-05-25: `chore/cleanup-hardening` + `basic-edition` were folded into master and deleted; tips kept as `archive/*` tags). Carries **v1.3.6**, all committed + pushed. The whole history was rewritten 2026-05-25 to attribute every commit to `translation-robot` (GitHub no-reply) and strip the old email + all `Co-Authored-By` trailers; local `git config` identity is set to match. |
 | Version | pyproject = 1.3.6; `core.__version__` = 1.3.6; both `.iss` = 1.3.6 |
 | Last PUBLISHED release | **v1.3.6** on GitHub (Standard + Portable) — Video Tiling tab + Linux/macOS groundwork; built + slim past-bug E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-26. |
-| GitHub releases now | `v1.3.6` (latest) + `v1.3.5` + `v1.3.4` + `v1.3.3` + `basic-v0.1.0` — **old releases are KEPT, never pruned** (user decision 2026-05-25; see §3). |
+| GitHub releases now | `v1.3.6` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** Reverses the 2026-05-25 keep-all. Old release objects (v1.3.3–v1.3.5) were deleted; their git tags + the local `dist_installer/` installers remain as backup. |
 | Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
 | Working tree | clean (only `.claude/` untracked) |
@@ -244,17 +244,21 @@ the embed tree (v1.3.2+).** Both ship now. The PyInstaller Compact
 Download from:
 **[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
 
-## 3. RELEASES — v1.3.5 latest, DONE (2026-05-25).
+## 3. RELEASES — v1.3.6 latest, DONE (2026-05-26).
 
-**v1.3.5** is live (Standard 219 MB + Portable 326 MB) and is the same
-slim build process below, plus: the live pause/cancel E2E
-(`tools/e2e_cancel_pause.py`) PASS, and **no prune** — `v1.3.4` and
-`v1.3.3` were kept on GitHub. v1.3.5's only build wrinkle vs v1.3.4: the
-build sanity check now also imports docx/reportlab (still "embed_import_ok").
+**v1.3.6** is live (Video Tiling tab + Linux/macOS groundwork; Standard
+219 MB + Portable 326 MB). The step log below is from v1.3.4 and documents
+the identical pipeline (bump → build → compile → zip → e2e → publish).
 
-The detailed step log below is from **v1.3.4** and documents the
-identical pipeline (bump → build → compile → zip → e2e → publish). Follow
-it for the next release too, but **skip step 7 (no pruning)**.
+**Release policy (2026-05-26 owner — reverses the 2026-05-25 keep-all):**
+- **Keep ONLY the latest release.** After publishing vNEW, DELETE the older
+  release objects (`gh release delete vX.Y.Z --yes` — keeps the git tag +
+  the local `dist_installer/` installer as backup). Only the latest + the
+  separate `basic-v0.1.0` stay on the Releases page. (So step 7 below now
+  means "prune the previous release," the opposite of before.)
+- **Release LESS often** — batch several features/fixes per version
+  (owner: "half or a third the speed"); don't cut a version per small change.
+- **Push in batches** — commit locally often, push several commits together.
 
 ---
 
@@ -302,8 +306,9 @@ v1.3.4 was live on GitHub (Standard + Portable). Steps that ran:
 
 **To cut the NEXT release** (vX.Y.Z), bump the version in
 `core/__init__.py` + `pyproject.toml` + both `.iss` files (the embed
-`.iss` reads `#define MyAppVersion`), then repeat steps 1–6 (NOT step 7 —
-do NOT prune old releases anymore; keep every prior version). Use absolute
+`.iss` reads `#define MyAppVersion`), then repeat steps 1–7 — and step 7
+now means **prune the previous release** (`gh release delete` the old one,
+keep only the latest + `basic-v0.1.0`). Use absolute
 paths via `cmd.exe` (a background cmd may not inherit cwd); `<REPO>` =
 `C:\Users\Owner\Desktop\whisper_project_claude\whisper_project_direct_download_v2`.
 Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
@@ -354,7 +359,9 @@ Read docs/SESSION_HANDOFF_NEXT.md first, then continue on master (the single mai
   explicit ask) — normal pushes are fine now that master is the mainline
 - Don't move or delete a **published release tag** (`v1.0.3`+ are public;
   moving them invalidates downloaded artefacts)
-- Don't delete old GitHub releases — keep every version (2026-05-25)
+- Prune old GitHub releases — keep ONLY the latest + `basic-v0.1.0`
+  (2026-05-26 owner; reverses the 2026-05-25 keep-all). Release less often;
+  push commits in batches.
 - Don't touch `.git/config`
 - Don't code-sign the EXE
 

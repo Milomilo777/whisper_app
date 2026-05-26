@@ -6,28 +6,21 @@ whole session.
 
 ## Commit + push cadence — DURABLE RULE
 
-Anything that takes meaningful work to redo MUST be committed
-and pushed the moment it lands, not at the end of the session.
-"Meaningful" means roughly anything ≥ 30 minutes of focused work,
-or any chunk where a power outage / process crash mid-session
-would lose user-visible progress.
+Commit **locally and often** so nothing is lost to a power outage /
+crash — every coherent feature, fix, refactor, non-trivial docs change,
+or test batch gets its own local commit as soon as it passes pyright +
+the relevant tests.
 
-Concretely:
+But **PUSH in batches, not after every commit** (2026-05-26, owner
+request: *"keep changing things locally so nothing is lost, but send
+several changes together to the repo/branch so it doesn't get noisy"*).
+Accumulate a few related commits locally, then push them together.
 
-- **Every coherent feature, fix, or refactor**: as soon as it
-  passes pyright + the relevant unit tests, commit it, then
-  push it to the current branch.
-- **Every docs-only change** that adds non-trivial content
-  (>50 lines, or a brand-new doc): commit + push immediately.
-- **Every build/spec change**: commit + push before rebuilding
-  the deliverables, so if the build crashes mid-way the source-
-  of-truth is already on origin.
-- **Every batch of test additions**: commit + push.
+**Release cadence: slow down.** Do NOT cut a new version for every small
+change (2026-05-26, owner: *"half or a third the speed"*). Batch several
+features/fixes into one release.
 
-Do not wait until "the end of the session" to commit. The user
-has explicitly stated they want progress preserved against power
-loss; that requires a steady commit + push cadence, not a single
-final dump.
+So: frequent local commits → occasional batched push → infrequent release.
 
 Atomic-commit hygiene:
 
@@ -66,8 +59,12 @@ asks for them in the current session:
     public — moving those tags invalidates already-downloaded artefacts).
     A normal `git push origin master` is fine; a `git push --force` /
     history rewrite on master needs an explicit ask.
-  - Deleting old GitHub releases — the user wants **every version kept**
-    (2026-05-25 decision); publish the new one and leave the rest.
+  - (NOTE — no longer forbidden) **Pruning old GitHub releases is now the
+    POLICY, not forbidden.** On each release, delete the older releases and
+    keep **only the latest** version (the separate `basic-v0.1.0` edition is
+    kept too). 2026-05-26 owner decision — this REVERSES the 2026-05-25
+    "keep every version" rule. The local installers under `dist_installer/`
+    + the git version tags remain as the backup, so pruning is recoverable.
 
 ## Style & scope
 
