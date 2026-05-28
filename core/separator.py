@@ -90,6 +90,67 @@ def _cached_vocals_path(audio_path: str, model: str) -> Path:
     return cache_dir() / f"{_cache_key(audio_path, model)}_vocals.wav"
 
 
+# Default cap on the demucs vocals cache. Each stem is roughly the size
+# of the source audio and the cache key includes the absolute path +
+# mtime, so re-encoding / moving a file makes a NEW entry — without a cap
+# the cache grows to gigabytes forever. Overridable via the
+# ``demucs_cache_mb`` config key (0 disables eviction).
+_DEFAULT_CACHE_BUDGET_MB = 2048
+
+
+def _cache_budget_mb() -> int:
+    try:
+        from .config import load_config
+        return max(0, int(load_config().get("demucs_cache_mb", _DEFAULT_CACHE_BUDGET_MB)))
+    except Exception:  # noqa: BLE001
+        return _DEFAULT_CACHE_BUDGET_MB
+
+
+def prune_cache(budget_mb: int | None = None, *, keep: str | None = None) -> int:
+    """Evict oldest ``*_vocals.wav`` until the cache is under the byte budget.
+
+    Returns the number of files removed. ``keep`` is a path that must
+    never be evicted (the stem we just wrote). A budget <= 0 disables
+    eviction. Never raises — a sweep failure must not break separation.
+    """
+    budget = _cache_budget_mb() if budget_mb is None else max(0, budget_mb)
+    if budget <= 0:
+        return 0
+    d = cache_dir()
+    try:
+        files = [p for p in d.glob("*_vocals.wav") if p.is_file()]
+    except OSError:
+        return 0
+    try:
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)  # newest first
+    except OSError:
+        return 0
+    budget_bytes = budget * 1024 * 1024
+    keep_norm = os.path.normcase(os.path.abspath(keep)) if keep else None
+    total = 0
+    removed = 0
+    for p in files:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        is_keeper = bool(keep_norm) and os.path.normcase(os.path.abspath(str(p))) == keep_norm
+        if total + size <= budget_bytes or is_keeper:
+            total += size
+            continue
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def clear_cache() -> None:
+    """Remove the entire demucs cache directory. Never raises."""
+    shutil.rmtree(cache_dir(), ignore_errors=True)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -172,6 +233,14 @@ def separate_vocals(
                 return str(survivor)
         if log:
             log(f"Demucs vocals → {cached}")
+        # Bound the cache: evict oldest stems beyond the budget, never
+        # the one we just wrote.
+        try:
+            evicted = prune_cache(keep=str(cached))
+            if evicted and log:
+                log(f"Demucs cache pruned: removed {evicted} old stem(s).")
+        except Exception:  # noqa: BLE001
+            pass
         return str(cached)
     finally:
         # Always sweep the temp tree, success or failure. Cache

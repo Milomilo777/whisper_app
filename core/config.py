@@ -88,6 +88,9 @@ DEFAULT_CONFIG = {
     # pipeline runs the input through Demucs first and feeds Whisper the
     # vocals stem.
     "demucs_enabled": False,
+    # Cap (MB) on the demucs vocals-separation cache; oldest stems are
+    # evicted past this. 0 disables eviction. See core.separator.prune_cache.
+    "demucs_cache_mb": 2048,
     # v0.8 Phase 2 — AI Layer. ``ai_enabled`` is the global on/off; the
     # actual model file lives at ``ai_model_path`` (empty = use the
     # default cache path under ``user_cache_dir()/llm/``).

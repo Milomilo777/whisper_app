@@ -104,6 +104,44 @@ def test_recorder_finalize_writes_captured_frames(tmp_path):
         assert wf.getnframes() == 2048
 
 
+def test_recorder_streams_to_wav_without_buffering(tmp_path, monkeypatch):
+    """Regression (P2-6): real capture must stream straight to disk, not
+    accumulate every block in an in-memory list (which OOMs on a
+    multi-hour recording)."""
+    out = tmp_path / "stream.wav"
+    r = rec.Recorder(output_path=str(out), mode="mic")
+    monkeypatch.setattr(rec, "mic_available", lambda: True)
+    block = b"\x01\x02" * 512  # 1024 bytes = 512 int16 mono frames
+
+    calls = {"n": 0}
+
+    class _FakeStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            calls["n"] += 1
+            if calls["n"] >= 4:
+                r._stop_event.set()  # end the loop after a few blocks
+            return (block, False)
+
+    fake_sd = types.ModuleType("sounddevice")
+    fake_sd.RawInputStream = lambda **kw: _FakeStream()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+
+    r._mic_loop()  # run synchronously for determinism
+
+    assert r._wrote_wave is True
+    assert r._frames == [], "frames must NOT be buffered in memory during capture"
+    with wave.open(str(out), "rb") as wf:
+        assert wf.getnframes() > 0
+        assert wf.getnchannels() == rec.CHANNELS
+        assert wf.getsampwidth() == rec.SAMPLE_WIDTH_BYTES
+
+
 def test_recorder_duration_seconds_after_stop():
     r = rec.Recorder(output_path="/tmp/x.wav", mode="mic")
     r._started_at = 100.0

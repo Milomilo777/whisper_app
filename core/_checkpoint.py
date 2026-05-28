@@ -188,6 +188,49 @@ def has_checkpoint(source_path: str) -> bool:
     return checkpoint_path(source_path).exists()
 
 
+def sweep_partials(
+    *, max_age_days: float = 14.0, slice_max_age_minutes: float = 10.0
+) -> int:
+    """Best-effort cleanup of the ``partials/`` dir. Returns files removed.
+
+    Removes (a) any ``*.slice.wav`` older than ``slice_max_age_minutes`` —
+    a resume slice is disposable and a live resume holds a fresh one, so an
+    older one is always an orphan from a killed worker; and (b) checkpoint
+    ``*.json`` older than ``max_age_days`` — a cancelled-but-never-resumed
+    or crashed-then-declined partial that would otherwise live (and hold its
+    full captured-segments list, potentially MBs) on disk forever.
+
+    Intended to run once at startup. Never raises — a sweep failure must
+    never block launch. ``max_age_days`` is generous so a partial the user
+    might still want to resume isn't reaped prematurely.
+    """
+    import time as _time
+
+    try:
+        d = partials_dir()
+        entries = list(d.iterdir())
+    except OSError:
+        return 0
+    now = _time.time()
+    json_cutoff = now - max(0.0, max_age_days) * 86400.0
+    slice_cutoff = now - max(0.0, slice_max_age_minutes) * 60.0
+    removed = 0
+    for p in entries:
+        try:
+            name = p.name
+            if name.endswith(".slice.wav"):
+                if p.stat().st_mtime < slice_cutoff:
+                    p.unlink()
+                    removed += 1
+            elif name.endswith(".json"):
+                if p.stat().st_mtime < json_cutoff:
+                    p.unlink()
+                    removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def validate_checkpoint(
     data: dict[str, Any],
     *,

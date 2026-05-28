@@ -144,11 +144,15 @@ class Recorder:
     mode: str = "mic"  # "mic" | "loopback"
     device_index: Optional[int] = None
     sample_rate: int = SAMPLE_RATE
+    # ``_frames`` is retained ONLY as the fallback/empty-file writer path
+    # (see _finalize_wav); real capture streams straight to disk so a
+    # multi-hour recording no longer buffers the whole take in RAM (OOM).
     _frames: list[bytes] = field(default_factory=list, repr=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _thread: Optional[threading.Thread] = field(default=None, repr=False)
     _started_at: float = 0.0
     _stopped_at: float = 0.0
+    _wrote_wave: bool = False
     last_error: Optional[str] = None
 
     def start(self) -> None:
@@ -156,6 +160,7 @@ class Recorder:
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("Recorder is already running")
         self._frames.clear()
+        self._wrote_wave = False
         self._stop_event.clear()
         self.last_error = None
         self._started_at = time.time()
@@ -178,14 +183,17 @@ class Recorder:
 
         Returns the path to the final WAV. Joins the recording
         thread with ``timeout`` so a wedged backend doesn't deadlock
-        the UI; if the thread doesn't exit in time we still write
-        whatever frames we have.
+        the UI. The capture loop streams + closes the WAV itself; if it
+        never produced one (start failed, instant stop, no backend) we
+        write a valid empty WAV here so the caller's "open this file"
+        path doesn't crash.
         """
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout)
         self._stopped_at = time.time()
-        self._finalize_wav()
+        if not self._wrote_wave or not os.path.isfile(self.output_path):
+            self._finalize_wav()
         return self.output_path
 
     def duration_seconds(self) -> float:
@@ -197,7 +205,17 @@ class Recorder:
 
     # ---------- internals ------------------------------------------
 
+    def _open_wave(self, rate: int) -> "wave.Wave_write":
+        """Open the output WAV for streaming (mono int16 at ``rate``)."""
+        Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
+        wf = wave.open(self.output_path, "wb")
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(SAMPLE_WIDTH_BYTES)
+        wf.setframerate(rate)
+        return wf
+
     def _mic_loop(self) -> None:
+        wf: "wave.Wave_write | None" = None
         try:
             import sounddevice as sd  # type: ignore[import-not-found]
             stream_kwargs: dict[str, Any] = {
@@ -209,17 +227,25 @@ class Recorder:
             if self.device_index is not None:
                 stream_kwargs["device"] = self.device_index
             with sd.RawInputStream(**stream_kwargs) as stream:
+                # Stream straight to disk — never buffer the whole take in
+                # memory (a multi-hour recording would OOM the app).
+                wf = self._open_wave(self.sample_rate)
                 while not self._stop_event.is_set():
                     data, _overflow = stream.read(1024)
-                    if isinstance(data, memoryview):
-                        self._frames.append(bytes(data))
-                    else:
-                        self._frames.append(bytes(data))
+                    wf.writeframes(bytes(data))
         except Exception as e:  # noqa: BLE001
             self.last_error = str(e)
             logger.exception("Mic recording failed: %s", e)
+        finally:
+            if wf is not None:
+                try:
+                    wf.close()
+                    self._wrote_wave = True
+                except Exception:  # noqa: BLE001
+                    logger.exception("Closing mic WAV failed")
 
     def _loopback_loop(self) -> None:
+        wf: "wave.Wave_write | None" = None
         try:
             import pyaudiowpatch as pya  # type: ignore[import-not-found]
             with pya.PyAudio() as p:
@@ -239,26 +265,38 @@ class Recorder:
                     input=True,
                     input_device_index=device_idx,
                 )
+                # Store the native rate in the WAV header; the transcriber
+                # upsamples internally if needed.
+                self.sample_rate = native_rate
+                wf = self._open_wave(native_rate)
                 try:
                     while not self._stop_event.is_set():
                         data = stream.read(1024, exception_on_overflow=False)
-                        self._frames.append(_downmix_to_mono_int16(data, channels))
-                    # Re-sample at write time via the WAV header. We
-                    # purposefully store the native rate frames here
-                    # so the wav is faithful; the transcriber upsamples
-                    # internally if needed.
-                    self.sample_rate = native_rate
+                        wf.writeframes(_downmix_to_mono_int16(data, channels))
                 finally:
                     stream.stop_stream()
                     stream.close()
         except Exception as e:  # noqa: BLE001
             self.last_error = str(e)
             logger.exception("Loopback recording failed: %s", e)
+        finally:
+            if wf is not None:
+                try:
+                    wf.close()
+                    self._wrote_wave = True
+                except Exception:  # noqa: BLE001
+                    logger.exception("Closing loopback WAV failed")
 
     def _finalize_wav(self) -> None:
+        """Fallback writer for the no-capture case.
+
+        Real capture streams to disk via _open_wave + the loops; this only
+        runs from stop() when the loop never produced a WAV (start failed /
+        instant stop), writing a valid (usually 0-frame) file from any
+        ``_frames`` that were injected. Kept so "open this file" never
+        crashes on an empty take.
+        """
         Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
-        # If we never captured anything, still produce a valid 0-frame
-        # WAV so the caller's "open this file" path doesn't crash.
         with wave.open(self.output_path, "wb") as wf:
             wf.setnchannels(CHANNELS)
             wf.setsampwidth(SAMPLE_WIDTH_BYTES)

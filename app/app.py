@@ -305,8 +305,29 @@ class App(tk.Tk):
         # files still exist on disk, offer to re-enqueue them.
         self.after(700, self._maybe_offer_crash_resume)
 
+        # Bound the partials/ dir: sweep orphaned resume slices + aged-out
+        # checkpoints so a killed/declined run doesn't accumulate forever.
+        self.after(1500, self._sweep_partials_at_startup)
+
         self.after(100, self._on_start)
         self.after(300, self.loop)
+
+    def _sweep_partials_at_startup(self) -> None:
+        """Off-thread best-effort cleanup of the partials/ checkpoint dir."""
+        import threading as _t
+
+        def _work() -> None:
+            try:
+                from core import _checkpoint
+                removed = _checkpoint.sweep_partials()
+                if removed:
+                    logger.info(
+                        "Startup sweep removed %d stale partial file(s).", removed
+                    )
+            except Exception:  # noqa: BLE001
+                logger.debug("partials sweep failed", exc_info=True)
+
+        _t.Thread(target=_work, name="partials-sweep", daemon=True).start()
 
     # Bootstrap ---------------------------------------------------------------
     def _on_start(self) -> None:
@@ -904,6 +925,15 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         self.transcription_service.stop_all()
+        # Close the history DB connection (and checkpoint its WAL) on a
+        # clean exit — the GUI never did, leaking the connection + the
+        # -wal/-shm sidecars until interpreter teardown. Mirrors gui.py.
+        history = getattr(self, "history", None)
+        if history is not None:
+            try:
+                history.close()
+            except Exception:  # noqa: BLE001
+                pass
         self.destroy()
 
     def destroy(self) -> None:  # type: ignore[override]
@@ -2351,6 +2381,16 @@ class App(tk.Tk):
                 )
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to dismiss interrupted rows", exc_info=True)
+            # Also drop the on-disk partial checkpoints for the declined
+            # files: declining means "don't resume", so the JSON (which can
+            # be MBs of captured segments) is now dead weight. Without this
+            # it lingered until the age-based startup sweep.
+            try:
+                from core import _checkpoint
+                for r in unique:
+                    _checkpoint.delete_checkpoint(r["file_path"])
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to delete declined checkpoints", exc_info=True)
             return
         # Crash-resume: if a partial checkpoint exists for any of
         # these interrupted files, flag the new task as a resume so

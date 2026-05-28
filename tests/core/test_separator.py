@@ -1,6 +1,7 @@
 """Tests for the Demucs vocal separator wrapper."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -66,6 +67,62 @@ def test_separate_vocals_falls_back_to_input_on_demucs_error(tmp_path, monkeypat
     out = sep.separate_vocals(str(src), enabled=True, log=logs.append)
     assert out == str(src)
     assert any("demucs" in s.lower() for s in logs)
+
+
+# ---------- cache eviction (P2-6 / finding [6]) --------------------------------
+
+
+def _make_stem(cache: Path, name: str, size: int, mtime: float) -> Path:
+    cache.mkdir(parents=True, exist_ok=True)
+    p = cache / f"{name}_vocals.wav"
+    p.write_bytes(b"x" * size)
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_prune_cache_evicts_oldest_over_budget(tmp_path, monkeypatch):
+    cache = tmp_path / "demucs"
+    monkeypatch.setattr(sep, "cache_dir", lambda: cache)
+    mb = 1024 * 1024
+    old = _make_stem(cache, "a", mb, 1000.0)
+    mid = _make_stem(cache, "b", mb, 2000.0)
+    new = _make_stem(cache, "c", mb, 3000.0)
+
+    # Budget 2 MB, 3 MB present → exactly one (the oldest) is evicted.
+    removed = sep.prune_cache(budget_mb=2)
+    assert removed == 1
+    assert not old.exists()
+    assert mid.exists()
+    assert new.exists()
+
+
+def test_prune_cache_never_evicts_the_keeper(tmp_path, monkeypatch):
+    cache = tmp_path / "demucs"
+    monkeypatch.setattr(sep, "cache_dir", lambda: cache)
+    mb = 1024 * 1024
+    keeper = _make_stem(cache, "a", mb, 1000.0)  # oldest → would be first out
+    _make_stem(cache, "b", mb, 2000.0)
+    _make_stem(cache, "c", mb, 3000.0)
+
+    # Budget 1 MB, but the just-written keeper (oldest) must survive.
+    sep.prune_cache(budget_mb=1, keep=str(keeper))
+    assert keeper.exists()
+
+
+def test_prune_cache_disabled_when_budget_zero(tmp_path, monkeypatch):
+    cache = tmp_path / "demucs"
+    monkeypatch.setattr(sep, "cache_dir", lambda: cache)
+    _make_stem(cache, "a", 1024 * 1024, 1000.0)
+    assert sep.prune_cache(budget_mb=0) == 0
+    assert (cache / "a_vocals.wav").exists()
+
+
+def test_clear_cache_removes_dir(tmp_path, monkeypatch):
+    cache = tmp_path / "demucs"
+    monkeypatch.setattr(sep, "cache_dir", lambda: cache)
+    _make_stem(cache, "a", 1024, 1000.0)
+    sep.clear_cache()
+    assert not cache.exists()
 
 
 def test_separate_vocals_caches_run_output(tmp_path, monkeypatch):
