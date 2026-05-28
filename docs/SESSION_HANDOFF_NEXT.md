@@ -184,20 +184,21 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
   Residual (NOT addressed): `ensure_worker_ready(headless=True)` could
   still deadlock if ever called on the Tk main thread — low risk (the
   headless path is only invoked off the main thread today).
-- **Resource leaks (MED).** Killing a worker orphans its grandchild
-  ffmpeg/demucs (no process-group/job-object kill); `partials/` grows
-  unbounded (a killed worker leaves the checkpoint JSON + `.slice.wav`; no
-  startup sweep; declining crash-resume doesn't delete the JSON);
-  HistoryDB connection isn't closed in on_exit; demucs cache unbounded.
+- **Resource leaks — RESOLVED 2026-05-29 (deep audit, see §0).** Worker/
+  yt-dlp now tree-killed via `core/_proc.py` (no orphaned ffmpeg/demucs);
+  `partials/` swept at startup + cleared on declined crash-resume;
+  HistoryDB closed in on_exit; demucs cache bounded; recorder streams to
+  disk. Commits `cd402c9` + `7c91285`.
 - **#38 selector tuning** — the download selector already falls back to a
   combined stream (`/best`) so it isn't YouTube-locked; the real fix
   shipped is the ERROR SURFACING. Once a user retries Dailymotion on
   v1.3.2 and the queue shows the actual error, fix that specific cause
   (don't change the selector blind — risks the proven YouTube path).
-- **burn_subs filter escaping (MED, deferred)** — the SRT path injected
-  into ffmpeg's `subtitles=` filter escapes only `\` and `:`, not `'[],`;
-  a crafted on-disk filename could break out. Needs a burn-subs test
-  harness before changing (don't break normal paths).
+- **burn_subs filter escaping — RESOLVED 2026-05-29 (deep audit, see §0).**
+  Subtitles now burn from a temp copy with a graph-safe ASCII name, so
+  `' [ ] , ;` in a (downloaded) title can't break/inject the ffmpeg filter
+  graph; the colon-escape is gated to Windows. New `tests/core/test_burn_subs.py`.
+  Commit `0204cc8`.
 
 ### What shipped in v1.3.1 (PUBLISHED 2026-05-25, now pruned from GitHub)
 
@@ -362,8 +363,12 @@ Full step-by-step lives in `docs/RELEASE_PROCESS.md`.
 ### Deferred bug-audit items (`docs/AUDIT_2026-05-25_boundary_bugs.md`)
 - SMTV cancel-latency on a stalled socket + no-retry; a site-layout
   change silently empties the article transcript.
-- Worker-lifecycle: `_pending_load_*` dangle if the awaited worker dies;
-  `startup_error` tears down ALL workers, not just the failing one.
+- Worker-lifecycle: ~~`_pending_load_*` dangle if the awaited worker
+  dies~~ **RESOLVED 2026-05-29** (Batch C [1], commit `f2c2991`): the
+  loading modal now closes on startup_error/worker_exit and the pending
+  state is cleared. STILL OPEN: `startup_error` still `stop_all()`s ALL
+  workers + clears `app.workers`, not just the failing one (low impact —
+  usually only one worker exists at first-transcribe; left for a targeted fix).
 - Download rows stuck `interrupted` skew `stats()`.
 - Hardware-probe stall (async attempt was REVERTED — a real fix needs
   `test_hardware_wizard_constructs_without_crashing` made async-aware).
