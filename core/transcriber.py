@@ -834,14 +834,29 @@ def _run_post_pipeline(
     task._chapters_for_writer = []  # type: ignore[attr-defined]
     if config.get("auto_chapters_enabled", True) and not task.cancelled:
         try:
+            from contextlib import nullcontext
+
             from . import chapters as _chap
             runner = _maybe_get_llm_runner()
-            chapter_list = _chap.build_chapters(
-                segments_data,
-                runner=runner,
-                min_chapter_seconds=float(config.get("chapter_min_seconds", 60.0)),
-                gap_seconds=float(config.get("chapter_gap_seconds", 2.5)),
+            # LLM chapter-title generation is a silent, GIL-holding C call
+            # (llama-cpp). Unlike Demucs / alignment / whisper.cpp it emitted
+            # no periodic event, so a slow generation on weak hardware could
+            # exceed the parent's 120 s liveness watchdog and get the worker
+            # restarted mid-chapter. Tick while the LLM runs (audit P2-32);
+            # the pure-heuristic path (runner is None) is fast — no tick.
+            from ._liveness_tick import liveness_tick
+            tick = (
+                liveness_tick(log_cb, "chapter titles")
+                if runner is not None
+                else nullcontext()
             )
+            with tick:
+                chapter_list = _chap.build_chapters(
+                    segments_data,
+                    runner=runner,
+                    min_chapter_seconds=float(config.get("chapter_min_seconds", 60.0)),
+                    gap_seconds=float(config.get("chapter_gap_seconds", 2.5)),
+                )
             if chapter_list:
                 task._chapters_for_writer = chapter_list  # type: ignore[attr-defined]
                 log(
@@ -899,6 +914,20 @@ def _write_chapter_sidecar(base: str, chapters: list[dict[str, Any]]) -> str | N
     return path
 
 
+# Keys ``_apply_runtime_overrides`` unconditionally fills into the shared
+# module ``config`` when absent. _runtime_overrides_scope MUST snapshot
+# these too (not just the override's own keys) or they leak into every
+# later file the long-lived worker handles (audit P2-29 / the residual of
+# P0-6): a file processed after one whose project file enabled diarisation
+# could inherit diarisation defaults materialised during that run.
+_RUNTIME_OVERRIDE_DEFAULTS: tuple[tuple[str, Any], ...] = (
+    ("diarization_enabled", False),
+    ("diarization_num_speakers", -1),
+    ("diarization_cluster_threshold", 0.5),
+    ("alignment", "none"),
+)
+
+
 def _apply_runtime_overrides(task: "TranscriptionTask") -> dict[str, Any]:
     """Apply per-folder overrides + refresh diarisation defaults.
 
@@ -923,12 +952,7 @@ def _apply_runtime_overrides(task: "TranscriptionTask") -> dict[str, Any]:
     except Exception:
         logger.exception("project-overrides load raised for %s", task.file_path)
 
-    for key, default in (
-        ("diarization_enabled", False),
-        ("diarization_num_speakers", -1),
-        ("diarization_cluster_threshold", 0.5),
-        ("alignment", "none"),
-    ):
+    for key, default in _RUNTIME_OVERRIDE_DEFAULTS:
         if key not in config:
             config[key] = runtime_cfg.get(key, default)
     config["diarization_enabled"] = bool(config["diarization_enabled"])
@@ -988,7 +1012,11 @@ def _runtime_overrides_scope(
             )
             overrides = {}
 
-        for key in overrides:
+        # Track the override's own keys AND the diarisation/alignment keys
+        # _apply_runtime_overrides unconditionally fills — both must be
+        # restored on exit or they leak into the next file (audit P2-29).
+        keys_to_track = set(overrides) | {k for k, _ in _RUNTIME_OVERRIDE_DEFAULTS}
+        for key in keys_to_track:
             if key in config:
                 value = config[key]
                 if isinstance(value, dict):
@@ -1622,6 +1650,14 @@ def resume_transcription(
             # Offset each new segment back into the original timeline
             # before merging with the prior segments. The slice starts
             # at 0 s; we shift to ``last_end_time``.
+            # Original duration for an honest progress %: each segment's
+            # d["end"] below is already shifted onto the original timeline,
+            # so dividing by the whole-file duration makes the bar climb
+            # last_end_time→100 instead of pinning at a constant 99 (P2-25).
+            try:
+                total_dur = get_duration(task.file_path)
+            except Exception:  # noqa: BLE001
+                total_dur = 0.0
             new_segments_data: list[dict[str, Any]] = []
             for seg in new_segments_iter:
                 if task.cancelled:
@@ -1656,11 +1692,14 @@ def resume_transcription(
                 new_segments_data.append(d)
 
                 if progress_cb:
-                    # We can't compute an honest percentage without
-                    # re-running get_duration on the original; this is
-                    # a best-effort tick to keep the watchdog happy
-                    # and the UI moving.
-                    progress_cb(min(99, int(d["end"] / max(d["end"], 1.0) * 99)))
+                    # d["end"] is on the original timeline; scale against the
+                    # whole-file duration so the bar advances through the
+                    # resumed tail. Fall back to a flat 99 only if duration
+                    # is unknown (ffprobe failed).
+                    if total_dur > 0.0:
+                        progress_cb(min(99, int(d["end"] / total_dur * 100)))
+                    else:
+                        progress_cb(99)
         finally:
             # Always clean the slice file — the resume either
             # succeeded (final outputs written) or fell back, in both

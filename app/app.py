@@ -705,7 +705,6 @@ class App(tk.Tk):
             ("Post-processing", [
                 ("Per-file extras", [
                     "Speaker diarisation (sherpa-onnx, no HF token)",
-                    "Cross-file speaker voiceprint matching",
                     "Auto-chapter markers (long-silence heuristic)",
                     "Hallucination detector — flags suspect segments "
                     "in the viewer (red rows)",
@@ -785,9 +784,6 @@ class App(tk.Tk):
                     "Every finished job recorded in SQLite history.db",
                     "File → Recent files (last 10)",
                     "File → Statistics… — total minutes transcribed, etc.",
-                ]),
-                ("Search", [
-                    "Semantic + FTS5 full-text search across saved transcripts",
                 ]),
             ]),
             ("Keyboard shortcuts", [
@@ -1083,10 +1079,13 @@ class App(tk.Tk):
             self.subtitle_status_var.set("")
 
     def model_status(self, msg: str) -> None:
+        # Display only. Worker readiness is tracked authoritatively via the
+        # worker's 'ready' event → TranscriptionService.update_model_state();
+        # don't latch model_ready off a log-line substring — any line that
+        # merely contained "Model loaded" (an echo, a future diagnostic)
+        # could desync the app-global flag from real worker state (P2-30).
         self.status_var.set(msg)
         self.log(msg)
-        if "Model loaded" in msg:
-            self.model_ready = True
 
     # Modal model setup -------------------------------------------------------
     def ensure_model_with_modal(self, mandatory: bool = False) -> bool:
