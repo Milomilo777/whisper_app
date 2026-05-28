@@ -4,6 +4,66 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+Senior-architect deep audit (8 parallel read-only shards → fix batches).
+pyright `app/ core/` 0/0/0 and the hermetic suite stay green; no shipped
+Windows behaviour changed at spawn time. Highlights:
+
+### Security
+
+- **Subtitle burning no longer breaks/injects on punctuated titles.** The
+  SRT path went straight into ffmpeg's `subtitles=` filter graph escaping
+  only `\` and `:`, but `' , ; [ ]` are filtergraph metacharacters and a
+  downloaded video's title (hence its `.srt` name) is attacker-influenced.
+  Burning now happens from a temp copy with a graph-safe ASCII name; the
+  Windows drive-colon escape is gated to Windows so a POSIX colon path
+  isn't mangled.
+
+### Fixed
+
+- **Orphaned grandchild processes.** Killing a worker (or cancelling/
+  exiting a download) left its ffmpeg/ffprobe/demucs grandchildren running
+  on Windows (`TerminateProcess` doesn't cascade) — burning CPU/RAM,
+  holding file handles, leaking GPU memory. New `core/_proc.py` kills the
+  whole tree (`taskkill /T` / `os.killpg`); the worker + yt-dlp are spawned
+  isolated for it.
+- **Alternate backends ignored the Transcribe-tab time range** — a clipped
+  request on whisper.cpp / Parakeet silently transcribed and wrote the
+  whole file. They now slice `[start,end]` and offset onto the timeline.
+- **Model-loading modal could hang forever** if the worker failed to load
+  or died before "ready" (only Cancel escaped); it now closes on those
+  events and no longer stacks a second modal.
+- **Model re-download loop is bounded** (was `while True`) so a bad mirror
+  or a captive-portal MD5 body can't re-download ~3 GB forever; the MD5
+  manifest parser rejects non-hex lines.
+- **On-demand optional installs** (PyTorch features) gained cancel + a
+  timeout and stage-then-merge, so a stalled or failed pip can't hang the
+  modal or leave a half-written package that crashes the worker later.
+- **Format lookups no longer die for the session** when yt-dlp returns
+  non-object JSON — the poll loop is self-healing.
+- **Hallucination "suspect" flags now reach the JSON** so the transcript
+  viewer's red-row review actually works.
+- **Resource hygiene**: history DB closed on exit; `partials/` swept of
+  orphaned slices + aged-out checkpoints (and cleared when crash-resume is
+  declined); demucs vocal-cache bounded; the recorder streams to disk
+  (no multi-hour-recording OOM); the yt-dlp pipe is reaped on error.
+- **Smaller correctness fixes**: per-format writer isolation verified;
+  VTT word `start=None` no longer aborts the file; history paths derived
+  via `splitext`; per-folder override defaults no longer leak between
+  files; the resume progress bar advances instead of pinning at 99%; LLM
+  chapter generation runs under the liveness watchdog; whisper.cpp model
+  download verifies length; Parakeet surfaces a clean ffmpeg-decode error;
+  download/format/worker loops short-circuit during shutdown.
+- The About dialog stopped advertising two not-yet-wired capabilities
+  (cross-file voiceprint matching, semantic/FTS5 search).
+
+### Cross-platform
+
+- `core.tiling` added to both PyInstaller specs' hidden-import lists.
+- macOS `install.command` materialises ffmpeg/ffprobe into `bin/` (so the
+  double-clicked `.app` finds them regardless of its minimal PATH) and the
+  static-ffmpeg unzip is non-fatal under `set -e`. *(macOS unverified on
+  real hardware.)*
+
 ## [1.3.6] — 2026-05-26
 
 A new Video Tiling tab + the groundwork for running on Linux and macOS.

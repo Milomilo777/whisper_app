@@ -5,6 +5,52 @@ this repo. Read this file before anything else.
 
 ---
 
+## 0. Latest session — senior-architect deep audit (2026-05-29)
+
+A read-only audit fanned out 8 parallel shards (concurrency, resource
+leaks, security, error-handling, data-integrity, cross-platform,
+test-gaps, maintainability) → 53 raw findings → 20 verified-real + 32
+P2 + 1 rejected. Fixed in 8 themed commit batches, each gated on
+`pyright app/ core/` 0/0/0 + the hermetic suite green, pushed to
+`master`. Full list in `docs/CHANGELOG.md` `[Unreleased]`. Method +
+raw findings: `.claude/audit_findings.md` (workspace, untracked).
+
+**Shipped behaviour:** no change to Windows spawn flags; the fixes are
+teardown/robustness/correctness. **Not yet released** — these are
+batched for a future version bump per the slow-release policy.
+
+**Deferred, with reason (re-check; don't assume done):**
+- **Test-gaps not yet covered** (cover already-shipped code, lower risk,
+  need heavier harnesses): P2-19 headless ready-timeout teardown; P2-21
+  crash-resume `_do_resume` closure (needs a Tk-ish fake or a pure-helper
+  refactor); P2-22 SMTV `_apply_smtv_formats` mapping (+ a 'max'-quality
+  variant is dropped — worth confirming intent); P2-23 Advanced-settings
+  `_save_and_close` var→config round-trip (best after extracting a pure
+  `collect_advanced_config` helper).
+- **P2-31** `ensure_worker_ready(headless=True)` + `start_standby()` are
+  dead in production (only tests call them) and would deadlock if reused
+  on the Tk thread. Left in place — tests depend on `headless=True` and a
+  runtime "am I on the Tk thread?" guard is unreliable. Already documented
+  as deprecated in their docstrings; use `_when_worker_ready` instead.
+- **REJ-1 (NOT a bug):** the PDF writer not stripping XML-illegal control
+  chars was investigated and is harmless — reportlab 4.x uses a lenient
+  HTMLParser, not a strict XML parser, so NUL/ESC/etc. build a valid PDF.
+  No fix needed (verified empirically).
+- **P2-14 (doc-only):** LRC timestamps render 3-digit minutes past 100 min
+  (LRC has no hours field); strict players may mis-seek. Left as-is —
+  inherent to the format.
+- **macOS [13]/P2-16 + Linux**: the ffmpeg-into-bin symlink + non-fatal
+  unzip are `bash -n`-clean and reasoned-correct but UNVERIFIED on a real
+  Mac. Class-C yt-dlp/ffprobe items (keyframe snap, etc.) untouched —
+  still need a real yt-dlp+ffprobe harness before changing.
+
+**Suggested live re-validation next session** (needs the model + test
+video): `python tools/e2e_cancel_pause.py` exercises the real worker's
+cooperative cancel/pause/resume — confirms the process-tree-kill +
+modal-close changes (batches A/C) didn't disturb the cooperative path.
+
+---
+
 ## 1. Current state (2026-05-25)
 
 | Item | Value |
