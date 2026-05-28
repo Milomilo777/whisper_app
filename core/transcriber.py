@@ -385,6 +385,30 @@ def _segment_to_dict(seg: Any, want_words: bool) -> dict[str, Any]:
     return payload
 
 
+def _offset_segments(segments_data: list[dict[str, Any]], offset: float) -> None:
+    """Shift every segment (and its words) by ``offset`` seconds, in place.
+
+    Moves slice-relative timestamps (a clip transcribed from a temp WAV
+    that starts at 0 s) back onto the original file's timeline.
+    """
+    if not offset:
+        return
+    for d in segments_data:
+        try:
+            d["start"] = float(d.get("start", 0.0)) + offset
+            d["end"] = float(d.get("end", 0.0)) + offset
+        except (TypeError, ValueError):
+            continue
+        words = d.get("words")
+        if isinstance(words, list):
+            for w in words:
+                try:
+                    w["start"] = float(w.get("start", 0.0)) + offset
+                    w["end"] = float(w.get("end", 0.0)) + offset
+                except (TypeError, ValueError):
+                    continue
+
+
 def _current_backend_and_model() -> tuple[str, str]:
     """Snapshot the (backend, model_name) pair the checkpoint records.
 
@@ -785,8 +809,9 @@ def _run_post_pipeline(
 
     # Hallucination detector (opt-in, default ON). Runs last so it
     # sees the final diarised/aligned text. Any flagged segments get
-    # ``suspect=True`` + ``suspect_reason`` which the writers carry
-    # through to JSON and the viewer renders in red.
+    # ``suspect=True`` + ``suspect_reason``; the JSON writer carries
+    # both fields through to disk (core/writers/json_writer.py) and the
+    # transcript viewer renders those segments as red rows.
     if config.get("hallucination_detect_enabled", True):
         try:
             from . import hallucination as _hall
@@ -1270,20 +1295,64 @@ def _transcribe_via_alt_backend(
     want_words = bool(config.get("word_timestamps", False))
     vad_params = _vad_parameters()
 
-    segments_data, lang_info = backend.transcribe_to_segments(
-        task.file_path,
-        language=_normalize_language(getattr(task, "language", None)),
-        want_words=want_words,
-        vad_parameters=vad_params,
-        initial_prompt=config.get("initial_prompt") or None,
-        hotwords=config.get("hotwords") or None,
-        batch_size=int(config.get("batch_size", 16)),
-        progress_cb=progress_cb,
-        log_cb=log_cb,
-        cancelled=lambda: bool(task.cancelled),
-        paused=lambda: bool(task.paused),
-        duration=duration,
-    )
+    # Optional Transcribe-tab time range. Alt backends have no
+    # clip_timestamps parameter (see core/backends/base.py), so honour a
+    # clip by transcribing a sliced temp WAV and shifting the returned
+    # segments back onto the original timeline (mirrors the resume path).
+    # Without this a clipped alt-backend run silently transcribed AND
+    # wrote the WHOLE file. A clipped run takes no checkpoint — the
+    # checkpoint is keyed to the whole file with no clip marker.
+    clip_start_s = float(getattr(task, "clip_start", None) or 0.0)
+    _clip_end_v = getattr(task, "clip_end", None)
+    clip_end_s = float(_clip_end_v) if _clip_end_v else 0.0
+    is_clipped = clip_start_s > 0.0 or clip_end_s > 0.0
+    transcribe_path = task.file_path
+    slice_to_clean: str | None = None
+    if is_clipped:
+        try:
+            slice_to_clean = _slice_audio_from(
+                task.file_path,
+                clip_start_s,
+                _checkpoint.partials_dir(),
+                end_seconds=(clip_end_s if clip_end_s > clip_start_s else None),
+            )
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Could not extract the selected time range for the "
+                f"{backend_name} backend: {e}"
+            ) from e
+        transcribe_path = slice_to_clean
+        # Progress + duration now measure the slice, not the whole file.
+        duration = (
+            clip_end_s - clip_start_s
+            if clip_end_s > clip_start_s
+            else max(0.0, duration - clip_start_s)
+        )
+
+    try:
+        segments_data, lang_info = backend.transcribe_to_segments(
+            transcribe_path,
+            language=_normalize_language(getattr(task, "language", None)),
+            want_words=want_words,
+            vad_parameters=vad_params,
+            initial_prompt=config.get("initial_prompt") or None,
+            hotwords=config.get("hotwords") or None,
+            batch_size=int(config.get("batch_size", 16)),
+            progress_cb=progress_cb,
+            log_cb=log_cb,
+            cancelled=lambda: bool(task.cancelled),
+            paused=lambda: bool(task.paused),
+            duration=duration,
+        )
+        # Shift slice-relative timestamps back onto the original timeline.
+        if is_clipped:
+            _offset_segments(segments_data, clip_start_s)
+    finally:
+        if slice_to_clean:
+            try:
+                os.unlink(slice_to_clean)
+            except OSError:
+                pass
 
     if lang_info.language:
         if language_cb:
@@ -1299,8 +1368,9 @@ def _transcribe_via_alt_backend(
         # Alt-backend gives us the segments list as a single return —
         # if it returned a partial on cancellation, persist what we
         # got so the user can resume. Same shape as the main path's
-        # final-flush.
-        if segments_data:
+        # final-flush. Skipped for a clipped run (no resumable
+        # checkpoint — it would be keyed to the whole file).
+        if segments_data and not is_clipped:
             _write_periodic_checkpoint(
                 task,
                 segments_data,
@@ -1314,8 +1384,8 @@ def _transcribe_via_alt_backend(
 
     # Single checkpoint right after the backend returns — covers a
     # crash during the post-pipeline (diarisation can run for
-    # minutes on long files).
-    if segments_data:
+    # minutes on long files). Skipped for a clipped run.
+    if segments_data and not is_clipped:
         _write_periodic_checkpoint(
             task,
             segments_data,
@@ -1364,6 +1434,7 @@ def _slice_audio_from(
     source_path: str,
     start_seconds: float,
     out_dir: Path,
+    end_seconds: float | None = None,
 ) -> str:
     """Cut ``source_path[start_seconds:end]`` to a temp file via ffmpeg.
 
@@ -1373,6 +1444,11 @@ def _slice_audio_from(
     handles consistently regardless of the source container; this
     matches the resampling pattern ``_prepare_audio_16k_mono`` in
     ``core/diarization`` already uses with the bundled ffmpeg.
+
+    When ``end_seconds`` is given (and greater than ``start_seconds``)
+    the slice is bounded to ``[start_seconds, end_seconds]`` via ``-t``
+    (output-duration limit, unambiguous with the pre-input ``-ss``).
+    ``None`` (the resume path) slices from ``start_seconds`` to EOF.
 
     Returns the path to the slice on disk. Raises ``RuntimeError`` on
     ffmpeg failure (the caller treats that as "fall back to full
@@ -1390,6 +1466,12 @@ def _slice_audio_from(
         "-loglevel", "error",
         "-ss", f"{float(start_seconds):.3f}",
         "-i", source_path,
+    ]
+    if end_seconds is not None and float(end_seconds) > float(start_seconds):
+        # -t after -i bounds the OUTPUT duration; combined with the
+        # pre-input -ss this yields exactly [start_seconds, end_seconds].
+        cmd += ["-t", f"{float(end_seconds) - float(start_seconds):.3f}"]
+    cmd += [
         "-ac", "1",
         "-ar", "16000",
         "-f", "wav",

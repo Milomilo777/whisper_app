@@ -20,7 +20,14 @@ def _karaoke_payload(seg: dict) -> str:
         return escape_cue_separator(normalize_text(seg.get("text", "")))
     parts: list[str] = []
     for w in words:
-        ts = fmt_vtt_time(float(w.get("start", seg["start"])))
+        # w.get("start", default) only returns the default when the key
+        # is ABSENT; an explicit start=None (hand-edited / externally
+        # produced JSON re-fed for re-export) would make float(None)
+        # raise and abort the whole VTT write. Coerce defensively.
+        ts_val = w.get("start")
+        if ts_val is None:
+            ts_val = seg.get("start", 0.0)
+        ts = fmt_vtt_time(float(ts_val))
         token = escape_cue_separator((w.get("word") or "").strip())
         if not token:
             continue

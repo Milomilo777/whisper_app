@@ -776,7 +776,12 @@ class TranscriptionService:
                 if written:
                     paths = list(written)
                 else:
-                    base = task.file_path.rsplit(".", 1)[0]
+                    # os.path.splitext (not rsplit('.',1)) so a source like
+                    # 'C:\my.media\clip' (dot in a folder, extensionless
+                    # file) doesn't derive base='C:\my' and record bogus
+                    # 'C:\my.srt' paths. Matches the base used everywhere
+                    # the actual outputs are written (transcriber.py).
+                    base = os.path.splitext(task.file_path)[0]
                     paths = [
                         f"{base}.{ext}"
                         for ext in (app.app_config.get("output_formats") or ["srt", "json"])

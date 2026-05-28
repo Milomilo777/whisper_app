@@ -40,6 +40,16 @@ def write(segments: list[dict], audio_path: str = "") -> str:
         speaker = seg.get("speaker")
         if speaker not in (None, ""):
             item["speaker"] = str(speaker)
+        # Carry through hallucination-detector flags so the on-disk JSON
+        # actually contains them — the transcript viewer renders flagged
+        # segments as red rows via seg.get("suspect"), and this is also
+        # the round-trip path for the viewer's "Save Changes". Without
+        # this passthrough the flags were computed in memory and dropped.
+        if seg.get("suspect"):
+            item["suspect"] = True
+        reason = seg.get("suspect_reason")
+        if reason not in (None, ""):
+            item["suspect_reason"] = str(reason)
         words = seg.get("words")
         if words:
             item["words"] = [

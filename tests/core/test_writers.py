@@ -426,3 +426,38 @@ def test_json_writer_preserves_numeric_speaker_label():
 def test_srt_fmt_clamps_nan_to_zero():
     assert fmt_srt_time(float("nan")) == "00:00:00,000"
     assert fmt_srt_time(float("inf")) == "00:00:00,000"
+
+
+def test_vtt_writer_tolerates_word_start_none():
+    """Regression (P2-13): a word dict with an explicit start=None (a
+    hand-edited / externally-produced JSON re-fed for re-export) used to
+    raise TypeError in float(None) and abort the whole VTT write. The
+    word should fall back to the segment start instead of crashing."""
+    segs = [{
+        "start": 2.0, "end": 4.0, "text": "hi there",
+        "words": [
+            {"start": None, "end": 2.5, "word": "hi", "probability": 0.9},
+            {"start": 2.5, "end": 4.0, "word": "there", "probability": 0.8},
+        ],
+    }]
+    body = vtt.write(segs)  # must not raise
+    assert body.startswith("WEBVTT\n")
+    # The None-start word falls back to the segment start (2.0s).
+    assert "<00:00:02.000><c>hi</c>" in body
+    assert "<00:00:02.500><c>there</c>" in body
+
+
+def test_json_writer_carries_suspect_flags():
+    """The hallucination detector sets seg['suspect']/['suspect_reason'];
+    the JSON writer must persist both so the transcript viewer's red-row
+    feature can fire and the viewer's Save round-trips them ([19])."""
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "ok"},
+        {"start": 1.0, "end": 2.0, "text": "you you you",
+         "suspect": True, "suspect_reason": "repetition"},
+    ]
+    parsed = json.loads(json_writer.write(segs))
+    assert "suspect" not in parsed[0]
+    assert "suspect_reason" not in parsed[0]
+    assert parsed[1]["suspect"] is True
+    assert parsed[1]["suspect_reason"] == "repetition"
