@@ -32,6 +32,7 @@ from app.widgets.tabs import (
 )
 from app.widgets.tray import TrayController
 from core import __version__ as _APP_VERSION
+from core._proc import kill_process_tree
 from core.config import load_config, save_config
 from core.history import HistoryDB
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
@@ -919,7 +920,9 @@ class App(tk.Tk):
                 pass
         for task in self.download_queue:
             if task.process and task.process.poll() is None:
-                task.process.terminate()
+                # Tree-kill so yt-dlp's ffmpeg merge child dies too (a bare
+                # terminate() orphans it, holding the .part/output handle).
+                kill_process_tree(task.process, force=False)
         try:
             self.tiling.stop()
         except Exception:  # noqa: BLE001
@@ -1695,7 +1698,10 @@ class App(tk.Tk):
         if task.end_time is None:
             task.end_time = time.time()
         if task.process and task.process.poll() is None:
-            task.process.terminate()
+            # Tree-kill so the ffmpeg merge/extract child dies with yt-dlp;
+            # otherwise it keeps the .part/output handle open and the
+            # follow-up unlink/replace can fail with PermissionError.
+            kill_process_tree(task.process, force=False)
         # If the download had already handed off to auto-transcribe, stop
         # that too and unlink it — otherwise the transcription keeps running
         # and finish_task would later overwrite this "cancelled" status.

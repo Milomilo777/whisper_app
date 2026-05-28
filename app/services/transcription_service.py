@@ -15,6 +15,8 @@ import threading
 from queue import Empty
 from typing import TYPE_CHECKING, Any
 
+from core._proc import kill_process_tree, new_session_kwargs
+
 if TYPE_CHECKING:
     import tkinter as tk
 
@@ -281,8 +283,10 @@ class TranscriptionService:
             "errors": "replace",
             "env": env,
         }
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # Isolate the worker so stop_worker can kill its whole tree later
+        # (CREATE_NO_WINDOW on Windows; start_new_session on POSIX so the
+        # worker leads a killable process group).
+        kwargs.update(new_session_kwargs())
 
         process = subprocess.Popen(cmd, **kwargs)
         worker["process"] = process
@@ -355,11 +359,11 @@ class TranscriptionService:
         except subprocess.TimeoutExpired:
             logger.info("stop_worker: worker %s ignored shutdown; terminating",
                         worker_id)
-        try:
-            process.terminate()
-        except Exception:
-            logger.exception("stop_worker: terminate() raised for worker %s",
-                             worker_id)
+        # Tree-terminate, not just process.terminate(): the worker may be
+        # blocked inside a grandchild (ffmpeg/ffprobe/demucs) that
+        # TerminateProcess would orphan on Windows. _proc walks the whole
+        # tree (taskkill /T on Windows, killpg on POSIX).
+        kill_process_tree(process, force=False)
         try:
             process.wait(timeout=2.0)
             return
@@ -367,11 +371,7 @@ class TranscriptionService:
             logger.warning(
                 "stop_worker: worker %s ignored terminate(); killing", worker_id,
             )
-        try:
-            process.kill()
-        except Exception:
-            logger.exception("stop_worker: kill() raised for worker %s",
-                             worker_id)
+        kill_process_tree(process, force=True)
 
     def stop_all(self) -> None:
         for w in self.active_workers():

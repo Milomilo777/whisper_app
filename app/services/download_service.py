@@ -19,7 +19,34 @@ import time
 import urllib.error
 import urllib.request
 
+from core._proc import kill_process_tree, new_session_kwargs
+
 logger = logging.getLogger(__name__)
+
+
+def _reap_process(proc: "subprocess.Popen | None") -> None:
+    """Close a download process's stdout pipe and reap it. Never raises.
+
+    Safety net for _run_task: on the normal path the phase already
+    wait()ed and nulled task.process, but if an exception is raised while
+    iterating stdout the Popen would otherwise be dropped un-wait()ed —
+    leaving a defunct child and an open OS pipe handle until GC. Here we
+    close the pipe and, if the child (yt-dlp + its ffmpeg) is still alive,
+    kill the whole tree before waiting.
+    """
+    if proc is None:
+        return
+    try:
+        if proc.stdout is not None:
+            proc.stdout.close()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        if proc.poll() is None:
+            kill_process_tree(proc, force=True)
+        proc.wait(timeout=2)
+    except Exception:  # noqa: BLE001
+        pass
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from queue import Empty
@@ -707,6 +734,7 @@ class DownloadService:
             except Exception as e:  # noqa: BLE001
                 app.download_events.put(("error", task, str(e)))
             finally:
+                _reap_process(task.process)
                 task.process = None
             return
 
@@ -722,6 +750,7 @@ class DownloadService:
         except Exception as e:  # noqa: BLE001
             app.download_events.put(("error", task, str(e)))
         finally:
+            _reap_process(task.process)
             task.process = None
 
     def _build_smtv_sibling_tasks(
@@ -971,7 +1000,8 @@ class DownloadService:
             encoding="utf-8",
             errors="replace",
             env=_utf8_subprocess_env(),
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            # Isolate so a cancel/exit can kill yt-dlp AND its ffmpeg child.
+            **new_session_kwargs(),
         )
         wrote_files: list[str] = []
         no_subs_warning = False
@@ -1034,7 +1064,9 @@ class DownloadService:
             encoding="utf-8",
             errors="replace",
             env=_utf8_subprocess_env(),
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            # Isolate so a cancel/exit can kill yt-dlp AND its ffmpeg merge
+            # child (otherwise orphaned, holding the .part/output handle).
+            **new_session_kwargs(),
         )
 
         saved_path: str | None = None
