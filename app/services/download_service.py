@@ -694,6 +694,9 @@ class DownloadService:
     # Driver
     def process_queue(self) -> None:
         app = self.app
+        # Don't start a new download once shutdown has begun (Audit P2-5).
+        if getattr(app, "_closing", False):
+            return
         if app.download_current:
             return
         task = next((t for t in app.download_queue if t.status == "waiting"), None)
@@ -1124,6 +1127,10 @@ class DownloadService:
 
     def poll(self) -> None:
         app = self.app
+        # Stop pumping (and re-arming) once shutdown begins so no new
+        # download work starts during teardown (Audit P2-5).
+        if getattr(app, "_closing", False):
+            return
         while True:
             try:
                 kind, task, payload = app.download_events.get_nowait()

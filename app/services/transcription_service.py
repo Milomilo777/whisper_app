@@ -71,6 +71,47 @@ class TranscriptionService:
         self._pending_load_worker_id: int | None = None
         self._pending_load_dialog: "ModelLoadingDialog | None" = None
         self._pending_load_event: threading.Event | None = None
+        # Single-owner guard for the poll() after()-chain. Without it every
+        # start_worker() + every poll() re-arm started an independent
+        # self-perpetuating 100 ms chain, so over a long session the number
+        # of concurrent poll loops grew without bound (Audit P2-1).
+        self._poll_scheduled: bool = False
+
+    def _ensure_poll_scheduled(self) -> None:
+        """Schedule poll() at most once; coalesces all callers."""
+        if self._poll_scheduled:
+            return
+        self._poll_scheduled = True
+        self.app.after(100, self.poll)
+
+    def _release_pending_load(self, worker: dict[str, Any], *, success: bool) -> None:
+        """Release an ensure_worker_ready() waiter for ``worker``, if it is the
+        one being awaited.
+
+        Called from the ready / startup_error / worker_exit branches. On
+        ``ready`` (success=True) it closes the modal with success; when the
+        awaited worker dies first (startup_error / worker_exit) it cancels the
+        modal (success stays False) so wait_window returns and
+        ensure_worker_ready returns False instead of hanging forever with a
+        spinning bar (Audit P1 — modal never closed on a failed load).
+        """
+        if (
+            self._pending_load_worker_id is None
+            or worker.get("id") != self._pending_load_worker_id
+        ):
+            return
+        pending_dialog = self._pending_load_dialog
+        pending_event = self._pending_load_event
+        # Clear first so a later event for the same worker can't double-fire.
+        self._pending_load_worker_id = None
+        self._pending_load_dialog = None
+        self._pending_load_event = None
+        if pending_event is not None:
+            pending_event.set()
+        if pending_dialog is not None:
+            self.app.post_to_main(
+                pending_dialog.mark_success_and_close if success else pending_dialog.cancel
+            )
 
     # Queries -----------------------------------------------------------------
     def active_workers(self) -> list[dict[str, Any]]:
@@ -320,7 +361,7 @@ class TranscriptionService:
 
         from core._threads import safe_thread
         safe_thread(reader, name=f"worker-{worker['id']}-reader")
-        app.after(100, self.poll)
+        self._ensure_poll_scheduled()
 
     def stop_worker(self, worker: dict[str, Any]) -> None:
         """Audit D5: structured three-step shutdown.
@@ -437,6 +478,9 @@ class TranscriptionService:
 
     def poll(self) -> None:
         app = self.app
+        # This invocation consumes the scheduled slot; the re-arm at the end
+        # (or a start_worker) will book exactly one more (Audit P2-1).
+        self._poll_scheduled = False
         import time as _time
         now = _time.time()
         while True:
@@ -461,35 +505,26 @@ class TranscriptionService:
             elif event_type == "ready":
                 worker["ready"] = True
                 self.update_model_state()
-                # If this is the worker an ensure_worker_ready()
-                # call is awaiting, signal the waiting code.
-                # Interactive path: post a main-thread callable that
-                # marks the dialog success + destroys it.
-                # Headless path: setting the Event unblocks the
-                # synchronous wait().
-                pending_id = self._pending_load_worker_id
-                if pending_id is not None and worker["id"] == pending_id:
-                    pending_dialog = self._pending_load_dialog
-                    pending_event = self._pending_load_event
-                    if pending_event is not None:
-                        pending_event.set()
-                    if pending_dialog is not None:
-                        # We're already on the Tk main thread inside
-                        # poll(), so we could call directly — but
-                        # routing via post_to_main keeps the contract
-                        # uniform and protects against any future
-                        # off-thread caller.
-                        self.app.post_to_main(
-                            pending_dialog.mark_success_and_close
-                        )
+                # If this is the worker an ensure_worker_ready() call is
+                # awaiting, unblock it (headless Event) and close its modal.
+                self._release_pending_load(worker, success=True)
             elif event_type == "startup_error":
                 worker["ready"] = False
                 app.log(event.get("message", "Existing model failed to load."))
+                # Release any ensure_worker_ready() waiter FIRST so its
+                # loading modal closes (with success=False) before we maybe
+                # open the download modal — otherwise the two modals stack
+                # and, because we clear app.workers below, poll() stops and
+                # the loading modal's ready-routing would be dead forever.
+                self._release_pending_load(worker, success=False)
                 if not app.model_setup_running:
                     app.log("Existing model failed to load. Starting required download.")
                     self.stop_all()
                     app.workers = []
-                    app.ensure_model_with_modal(mandatory=True)
+                    # Defer so the loading modal is fully torn down (its
+                    # cancel() runs on the next main-thread drain) before the
+                    # download modal opens — no stacked modals.
+                    app.after(0, lambda: app.ensure_model_with_modal(mandatory=True))
             elif event_type == "started":
                 pass
             elif event_type == "progress":
@@ -532,6 +567,9 @@ class TranscriptionService:
                     worker["task"].status = "error"
                     app.log(f"Transcription worker exited with code {event.get('return_code')}")
                     self.finish_task(worker, keep_status=True)
+                # A worker that dies before going ready would otherwise hang
+                # an ensure_worker_ready() modal forever — release it.
+                self._release_pending_load(worker, success=False)
                 self.update_model_state()
 
         # Audit D8: liveness watchdog. After draining the queue,
@@ -553,11 +591,14 @@ class TranscriptionService:
                 self.restart_worker(w)
 
         if self.active_workers():
-            app.after(100, self.poll)
+            self._ensure_poll_scheduled()
 
     def dispatch_waiting(self) -> None:
         """Spawn temporary workers as needed and hand them waiting tasks."""
         app = self.app
+        # Don't spawn new workers once shutdown has begun (Audit P2-5).
+        if getattr(app, "_closing", False):
+            return
         if not app.queue:
             return
         waiting = [t for t in app.queue if t.status == "waiting"]

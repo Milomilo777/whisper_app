@@ -1331,6 +1331,14 @@ class App(tk.Tk):
         base = os.path.basename(file_path)
 
         def _enqueue() -> None:
+            # The model-load wait can run up to ~120 s. If the user cancelled
+            # or removed this download during that window, don't resurrect it
+            # — re-stamping 'transcribing' and enqueuing a transcription for a
+            # download they explicitly cancelled (Audit P2-3).
+            if source_download is not None and getattr(
+                source_download, "status", None
+            ) in ("cancelled", "error"):
+                return
             task = TranscriptionTask(file_path)
             if hasattr(task, "language"):
                 setattr(task, "language", language)
@@ -2718,6 +2726,11 @@ class App(tk.Tk):
         self.pb["value"] = sum(t.progress for t in running) / len(running)
 
     def loop(self) -> None:
+        # Once shutdown starts, don't begin new subprocess work (a nested
+        # "exit with queued tasks?" modal pumps the event loop, so this
+        # after()-chain keeps firing during teardown otherwise). Audit P2-5.
+        if self._closing:
+            return
         self.refresh()
         self.transcription_service.dispatch_waiting()
         self.download_service.process_queue()
