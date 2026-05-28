@@ -10,16 +10,18 @@ populate the dropdowns from the SmtvEpisode it returns.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
-import threading
 from queue import Empty
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.integrations import smtv as smtv_mod
 
 if TYPE_CHECKING:
     from app.app import App
+
+logger = logging.getLogger(__name__)
 
 
 class FormatService:
@@ -67,10 +69,15 @@ class FormatService:
 
         def run() -> None:
             try:
-                cmd = [
-                    self.app.yt_dlp_path(),
-                    "--ffmpeg-location",
-                    self.app.bin_path(),
+                cmd = [self.app.yt_dlp_path()]
+                # Only pass --ffmpeg-location when a bundled ffmpeg dir is
+                # known; an empty value points yt-dlp at the cwd instead of
+                # letting it discover ffmpeg on PATH (Linux/macOS without a
+                # bundled binary). Mirrors download_service's guard.
+                bin_path = self.app.bin_path()
+                if bin_path:
+                    cmd += ["--ffmpeg-location", bin_path]
+                cmd += [
                     "--dump-single-json",
                     "--no-playlist",
                     "--no-warnings",
@@ -94,6 +101,13 @@ class FormatService:
                         (r.stderr or r.stdout or "yt-dlp could not read this URL").strip()
                     )
                 info = json.loads(r.stdout)
+                # Some extractors / a captive-portal or proxy body can decode
+                # to a non-object (null / list / number). The poll() handler
+                # calls info.get(...), which would raise AttributeError on the
+                # Tk thread and (before the self-healing reschedule) kill all
+                # future format lookups. Reject it here as a normal error.
+                if not isinstance(info, dict):
+                    raise RuntimeError("yt-dlp returned unexpected (non-object) JSON")
                 self.app.format_events.put(("formats", url, info))
             except Exception as e:  # noqa: BLE001
                 self.app.format_events.put(("error", url, str(e)))
@@ -183,83 +197,110 @@ class FormatService:
 
     def poll(self) -> None:
         app = self.app
-        while True:
-            try:
-                kind, url, payload = app.format_events.get_nowait()
-            except Empty:
-                break
-
-            if url != app.download_url_var.get().strip():
-                continue
-
-            if kind == "error":
-                app.format_status_var.set(payload)
-                continue
-
-            if kind == "smtv_formats":
-                self._apply_smtv_formats(payload)
-                continue
-
-            audio_values = ["Best audio"]
-            video_values = ["Best video"]
-            app.audio_format_map = {"Best audio": {"kind": "best_audio"}}
-            app.video_format_map = {"Best video": {"kind": "best_video"}}
-            app.current_video_title = payload.get("title", "")
-            lang = payload.get("language") or ""
-            if not lang:
-                auto_caps = payload.get("automatic_captions") or {}
-                lang = next(iter(auto_caps.keys()), "") if auto_caps else ""
-            app.current_video_language = lang
-
-            for fmt in payload.get("formats", []):
-                format_id = str(fmt.get("format_id", ""))
-                ext = fmt.get("ext") or "unknown"
-                resolution = fmt.get("resolution") or (
-                    f"{fmt.get('width')}x{fmt.get('height')}"
-                    if fmt.get("width") and fmt.get("height")
-                    else ""
-                )
-                note = fmt.get("format_note") or ""
-                acodec = fmt.get("acodec") or ""
-                vcodec = fmt.get("vcodec") or ""
-                if not format_id:
-                    continue
-
-                if acodec and acodec != "none" and (not vcodec or vcodec == "none"):
-                    abr = f"{fmt.get('abr')}k" if fmt.get("abr") else ""
-                    label = " | ".join(p for p in (format_id, ext, note, abr, f"a:{acodec}") if p)
-                    if label not in app.audio_format_map:
-                        audio_values.append(label)
-                        app.audio_format_map[label] = {"kind": "format_id", "format_id": format_id}
-
-                if vcodec and vcodec != "none":
-                    fps = f"{fmt.get('fps')}fps" if fmt.get("fps") else ""
-                    label = " | ".join(
-                        p for p in (format_id, ext, resolution, note, fps, f"v:{vcodec}") if p
+        # Don't pump new lookups into a tearing-down interpreter.
+        if getattr(app, "_closing", False):
+            return
+        try:
+            while True:
+                try:
+                    kind, url, payload = app.format_events.get_nowait()
+                except Empty:
+                    break
+                # One malformed event must not kill the whole poll loop:
+                # before this, an exception here skipped the reschedule at
+                # the end and ALL future format lookups silently stopped.
+                try:
+                    self._handle_event(kind, url, payload)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "format poll: error handling %r event for %r", kind, url
                     )
-                    if label not in app.video_format_map:
-                        video_values.append(label)
-                        app.video_format_map[label] = {"kind": "format_id", "format_id": format_id}
+                    try:
+                        app.format_status_var.set("Could not read formats for this URL")
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            # Always re-arm (unless shutting down) so a transient error
+            # never permanently wedges format lookups.
+            if not getattr(app, "_closing", False):
+                app.after(200, self.poll)
 
-            app.audio_format_combo["values"] = audio_values
-            app.video_format_combo["values"] = video_values
-            if audio_values:
-                app.audio_format_var.set(audio_values[0])
-            if video_values:
-                app.video_format_var.set(video_values[0])
-            # Feed the probed video length to the Download-tab position
-            # sliders (0 / missing → live or unknown → sliders disabled).
-            duration = payload.get("duration")
-            try:
-                app.set_download_duration(float(duration) if duration else 0.0)
-            except (AttributeError, TypeError, ValueError):
-                pass
-            app.update_download_mode()
-            if audio_values or video_values:
-                app.format_status_var.set(
-                    f"{len(audio_values)} audio and {len(video_values)} video formats loaded"
+    def _handle_event(self, kind: str, url: str, payload: Any) -> None:
+        app = self.app
+        if url != app.download_url_var.get().strip():
+            return
+
+        if kind == "error":
+            app.format_status_var.set(payload)
+            return
+
+        if kind == "smtv_formats":
+            self._apply_smtv_formats(payload)
+            return
+
+        if not isinstance(payload, dict):
+            # Defence-in-depth: run() already rejects non-dict JSON, but a
+            # future event source must not be able to crash the handler.
+            raise RuntimeError(f"format payload is not a dict: {type(payload).__name__}")
+
+        audio_values = ["Best audio"]
+        video_values = ["Best video"]
+        app.audio_format_map = {"Best audio": {"kind": "best_audio"}}
+        app.video_format_map = {"Best video": {"kind": "best_video"}}
+        app.current_video_title = payload.get("title", "")
+        lang = payload.get("language") or ""
+        if not lang:
+            auto_caps = payload.get("automatic_captions") or {}
+            lang = next(iter(auto_caps.keys()), "") if auto_caps else ""
+        app.current_video_language = lang
+
+        for fmt in payload.get("formats", []):
+            format_id = str(fmt.get("format_id", ""))
+            ext = fmt.get("ext") or "unknown"
+            resolution = fmt.get("resolution") or (
+                f"{fmt.get('width')}x{fmt.get('height')}"
+                if fmt.get("width") and fmt.get("height")
+                else ""
+            )
+            note = fmt.get("format_note") or ""
+            acodec = fmt.get("acodec") or ""
+            vcodec = fmt.get("vcodec") or ""
+            if not format_id:
+                continue
+
+            if acodec and acodec != "none" and (not vcodec or vcodec == "none"):
+                abr = f"{fmt.get('abr')}k" if fmt.get("abr") else ""
+                label = " | ".join(p for p in (format_id, ext, note, abr, f"a:{acodec}") if p)
+                if label not in app.audio_format_map:
+                    audio_values.append(label)
+                    app.audio_format_map[label] = {"kind": "format_id", "format_id": format_id}
+
+            if vcodec and vcodec != "none":
+                fps = f"{fmt.get('fps')}fps" if fmt.get("fps") else ""
+                label = " | ".join(
+                    p for p in (format_id, ext, resolution, note, fps, f"v:{vcodec}") if p
                 )
-            else:
-                app.format_status_var.set("No formats found")
+                if label not in app.video_format_map:
+                    video_values.append(label)
+                    app.video_format_map[label] = {"kind": "format_id", "format_id": format_id}
 
-        app.after(200, self.poll)
+        app.audio_format_combo["values"] = audio_values
+        app.video_format_combo["values"] = video_values
+        if audio_values:
+            app.audio_format_var.set(audio_values[0])
+        if video_values:
+            app.video_format_var.set(video_values[0])
+        # Feed the probed video length to the Download-tab position
+        # sliders (0 / missing → live or unknown → sliders disabled).
+        duration = payload.get("duration")
+        try:
+            app.set_download_duration(float(duration) if duration else 0.0)
+        except (AttributeError, TypeError, ValueError):
+            pass
+        app.update_download_mode()
+        if audio_values or video_values:
+            app.format_status_var.set(
+                f"{len(audio_values)} audio and {len(video_values)} video formats loaded"
+            )
+        else:
+            app.format_status_var.set("No formats found")

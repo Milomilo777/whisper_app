@@ -251,6 +251,17 @@ def _load_audio_as_float32(audio_path: str) -> tuple[Any, int]:
             "ffmpeg is required to decode audio for the Parakeet backend "
             "but was not found. Use the default engine, or install ffmpeg."
         ) from e
+    except subprocess.CalledProcessError as e:
+        # ffmpeg IS present but returned non-zero — a corrupt/unsupported
+        # input. CalledProcessError is a SubprocessError (not an OSError),
+        # so without this branch it propagated as the opaque "Command ...
+        # returned non-zero exit status N" instead of clear guidance.
+        detail = (e.stderr or b"").decode("utf-8", "replace").strip()[-400:]
+        raise RuntimeError(
+            f"ffmpeg could not decode this file for the Parakeet backend "
+            f"(it may be corrupt or an unsupported format): "
+            f"{detail or 'no error output'}"
+        ) from e
     arr = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
     return arr, 16000
 

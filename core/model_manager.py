@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import threading
 import time
@@ -14,6 +15,19 @@ import requests
 
 class DownloadCancelled(RuntimeError):
     pass
+
+
+# Bound the download/verify retry loop. A permanently-bad mirror or a
+# captive-portal MD5 body would otherwise re-download the whole ~3 GB
+# archive forever (the only escape was the modal Cancel button — useless
+# on an unattended / auto-transcribe run). After this many failed
+# attempts we raise so the UI reports a real, terminal error.
+MAX_DOWNLOAD_ATTEMPTS = 3
+
+# A valid md5sum line begins with a 32-hex-char digest. Rejecting
+# anything else stops an HTML error page (captive portal / proxy) from
+# being mis-parsed as a manifest and driving an endless re-download.
+_MD5_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 # ---------------------------------------------------------------- model picker
@@ -125,10 +139,16 @@ def _parse_md5_manifest(text: str) -> list[tuple[str, str]]:
             continue
 
         checksum,path=parts
+        checksum=checksum.lower()
+        # Skip lines whose first token isn't a 32-hex md5 digest — an
+        # HTML/captive-portal body otherwise yields bogus "entries" that
+        # always mismatch and drive the (now-bounded) re-download loop.
+        if not _MD5_HEX_RE.match(checksum):
+            continue
         path=path.lstrip("*").replace("\\","/")
         if path.startswith("./"):
             path=path[2:]
-        entries.append((checksum.lower(),path))
+        entries.append((checksum,path))
     return entries
 
 def _download_zip(
@@ -288,7 +308,8 @@ def ensure_model(
         _remove_path(zip_path)
         _remove_path(model_path)
 
-    while True:
+    last_mismatches: list[tuple[str, str, str]] = []
+    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         if cancel_event and cancel_event.is_set():
             raise DownloadCancelled("Model download cancelled")
 
@@ -321,18 +342,35 @@ def ensure_model(
             _remove_path(zip_path)
             break
 
-        if status_cb:
-            status_cb("MD5 mismatch. Deleting model archive and folder, then restarting from zero...")
+        last_mismatches = mismatches
+        _remove_path(zip_path)
+        _remove_path(model_path)
 
+        if attempt >= MAX_DOWNLOAD_ATTEMPTS:
+            # Don't loop forever on a bad mirror / corrupt archive.
+            break
+
+        if status_cb:
+            status_cb(
+                f"MD5 mismatch (attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}). "
+                "Deleting model archive and folder, then restarting from zero..."
+            )
         _notify(
             progress_cb,
             phase="restart",
-            status="MD5 mismatch. Restarting download from zero...",
+            status=f"MD5 mismatch. Retrying ({attempt}/{MAX_DOWNLOAD_ATTEMPTS})...",
             percent=0,
             detail=f"{len(mismatches)} file checksum(s) failed",
         )
-        _remove_path(zip_path)
-        _remove_path(model_path)
+
+    if last_mismatches:
+        sample = ", ".join(rel for _exp, _got, rel in last_mismatches[:5])
+        more = "" if len(last_mismatches) <= 5 else f" (+{len(last_mismatches) - 5} more)"
+        raise RuntimeError(
+            f"Model download failed after {MAX_DOWNLOAD_ATTEMPTS} attempts: "
+            f"{len(last_mismatches)} file checksum(s) still mismatched "
+            f"[{sample}{more}]. The mirror may be serving a corrupt archive."
+        )
 
     if status_cb: status_cb("Model ready")
     _notify(progress_cb, phase="ready", status="Model ready", percent=100, detail="Download complete")

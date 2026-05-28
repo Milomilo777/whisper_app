@@ -1114,9 +1114,26 @@ class App(tk.Tk):
             justify="left",
         ).pack(padx=18, pady=(16, 8))
         bar = ttk.Progressbar(win, mode="indeterminate", length=340)
-        bar.pack(padx=18, pady=(0, 16))
+        bar.pack(padx=18, pady=(0, 12))
         bar.start(12)
         state = {"ok": False, "done": False}
+        cancel_event = threading.Event()
+
+        def _request_cancel() -> None:
+            # Set the event so optional_deps.install terminates pip and
+            # returns False promptly; the window closes via _poll once the
+            # worker thread observes it. Without this, closing the modal
+            # left pip running orphaned and the bar could spin forever on a
+            # stalled download.
+            cancel_event.set()
+            try:
+                cancel_btn.config(state="disabled", text="Cancelling…")
+            except tk.TclError:
+                pass
+
+        cancel_btn = ttk.Button(win, text="Cancel", command=_request_cancel)
+        cancel_btn.pack(pady=(0, 14))
+        win.protocol("WM_DELETE_WINDOW", _request_cancel)
 
         def _work() -> None:
             # self.log writes the Tk text widget directly; this runs off
@@ -1124,7 +1141,9 @@ class App(tk.Tk):
             def _safe_log(line: str) -> None:
                 self.post_to_main(lambda: self.log(line))
             try:
-                state["ok"] = optional_deps.install(feature, log_cb=_safe_log)
+                state["ok"] = optional_deps.install(
+                    feature, log_cb=_safe_log, cancel_event=cancel_event
+                )
             except Exception as e:  # noqa: BLE001
                 self.post_to_main(lambda e=e: self.log(f"{friendly} install failed: {e}"))
             finally:

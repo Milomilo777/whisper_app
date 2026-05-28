@@ -41,11 +41,26 @@ def test_zip_name_from_url():
 
 
 def test_parse_md5_manifest_handles_variants():
-    text = "abc123 *file1.bin\ndef456  ./sub/file2.bin\n  \nXYZ789 sub\\file3.bin\n"
+    # Real md5sum lines begin with a 32-hex digest.
+    h1 = "0" * 32
+    h2 = "1" * 32
+    h3 = "ABCDEF0123456789abcdef0123456789"  # mixed case -> lowercased
+    text = f"{h1} *file1.bin\n{h2}  ./sub/file2.bin\n  \n{h3} sub\\file3.bin\n"
     parsed = mm._parse_md5_manifest(text)
-    assert ("abc123", "file1.bin") in parsed
-    assert ("def456", "sub/file2.bin") in parsed
-    assert ("xyz789", "sub/file3.bin") in parsed
+    assert (h1, "file1.bin") in parsed
+    assert (h2, "sub/file2.bin") in parsed
+    assert (h3.lower(), "sub/file3.bin") in parsed
+
+
+def test_parse_md5_manifest_rejects_non_hex_lines():
+    """An HTML / captive-portal body must not be mis-parsed as a manifest
+    (it otherwise drives the bounded re-download loop to its cap)."""
+    html = "<html><body>Error 407 proxy auth required</body></html>"
+    assert mm._parse_md5_manifest(html) == []
+    # Short / non-hex tokens are skipped; only a real 32-hex line survives.
+    mixed = "abc123 file1.bin\n" + ("d" * 32) + " good.bin\n"
+    parsed = mm._parse_md5_manifest(mixed)
+    assert parsed == [("d" * 32, "good.bin")]
 
 
 def test_fmt_bytes_units():

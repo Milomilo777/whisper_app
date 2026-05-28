@@ -105,6 +105,21 @@ def download_default_model(
                         log(f"  {pct}% ({downloaded // (1 << 20)} / "
                             f"{total // (1 << 20)} MB)")
                         last_pct = pct
+    # Completeness check: a server that closes the stream cleanly after
+    # sending fewer bytes than Content-Length would otherwise promote a
+    # truncated .part to the final model — which then fails to load deep
+    # inside pywhispercpp with a cryptic ggml parse error and is never
+    # re-fetched (the only later gate is exists() && size > 100 MB, which
+    # a half-finished ~1 GB file passes). Refuse the short read instead.
+    if total and downloaded != total:
+        try:
+            part.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"whisper.cpp model download truncated: got {downloaded} of "
+            f"{total} bytes. Check your connection and try again."
+        )
     shutil.move(str(part), str(dest))
     if log:
         log(f"Done: {dest}")
