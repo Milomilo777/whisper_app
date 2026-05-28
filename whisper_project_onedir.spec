@@ -113,6 +113,7 @@ a = Analysis(
         'core.recorder',
         'core.search',
         'core.separator',
+        'core.tiling',
         'core.voiceprint',
         # Opt-in backends (see onefile spec comment).
         'pywhispercpp',

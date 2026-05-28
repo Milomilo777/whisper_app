@@ -120,6 +120,7 @@ a = Analysis(
         'core.recorder',
         'core.search',
         'core.separator',
+        'core.tiling',
         'core.voiceprint',
         # Opt-in backends — explicit submodule names so a user
         # who flips the config gets a working backend rather than

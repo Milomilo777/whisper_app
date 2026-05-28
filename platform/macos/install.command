@@ -72,12 +72,28 @@ python -m pip install -r "$REPO_ROOT/requirements.txt"
 python -m pip install --upgrade yt-dlp
 
 # ---- ffmpeg -------------------------------------------------------------
+# Always materialise ffmpeg/ffprobe INTO bin/ (symlink), even when they
+# come from the system or Homebrew. The .app launcher sets
+# PATH="$REPO_ROOT/bin:$VENV/bin:$PATH", but a Finder/LaunchServices-launched
+# .app inherits only the minimal /usr/bin:/bin PATH — NOT /opt/homebrew/bin
+# or /usr/local/bin — so without the symlink core.paths.bundled_binary()
+# falls back to the bare "ffmpeg" name and the GUI worker can't find it.
+link_ffmpeg_into_bin() {
+  local f p
+  for f in ffmpeg ffprobe; do
+    p="$(command -v "$f" 2>/dev/null || true)"
+    [ -n "$p" ] && ln -sf "$p" "$REPO_ROOT/bin/$f"
+  done
+}
 mkdir -p "$REPO_ROOT/bin"
 if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
   say "system ffmpeg/ffprobe found: $(command -v ffmpeg)"
+  link_ffmpeg_into_bin
 elif command -v brew >/dev/null 2>&1; then
   say "installing ffmpeg via Homebrew…"
   brew install ffmpeg || warn "brew install ffmpeg failed — install it manually."
+  # Re-resolve after the install so the freshly-installed binaries are linked.
+  link_ffmpeg_into_bin
 else
   if [ "$(uname -m)" = "arm64" ]; then
     warn "no Homebrew on Apple Silicon: the static ffmpeg below is Intel"
@@ -90,7 +106,10 @@ else
   curl -fsSL "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o "$TMP/ffmpeg.zip" || ok=0
   curl -fsSL "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" -o "$TMP/ffprobe.zip" || ok=0
   if [ "$ok" = 1 ]; then
-    (cd "$TMP" && unzip -oq ffmpeg.zip && unzip -oq ffprobe.zip)
+    # Non-fatal under `set -e`: a truncated-but-HTTP-200 download can make
+    # unzip exit non-zero, which would otherwise abort the whole installer
+    # before the friendly warn below ever runs.
+    (cd "$TMP" && unzip -oq ffmpeg.zip && unzip -oq ffprobe.zip) || ok=0
     cp "$TMP/ffmpeg" "$TMP/ffprobe" "$REPO_ROOT/bin/" 2>/dev/null || ok=0
     chmod +x "$REPO_ROOT/bin/ffmpeg" "$REPO_ROOT/bin/ffprobe" 2>/dev/null || true
     xattr -dr com.apple.quarantine "$REPO_ROOT/bin" 2>/dev/null || true
