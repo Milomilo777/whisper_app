@@ -122,3 +122,48 @@ def test_main_catches_transcribe_exception(monkeypatch, capsys):
     events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
     error_events = [e for e in events if e["event"] == "error"]
     assert error_events and "decode failed" in error_events[0]["message"]
+
+
+def test_main_rejects_oversize_command(monkeypatch, capsys):
+    """Audit P2-20: a stdin line past MAX_COMMAND_BYTES is dropped with an
+    error and never starts a task (OOM / runaway-parent guard)."""
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+    monkeypatch.setattr(
+        worker, "transcribe",
+        lambda *a, **k: pytest.fail("oversize command must not run a task"),
+    )
+    # MAX_COMMAND_BYTES is a 1 MB local in worker.main(); exceed it.
+    huge = "x" * ((1 << 20) + 10) + "\n"
+    inputs = huge + json.dumps({"action": "shutdown"}) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(inputs))
+    worker.main()
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    errs = [e for e in events if e["event"] == "error"]
+    assert errs and "exceeds max length" in errs[0]["message"]
+    assert not any(e["event"] == "started" for e in events)
+
+
+def test_main_clip_disables_resume(monkeypatch, capsys):
+    """Audit P2-20: a clipped request must NOT resume a whole-file
+    checkpoint (resuming would transcribe past clip_end)."""
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+    monkeypatch.setattr(
+        worker, "resume_transcription",
+        lambda *a, **k: pytest.fail("a clipped run must not call resume_transcription"),
+    )
+    ran = {"transcribe": False}
+
+    def fake_transcribe(task, p, l, language_cb=None):
+        ran["transcribe"] = True
+
+    monkeypatch.setattr(worker, "transcribe", fake_transcribe)
+    cmd = {
+        "action": "transcribe", "file_path": "/tmp/x.wav",
+        "clip_start": 10, "clip_end": 20, "resume": True,
+    }
+    inputs = json.dumps(cmd) + "\n" + json.dumps({"action": "shutdown"}) + "\n"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(inputs))
+    worker.main()
+    assert ran["transcribe"] is True  # full path ran, resume did not
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    assert any(e["event"] == "done" for e in events)

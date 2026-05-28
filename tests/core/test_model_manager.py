@@ -185,3 +185,63 @@ def test_unsafe_md5_path_raises(tmp_path):
                  status=200)
         with pytest.raises(RuntimeError, match="Unsafe MD5 manifest path"):
             mm._verify_extracted_files(cache_dir, md5_url)
+
+
+@responses.activate
+def test_ensure_model_rejects_zip_slip_member(tmp_path):
+    """Audit [15]: a tampered model archive with a traversal member must be
+    rejected BEFORE extraction writes anything outside the cache dir."""
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{model_dir_name}/ok.bin", b"fine")
+        z.writestr("../escape.bin", b"pwned")  # escapes the cache dir
+    malicious = buf.getvalue()
+
+    zip_url = "https://fake.test/model.zip"
+    md5_url = "https://fake.test/model.md5"
+    responses.add(responses.GET, zip_url, body=malicious, status=200,
+                  headers={"content-length": str(len(malicious))})
+    # The guard fires during extract, before MD5 verification — md5 body
+    # is irrelevant, but register it so a stray fetch doesn't ConnectionError.
+    responses.add(responses.GET, md5_url, body="", status=200)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(cache_dir / model_dir_name),
+    }
+    with pytest.raises(RuntimeError, match="Unsafe path in model archive"):
+        mm.ensure_model(config)
+    # Nothing escaped the cache dir.
+    assert not (tmp_path / "escape.bin").exists()
+
+
+@responses.activate
+def test_ensure_model_bounded_retry_raises(tmp_path):
+    """Audit [9]: a permanently-mismatching mirror must NOT re-download
+    forever — after MAX_DOWNLOAD_ATTEMPTS it raises a terminal error."""
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+    files = {"a.bin": b"actual-bytes"}
+    zip_bytes = _build_model_zip(model_dir_name, files)
+    # md5 lists a DIFFERENT digest → every verify mismatches.
+    md5_text = f"{hashlib.md5(b'WRONG').hexdigest()} {model_dir_name}/a.bin"
+
+    zip_url = "https://fake.test/model.zip"
+    md5_url = "https://fake.test/model.md5"
+    responses.add(responses.GET, zip_url, body=zip_bytes, status=200,
+                  headers={"content-length": str(len(zip_bytes))})
+    responses.add(responses.GET, md5_url, body=md5_text, status=200)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(cache_dir / model_dir_name),
+    }
+    with pytest.raises(RuntimeError, match="after .* attempts"):
+        mm.ensure_model(config)

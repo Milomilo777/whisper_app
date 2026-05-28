@@ -164,6 +164,34 @@ def test_write_outputs_cleans_up_part_on_failure(transcriber, tmp_path, monkeypa
     assert not os.path.exists(base + ".srt.part")
 
 
+def test_write_outputs_isolates_one_failing_writer(transcriber, tmp_path, monkeypatch):
+    """Audit [16]: one writer raising must NOT discard the formats that
+    wrote fine, must unlink only the failed .part, and must NOT raise
+    (some output is better than none)."""
+    monkeypatch.setattr(transcriber, "config", {"output_formats": ["srt", "json"]})
+    real_get = transcriber.get_writer
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("json writer exploded")
+
+    def fake_get_writer(name):
+        return _boom if name == "json" else real_get(name)
+
+    monkeypatch.setattr(transcriber, "get_writer", fake_get_writer)
+
+    base = str(tmp_path / "out")
+    seg = [{"start": 0.0, "end": 1.0, "text": "hi"}]
+    written = transcriber._write_outputs(base, seg, str(tmp_path / "out.mp4"))
+
+    import os
+    # The good SRT survived; the failing JSON is excluded — no exception.
+    assert [os.path.basename(p) for p in written] == ["out.srt"]
+    assert os.path.isfile(base + ".srt")
+    assert not os.path.exists(base + ".json")
+    # The failed JSON .part was cleaned up; no leftovers.
+    assert [f for f in os.listdir(tmp_path) if f.endswith(".part")] == []
+
+
 def test_write_outputs_binary_docx_path(transcriber, tmp_path, monkeypatch):
     """``docx`` is binary: _write_outputs must open the .part file in
     "wb" mode, write the python-docx zip bytes, and rename atomically.
