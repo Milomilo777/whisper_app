@@ -4,6 +4,8 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.7] — 2026-05-29
+
 Senior-architect deep audit (8 parallel read-only shards → fix batches).
 pyright `app/ core/` 0/0/0 and the hermetic suite stay green; no shipped
 Windows behaviour changed at spawn time. Highlights:

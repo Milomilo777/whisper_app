@@ -55,10 +55,10 @@ modal-close changes (batches A/C) didn't disturb the cooperative path.
 
 | Item | Value |
 |---|---|
-| Branch | `master` — **the single mainline** (2026-05-25: `chore/cleanup-hardening` + `basic-edition` were folded into master and deleted; tips kept as `archive/*` tags). Carries **v1.3.6**, all committed + pushed. The whole history was rewritten 2026-05-25 to attribute every commit to `translation-robot` (GitHub no-reply) and strip the old email + all `Co-Authored-By` trailers; local `git config` identity is set to match. |
-| Version | pyproject = 1.3.6; `core.__version__` = 1.3.6; both `.iss` = 1.3.6 |
-| Last PUBLISHED release | **v1.3.6** on GitHub (Standard + Portable) — Video Tiling tab + Linux/macOS groundwork; built + slim past-bug E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-26. |
-| GitHub releases now | `v1.3.6` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** Reverses the 2026-05-25 keep-all. Old release objects (v1.3.3–v1.3.5) were deleted; their git tags + the local `dist_installer/` installers remain as backup. |
+| Branch | `master` — **the single mainline**. Carries **v1.3.7** (deep-audit hardening, see §0), all committed + pushed. Every commit is attributed to `translation-robot` (GitHub no-reply), no `Co-Authored-By` trailers; local `git config` identity matches. |
+| Version | pyproject = 1.3.7; `core.__version__` = 1.3.7; both `.iss` = 1.3.7 |
+| Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
+| GitHub releases now | `v1.3.7` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** v1.3.6 release object was pruned on the v1.3.7 release; its git tag + the local `dist_installer/WhisperProject-v1.3.6-*` artefacts remain as backup. |
 | Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
 | Working tree | clean (only `.claude/` untracked) |
