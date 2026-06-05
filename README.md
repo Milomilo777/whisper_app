@@ -39,8 +39,19 @@ Step-by-step install guide: [docs/INSTALL.md](docs/INSTALL.md).
   Supreme Master TV episode link, pick a format, save to your
   folder. Optionally auto-transcribe after the download.
 - **Transcription Queue** — live status of pending + running jobs.
-  Right-click for cancel, re-run, export to oTranscribe, or open the
-  output folder. Double-click a finished row to jump to its folder.
+  An always-visible action bar under the list gives every task a
+  one-click **Pause / Resume / Cancel / Re-run / Remove** (buttons
+  enable for the selected row's state); a single click on a running
+  or paused row's status/progress cell toggles pause/resume. The same
+  actions stay on the right-click menu, and `Esc` still cancels the
+  running job. Double-click a finished row to jump to its folder.
+- **Download Videos action bar** — the same per-task controls under the
+  download list: **Pause / Resume / Cancel / Re-run / Remove / Open**.
+  Because `yt-dlp` has no live pause signal, download **Pause is
+  "stop-and-continue"**: it stops the download but keeps the partial
+  file, and Resume continues from where it left off (via `yt-dlp`'s
+  `-c`/`--continue`) instead of restarting. Pause is unavailable for
+  Supreme Master TV downloads, which have no resume point.
 
 Keyboard: `Ctrl+O` Browse · `Ctrl+Enter` Transcribe · `Esc` Cancel ·
 `Ctrl+Q` Exit.
