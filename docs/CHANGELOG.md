@@ -4,6 +4,102 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+> **Local only — not yet pushed or released.** These changes are committed
+> on `master` on top of the v1.3.7 baseline; no version bump or tag has been
+> cut. They ship to users only when the owner authorises the next release.
+> pyright `app/ core/` stays 0/0/0 and the hermetic suite stays green.
+
+### Added
+
+- **Optional LAN / web server mode.** `python gui.py serve` starts a
+  stdlib-only HTTP server (no new dependency) so a phone or another PC can
+  send a file or a URL to transcribe from a browser. It binds to loopback
+  (`127.0.0.1`) by default — no Windows firewall prompt — and `--lan` is an
+  explicit opt-in to listen on the local network. Optional `--port`,
+  `--host`, `--token` (shared-secret gate) and `--max-upload-mb` (upload
+  cap). The page and a small JSON API accept an upload **or** a URL job,
+  poll progress, and download the result; transcription runs in-process and
+  sequentially so the ~3 GB model stays hot, behind a bounded queue. Jobs
+  are recorded to history. New Tk-free `core/server/` package; new config
+  keys `server_port` / `server_max_upload_mb`. (Verified live on this
+  machine: `GET /api/health`, `/api/formats`, and `/` all 200.)
+- **Optional Google Gemini cloud Speech-to-Text backend** (`cloud_stt`).
+  Paste a free AI Studio API key and transcribe over the Gemini API via
+  stdlib REST (default model `gemini-3.5-flash`, configurable), with chunked
+  upload through the Files API. A loud privacy opt-in makes clear this
+  **uploads your audio to Google and breaks the offline guarantee**. An
+  honest *local* minutes-used counter (the $300 free credit is **not**
+  readable from an API key, so we don't pretend to show it) plus a link to
+  Google's billing console. New config keys `cloud_stt_api_key` /
+  `cloud_stt_model` / `cloud_stt_minutes_used` / `cloud_stt_free_minutes_cap`
+  / `cloud_stt_chunk_seconds`. *(The real end-to-end Google call is
+  UNTESTED here — no API key in this environment; live-test with your own
+  key before relying on it.)*
+- **Opt-in update check** (notify-only — it never auto-installs). A new
+  `core/updates.py` queries the GitHub releases API; a Help-menu "Check for
+  updates" runs it on demand and a throttled quiet check runs at launch. It
+  is silent on a private repo, offline, or when already up to date. New
+  config keys `update_check_enabled` / `last_update_check`. Also documented
+  that the Standard installer already upgrades **in place** over the
+  previous version (stable Inno `AppId` — no uninstall needed).
+- **Always-visible per-task action bars** under both Queue tabs —
+  Pause / Resume / Cancel / Re-run / Remove buttons on each row (plus a
+  click on the status cell to toggle), so the controls are discoverable
+  without the right-click menu (which, with Esc, still works). Download
+  "pause" is **stop-and-continue**: it keeps the `.part` and resumes via
+  yt-dlp `-c`/`--continue`; pause is disabled for Supreme Master TV
+  downloads, which have no resume point.
+- **Multi-monitor Video Tiling.** The Tiling tab was rewritten from a
+  single-screen `ffplay tile=NxN` into a Tk-free multi-monitor engine
+  (ported from the maintainer's `video-tiler` v1.1): one download is fanned
+  out to one `ffplay` per selected monitor, with `poll()` liveness,
+  exponential-backoff reconnect, self-healing `yt-dlp -U`, more robust
+  extraction (player-client fallbacks, retries, height-based format),
+  http(s) URL validation, and clean teardown via
+  `core._proc.kill_process_tree` (fixes orphaned ffmpeg/yt-dlp children).
+  New `core/monitors.py` detects screens (screeninfo → ctypes Win32 →
+  single-monitor fallback). UI adds Quality / Mute / Multi-monitor and a
+  "Monitors…" chooser with Identify and Auto-restart. New config keys
+  `tiling_quality` / `tiling_mute` / `tiling_multi_monitor` /
+  `tiling_selected_monitors` / `tiling_auto_restart`. New optional
+  dependency: **screeninfo** (multi-monitor degrades gracefully without it).
+
+### Changed
+
+- **The model now downloads to a writable location by default.** The
+  first-run hub default moved from the install directory (under Program
+  Files — "access is denied" for a non-admin user) to
+  `%LOCALAPPDATA%\WhisperProject\Cache\models`. The model-download dialog
+  surfaces a typed `ModelDestinationNotWritable` and offers a re-pick, the
+  hub-folder picker probes writability when you click OK, and the default
+  hub is aligned with `model_folder_for`'s empty-hub fallback
+  (`HUB_SUBFOLDER_NAME = "models"`) so an existing `Cache\models` model is
+  **reused, not re-downloaded** (~3 GB saved). Verified on this machine with
+  a real `load_config()` probe.
+
+### Fixed
+
+- **GPU/CPU autodetect is hardened and self-healing.** A cheap cuDNN/cuBLAS
+  runtime-load gate means CUDA is only chosen when it's actually usable, and
+  a failed CUDA model load now falls back to **CPU int8** instead of
+  crashing the worker (and instead of falsely prompting a ~3 GB
+  re-download). The effective device is reported additively on the worker
+  `ready` event and shown as a live GPU/CPU badge (Transcribe header + Queue
+  status); a one-time "running on CPU (slower)" warning is gated to the
+  GPU-detected-but-unusable / downgrade case (config key
+  `cpu_warning_shown`).
+- **Network / UNC drag-and-drop no longer silently drops the file.** A
+  backslash-preserving, brace-aware splitter replaces `tk.splitlist`, which
+  was collapsing the leading `\\` of a `\\server\share\file` drop.
+
+### Docs
+
+- **Evaluation: skip Google's Gemma 4 12B as a transcription backend.**
+  `docs/evaluations/GEMMA4_EVALUATION_2026-06.md` recommends a SKIP — a 30 s
+  audio cap, a torch/BF16/~24 GB-VRAM requirement, no word timestamps, and
+  no WER win over the current stack — while sketching a possible
+  future-adjunct path and a hardware gate.
+
 ## [1.3.7] — 2026-05-29
 
 Senior-architect deep audit (8 parallel read-only shards → fix batches).

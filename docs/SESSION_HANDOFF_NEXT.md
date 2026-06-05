@@ -5,19 +5,119 @@ this repo. Read this file before anything else.
 
 ---
 
-## 0. Latest session — senior-architect deep audit (2026-05-29)
+## 0. Latest session — 9 feature/hardening changes (2026-06-06) — LOCAL ONLY
+
+**Current state: the v1.3.7 baseline + 9 changes committed on `master`,
+NOT pushed and NOT released.** No version bump, no tag — the owner will
+authorise the push + release later. pyright `app/ core/` is 0/0/0 and the
+targeted suites stay green. Full bullets are in `docs/CHANGELOG.md`
+`[Unreleased]` (and worded user-facing there).
+
+The 9 changes (grouped):
+
+- **Model hub default → `%LOCALAPPDATA%\WhisperProject\Cache\models`**
+  (was the install dir → "access is denied" for non-admin users). Added a
+  typed `ModelDestinationNotWritable` + a re-pick flow in the
+  model-download dialog, a writability probe in the hub picker, and aligned
+  the default hub with `model_folder_for`'s empty-hub fallback
+  (`HUB_SUBFOLDER_NAME = "models"`) so an existing `Cache\models` model is
+  **reused, not re-downloaded** (~3 GB). Verified with a real
+  `load_config()` probe on this machine.
+- **GPU/CPU autodetect hardening** — a cheap cuDNN/cuBLAS runtime-load gate
+  (CUDA only when usable); a self-healing model load that falls back to CPU
+  int8 instead of crashing the worker (or falsely prompting a ~3 GB
+  re-download); the effective device reported additively on the worker
+  `ready` event; a live GPU/CPU badge + a one-time "running on CPU (slower)"
+  warning gated to the GPU-detected-but-unusable case (`cpu_warning_shown`).
+- **Always-visible per-task action bars** under both Queue tabs
+  (Pause / Resume / Cancel / Re-run / Remove) + a status-cell click toggle;
+  right-click menu + Esc kept. Download "pause" is stop-and-continue (keeps
+  the `.part`, resumes via yt-dlp `-c`/`--continue`); disabled for SMTV
+  downloads (no resume point).
+- **Network / UNC drag-and-drop fix** — a backslash-preserving, brace-aware
+  splitter so a `\\server\share\file` drop is no longer silently dropped
+  (`tk.splitlist` was collapsing the leading `\\`).
+- **Optional LAN/web server** — `python gui.py serve [--port] [--host]
+  [--lan] [--token] [--max-upload-mb]`. Loopback by default (no firewall
+  prompt); `--lan` is the explicit opt-in. Browser page + JSON API
+  (upload OR URL jobs, progress poll, result download); in-process
+  sequential transcription keeps the model hot; bounded queue + upload cap
+  + optional token; jobs recorded to history. New Tk-free `core/server/`
+  package; new keys `server_port` / `server_max_upload_mb`. Verified live
+  here (`/api/health`, `/api/formats`, `/` all 200).
+- **Multi-monitor Video Tiling rewrite** — a Tk-free engine (ported from
+  the maintainer's `video-tiler` v1.1): one download fanned out to one
+  `ffplay` per selected monitor, `poll()` liveness, exponential-backoff
+  reconnect, self-heal `yt-dlp -U`, robust extraction, http(s) validation,
+  clean teardown via `core._proc.kill_process_tree`. New `core/monitors.py`
+  (screeninfo → ctypes Win32 → single-monitor fallback). New keys
+  `tiling_quality` / `tiling_mute` / `tiling_multi_monitor` /
+  `tiling_selected_monitors` / `tiling_auto_restart`. New optional dep:
+  **screeninfo**.
+- **Optional Google Gemini cloud STT backend** (`cloud_stt`) — paste a free
+  AI Studio API key, transcribe via the Gemini API over stdlib REST
+  (default `gemini-3.5-flash`, configurable), chunked upload via the Files
+  API. Honest *local* minutes counter + a billing-console link. Loud
+  privacy opt-in (uploads audio to Google → breaks the offline guarantee).
+  New keys `cloud_stt_api_key` / `_model` / `_minutes_used` /
+  `_free_minutes_cap` / `_chunk_seconds`.
+- **Opt-in GitHub update check** (notify-only, never auto-installs) in
+  `core/updates.py` + a Help-menu "Check for updates" + a throttled quiet
+  launch check; silent on private-repo/offline/up-to-date. Documented that
+  the Standard installer already upgrades **in place** (stable Inno
+  `AppId`). New keys `update_check_enabled` / `last_update_check`.
+- **Docs-only** — `docs/evaluations/GEMMA4_EVALUATION_2026-06.md`:
+  recommends SKIP of Gemma 4 12B for transcription (30 s cap,
+  torch/BF16/~24 GB VRAM, no word timestamps, no WER win), with a
+  future-adjunct path + hardware-gate sketch.
+
+**Build/spec bookkeeping done:** the PyInstaller hidden-import lists in
+both `whisper_project_onefile.spec` and `whisper_project_onedir.spec` were
+updated for the new modules (`core.server.*`, `core.monitors`,
+`core.backends.cloud_stt`, `core.updates`) + **screeninfo**.
+
+**OPEN caveats for the next session (re-check; don't assume done):**
+- **R6 Gemini path is UNTESTED end-to-end** — no API key in this
+  environment. The owner must live-test with their own key: paste key →
+  "Test key" → run one file → confirm a transcript lands and the local
+  minutes counter advances.
+- **screeninfo is a NEW optional dependency** — multi-monitor tiling
+  degrades to single-monitor without it; it's pruned/absent in some build
+  trees, so confirm the Monitors chooser behaves when it's missing.
+
+**PRE-EXISTING test issues (NOT introduced this session — present at the
+baseline commit `53fc8b2`, so not a regression):**
+- `tests/core/test_resume_from_cancellation.py` is **order-dependent** —
+  it fails in isolation even at baseline `53fc8b2`; passes under the full
+  suite ordering.
+- `tests/core/test_v08_real_file_e2e.py` is a **real-model E2E** that
+  ERRORs under full-suite session ordering (needs the real model + a
+  hot worker; not hermetic).
+- A Tk-root **"Can't find a usable tk.tcl"** flake on the local Python
+  3.14 box (environment quirk, not our code).
+- These are why the deferred test-gap items (§0.1 below) still need a
+  heavier harness; do NOT treat their flakes as new breakage.
+
+**A release would still need the version bump in the 4 usual places**
+(`core/__init__.py` `__version__`, `pyproject.toml`, `installer.iss`,
+`installer_embed.iss` `#define MyAppVersion`) before building — see §3.
+
+---
+
+## 0.1. Earlier session — senior-architect deep audit (2026-05-29)
 
 A read-only audit fanned out 8 parallel shards (concurrency, resource
 leaks, security, error-handling, data-integrity, cross-platform,
 test-gaps, maintainability) → 53 raw findings → 20 verified-real + 32
 P2 + 1 rejected. Fixed in 8 themed commit batches, each gated on
 `pyright app/ core/` 0/0/0 + the hermetic suite green, pushed to
-`master`. Full list in `docs/CHANGELOG.md` `[Unreleased]`. Method +
-raw findings: `.claude/audit_findings.md` (workspace, untracked).
+`master`. Full list in `docs/CHANGELOG.md` `[1.3.7]` (this batch SHIPPED as
+v1.3.7 on 2026-05-29). Method + raw findings: `.claude/audit_findings.md`
+(workspace, untracked).
 
 **Shipped behaviour:** no change to Windows spawn flags; the fixes are
-teardown/robustness/correctness. **Not yet released** — these are
-batched for a future version bump per the slow-release policy.
+teardown/robustness/correctness. **Released as v1.3.7** (this was the batch
+deferred at the time; it has since shipped).
 
 **Deferred, with reason (re-check; don't assume done):**
 - **Test-gaps not yet covered** (cover already-shipped code, lower risk,
@@ -55,14 +155,14 @@ modal-close changes (batches A/C) didn't disturb the cooperative path.
 
 | Item | Value |
 |---|---|
-| Branch | `master` — **the single mainline**. Carries **v1.3.7** (deep-audit hardening, see §0), all committed + pushed. Every commit is attributed to `translation-robot` (GitHub no-reply), no `Co-Authored-By` trailers; local `git config` identity matches. |
-| Version | pyproject = 1.3.7; `core.__version__` = 1.3.7; both `.iss` = 1.3.7 |
-| Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
+| Branch | `master` — **the single mainline**. Published tip is **v1.3.7** (deep-audit hardening, see §0.1). On top of that sit the **9 LOCAL-ONLY changes from the 2026-06-06 session (see §0) — committed, NOT pushed, NOT released.** Owner will authorise the push/release later. |
+| Version | **unchanged — still 1.3.7** in all 4 places (pyproject, `core.__version__`, both `.iss`). This session deliberately did NOT bump — the 9 changes are unreleased; bump only when the owner authorises the release. |
+| Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0.1); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
 | GitHub releases now | `v1.3.7` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** v1.3.6 release object was pruned on the v1.3.7 release; its git tag + the local `dist_installer/WhisperProject-v1.3.6-*` artefacts remain as backup. |
 | Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
-| Working tree | clean (only `.claude/` untracked) |
-| Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
+| Working tree | local commits ahead of `origin/master` (the §0 nine-change batch + the docs/test-cleanup); untracked tooling (`.claude/`, `PROJECT_INDEX.md`, `AGENTS.md`, `.cursorrules`, `tools/index_refresh.py`) left as-is |
+| Gate | `pyright app core` → **0/0/0** (re-verified this session). Full `run_tests.bat` hermetic suite NOT re-run this session — see the PRE-EXISTING test flakes in §0 before reading any red as a regression. |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
@@ -184,7 +284,7 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
   Residual (NOT addressed): `ensure_worker_ready(headless=True)` could
   still deadlock if ever called on the Tk main thread — low risk (the
   headless path is only invoked off the main thread today).
-- **Resource leaks — RESOLVED 2026-05-29 (deep audit, see §0).** Worker/
+- **Resource leaks — RESOLVED 2026-05-29 (deep audit, see §0.1).** Worker/
   yt-dlp now tree-killed via `core/_proc.py` (no orphaned ffmpeg/demucs);
   `partials/` swept at startup + cleared on declined crash-resume;
   HistoryDB closed in on_exit; demucs cache bounded; recorder streams to
@@ -194,7 +294,7 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
   shipped is the ERROR SURFACING. Once a user retries Dailymotion on
   v1.3.2 and the queue shows the actual error, fix that specific cause
   (don't change the selector blind — risks the proven YouTube path).
-- **burn_subs filter escaping — RESOLVED 2026-05-29 (deep audit, see §0).**
+- **burn_subs filter escaping — RESOLVED 2026-05-29 (deep audit, see §0.1).**
   Subtitles now burn from a temp copy with a graph-safe ASCII name, so
   `' [ ] , ;` in a (downloaded) title can't break/inject the ffmpeg filter
   graph; the colon-escape is gated to Windows. New `tests/core/test_burn_subs.py`.
