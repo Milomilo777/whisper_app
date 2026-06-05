@@ -115,7 +115,7 @@ DEFAULT_CONFIG = {
     # ``models--Vendor--name`` subdirectories. Empty by default so
     # ``app.dialogs.hub_setup`` fires its first-run picker. The
     # picker pre-fills ``core.hub.default_hub_folder()`` =
-    # ``%LOCALAPPDATA%\WhisperProject\Cache\hub`` (a per-user,
+    # ``%LOCALAPPDATA%\WhisperProject\Cache\models`` (a per-user,
     # always-writable location — NOT under the Program Files install
     # dir, which is not writable for a standard user).
     # ``model_path`` (above) remains as a per-model override for users
@@ -241,7 +241,7 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     # worker resolved a different path than the dialog's default, the
     # next launch (with hub_folder now saved) would resolve a new
     # model_path and trigger a full re-download. Aligning the fallback
-    # with default_hub_folder() — now %LOCALAPPDATA%\...\Cache\hub —
+    # with default_hub_folder() — now %LOCALAPPDATA%\...\Cache\models —
     # means "accept default" is a no-op for the model location.
     if not model_path or not _drive_is_mounted(model_path):
         model_name = (config.get("model") or {}).get("name") or "whisper-model"

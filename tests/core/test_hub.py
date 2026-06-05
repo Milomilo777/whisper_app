@@ -36,7 +36,7 @@ def test_resolve_app_dir_frozen_returns_exe_dir(monkeypatch, tmp_path):
 
 def test_default_hub_folder_is_under_user_cache_not_app_dir(monkeypatch, tmp_path):
     """The default hub must live under user_cache_dir() —
-    %LOCALAPPDATA%\\WhisperProject\\Cache\\hub on Windows — NEVER under
+    %LOCALAPPDATA%\\WhisperProject\\Cache\\models on Windows — NEVER under
     the install / app dir. A Program Files default was not writable for
     a standard (non-admin) user, so the first-run model download failed
     with "Access is denied". Regression for R5.
@@ -55,9 +55,19 @@ def test_default_hub_folder_is_under_user_cache_not_app_dir(monkeypatch, tmp_pat
     assert not hub.is_path_inside(result, app_dir)
 
 
-def test_default_hub_subfolder_name_is_hub():
-    """The user explicitly asked for the sub-folder to be named 'hub'."""
-    assert hub.HUB_SUBFOLDER_NAME == "hub"
+def test_default_hub_matches_model_cache_fallback():
+    """The default hub MUST equal model_folder_for's empty-hub fallback
+    (``user_cache_dir() / "models"``) so an existing model already in
+    %LOCALAPPDATA%\\WhisperProject\\Cache\\models is reused, not silently
+    re-downloaded (~3 GB) into a divergent folder. Regression for the R5
+    follow-up (the original fix used a separate 'hub' sub-folder).
+    """
+    assert hub.HUB_SUBFOLDER_NAME == "models"
+    # The bare fallback and the configured default must point to the same
+    # per-model directory.
+    assert hub.model_folder_for(None, "x") == hub.model_folder_for(
+        str(hub.default_hub_folder()), "x"
+    )
 
 
 # ---------- is_hub_configured -------------------------------------------------

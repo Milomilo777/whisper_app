@@ -9,8 +9,8 @@ The file is read once at startup and written when the user changes a persisted s
 | Purpose | Path (Windows) | Helper |
 |---|---|---|
 | `config.json` | `%LOCALAPPDATA%\WhisperProject\config.json` | `core.config.config_path()` |
-| Model hub (default `hub_folder`) | `%LOCALAPPDATA%\WhisperProject\Cache\hub\` | `core.hub.default_hub_folder()` |
-| Cached models (default `model_path`) | `%LOCALAPPDATA%\WhisperProject\Cache\hub\<model-folder>\` | `core.config.user_cache_dir()` |
+| Model hub (default `hub_folder`) | `%LOCALAPPDATA%\WhisperProject\Cache\models\` | `core.hub.default_hub_folder()` |
+| Cached models (default `model_path`) | `%LOCALAPPDATA%\WhisperProject\Cache\models\<model-folder>\` | `core.config.user_cache_dir()` |
 | Rotating logs | `%LOCALAPPDATA%\WhisperProject\Logs\app.log` (5 MB × 3) | `core.config.user_log_dir()` |
 
 `platformdirs` chooses the equivalent paths on macOS and Linux. The "Help → Open log folder" menu item opens the log directory.
@@ -23,8 +23,8 @@ The file is read once at startup and written when the user changes a persisted s
 | `model.name` | string | `"faster-whisper-large-v3"` | Display name in logs |
 | `model.url` | string | `https://smch.ir/models/...zip` | ZIP archive of the model |
 | `model.md5` | string | `<url>.md5` | URL of the per-file MD5 manifest |
-| `hub_folder` | string | `""` (first-run dialog) | Parent folder that holds the `models--Vendor--name` model directories. Empty triggers the first-run picker, which pre-fills `%LOCALAPPDATA%\WhisperProject\Cache\hub` — a per-user, always-writable location (never the Program Files install dir). |
-| `model_path` | string | (derived from `hub_folder`) | Absolute path where the model is extracted. When empty it is derived at startup from `hub_folder + model.name`; with no hub set it falls back to `%LOCALAPPDATA%\WhisperProject\Cache\hub\<name>`. A non-empty value is a per-model override. |
+| `hub_folder` | string | `""` (first-run dialog) | Parent folder that holds the `models--Vendor--name` model directories. Empty triggers the first-run picker, which pre-fills `%LOCALAPPDATA%\WhisperProject\Cache\models` — a per-user, always-writable location (never the Program Files install dir). |
+| `model_path` | string | (derived from `hub_folder`) | Absolute path where the model is extracted. When empty it is derived at startup from `hub_folder + model.name`; with no hub set it falls back to `%LOCALAPPDATA%\WhisperProject\Cache\models\<name>`. A non-empty value is a per-model override. |
 | `device` | string | `"auto"` | `"auto"` / `"cuda"` / `"cpu"`. With `"auto"`, the autodetect only selects CUDA when ctranslate2 reports a GPU **and** the cuDNN/cuBLAS runtime libraries actually load; otherwise it falls back to CPU. At model-load time a CUDA load that still fails self-heals to CPU `int8` instead of crashing the worker — the active tab shows a GPU/CPU badge and (once) a "running on CPU (slower)" warning. |
 | `compute_type` | string | `"int8"` | `faster-whisper` compute type. Common values: `int8`, `int8_float16`, `float16`, `float32`. `int8` is the smallest/fastest on CPU; `float16` is preferred on GPU. |
 | `cpu_warning_shown` | bool | `false` | Set to `true` after the one-time "running on CPU (slower)" warning has been shown, so it never repeats. The warning only appears when a GPU was detected-but-unusable or a CUDA→CPU downgrade happened — never on a genuine CPU-only machine. |
@@ -87,7 +87,7 @@ When a new field is introduced, `load_config` will populate it with the default 
     "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
     "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5"
   },
-  "hub_folder": "C:\\Users\\Owner\\AppData\\Local\\WhisperProject\\Cache\\hub",
+  "hub_folder": "C:\\Users\\Owner\\AppData\\Local\\WhisperProject\\Cache\\models",
   "model_path": "",
   "device": "auto",
   "compute_type": "int8",

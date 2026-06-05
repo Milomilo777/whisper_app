@@ -14,7 +14,7 @@ UX:
   |  cache folder that is always writable.                     |
   |                                                            |
   |  Hub folder:                                               |
-  |  [ %LOCALAPPDATA%\\WhisperProject\\Cache\\hub    ] [Browse…]|
+  |  [ %LOCALAPPDATA%\\WhisperProject\\Cache\\models ] [Browse…]|
   |                                                            |
   |  ☐ Use a different folder I'll pick                        |
   |                                                            |

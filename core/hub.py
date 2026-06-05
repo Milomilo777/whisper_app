@@ -26,7 +26,7 @@ Resolution order used by the rest of the codebase (in ``model_manager``
 
 The first-run UI dialog (``app/dialogs/hub_setup``) shows
 :func:`default_hub_folder` as its initial value, which is a writable
-per-user cache directory (``%LOCALAPPDATA%\\WhisperProject\\Cache\\hub``
+per-user cache directory (``%LOCALAPPDATA%\\WhisperProject\\Cache\\models``
 on Windows). The user can pick a different folder (e.g. a big external
 drive) and we persist that choice to ``config["hub_folder"]``.
 
@@ -51,7 +51,15 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-HUB_SUBFOLDER_NAME = "hub"
+# The default hub is the per-user model cache root. It MUST equal the
+# empty-hub fallback used by ``model_folder_for`` (``user_cache_dir() /
+# "models"``) so that a profile with no explicit ``hub_folder`` resolves
+# the SAME folder whether the path comes from ``default_hub_folder()``
+# (e.g. the first-run dialog / ``_apply_runtime_fallbacks``) or from the
+# bare fallback. If these diverged, an existing model already sitting in
+# ``Cache/models`` would be ignored and silently re-downloaded (~3 GB)
+# into a different folder. Keep the two in lock-step.
+HUB_SUBFOLDER_NAME = "models"
 
 
 def resolve_app_dir() -> Path:
@@ -86,11 +94,14 @@ def resolve_app_dir() -> Path:
 def default_hub_folder() -> Path:
     """The pre-filled value the first-run dialog shows.
 
-    Returns ``user_cache_dir() / "hub"`` —
-    ``%LOCALAPPDATA%\\WhisperProject\\Cache\\hub`` on Windows. This is
+    Returns ``user_cache_dir() / "models"`` —
+    ``%LOCALAPPDATA%\\WhisperProject\\Cache\\models`` on Windows. This is
     always writable by the current user, so the first-run model
     download cannot fail with "Access is denied" the way an
-    ``<app_dir>/hub`` default did under a Program Files install.
+    ``<app_dir>/hub`` default did under a Program Files install. It is
+    also the SAME folder ``model_folder_for`` falls back to when no hub
+    is configured, so an existing ``Cache/models`` model is reused rather
+    than re-downloaded.
 
     We reuse ``core.config.user_cache_dir`` (the single platformdirs
     wrapper, ``appname=WhisperProject`` / ``appauthor=False``) so the

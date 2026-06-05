@@ -54,7 +54,7 @@ Everything after that is fully offline.
 
 On the first launch, the app asks where to store the Whisper model
 files via a folder-picker dialog. The default suggestion is a private
-per-user cache folder, `%LOCALAPPDATA%\WhisperProject\Cache\hub`, which
+per-user cache folder, `%LOCALAPPDATA%\WhisperProject\Cache\models`, which
 is always writable (never the Program Files install dir); the user can
 pick any location (an external drive, a network share, etc.). The
 choice is persisted to `%LOCALAPPDATA%\WhisperProject\config.json`
