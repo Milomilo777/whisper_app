@@ -1584,10 +1584,45 @@ def _transcribe_via_alt_backend(
     )
     # Success — drop the partial.
     _checkpoint.delete_checkpoint(task.file_path)
+    # Cloud backend only: accumulate the transcribed minutes locally so
+    # the Advanced dialog can show usage. The dollar free-credit balance
+    # is NOT readable from an API key, so this local minute counter is
+    # the only usage signal we can offer. Never touches the
+    # faster_whisper path's counters.
+    if backend_name == "cloud_stt":
+        _accumulate_cloud_minutes(duration, log_cb)
     if progress_cb:
         progress_cb(100)
     elapsed = time.time() - start
     log(f"Done in {elapsed:.2f}s", log_cb)
+
+
+def _accumulate_cloud_minutes(
+    duration_seconds: float, log_cb: Callable[[str], None] | None
+) -> None:
+    """Add ``duration_seconds`` to ``cloud_stt_minutes_used`` and persist.
+
+    Re-reads config from disk before writing so a concurrent worker /
+    UI save isn't clobbered, then updates the in-memory module config too
+    so a follow-up read in this process sees the new total. Best-effort:
+    a persistence error is logged, never raised (it must not fail a
+    successful transcription).
+    """
+    if duration_seconds <= 0:
+        return
+    minutes = duration_seconds / 60.0
+    try:
+        from .config import load_config as _load, save_config as _save
+        disk_cfg = _load()
+        prior = float(disk_cfg.get("cloud_stt_minutes_used") or 0.0)
+        new_total = round(prior + minutes, 4)
+        disk_cfg["cloud_stt_minutes_used"] = new_total
+        _save(disk_cfg)
+        config["cloud_stt_minutes_used"] = new_total
+        log(f"Cloud minutes used this file: {minutes:.2f} "
+            f"(total {new_total:.1f}).", log_cb)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not persist cloud_stt_minutes_used: %s", e)
 
 
 def _slice_audio_from(
