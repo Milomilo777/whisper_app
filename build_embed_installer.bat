@@ -84,6 +84,14 @@ xcopy /E /I /Y "%ROOT%core" "%BUILD%\core" >nul
 xcopy /E /I /Y "%ROOT%bin" "%BUILD%\bin" >nul
 copy "%ROOT%gui.py" "%BUILD%\" >nul
 
+REM The xcopy /E above already brings core\server\ (incl. static\) along.
+REM Verify the optional LAN/web server's static page shipped so a broken
+REM "gui.py serve" mode fails the build loudly instead of silently.
+if not exist "%BUILD%\core\server\static\index.html" (
+    echo [embed] ERROR: core\server\static\index.html missing from embed tree
+    exit /b 1
+)
+
 echo [embed] writing the portable launcher
 > "%BUILD%\Run Whisper Project.bat" echo @echo off
 >> "%BUILD%\Run Whisper Project.bat" echo cd /d "%%~dp0"

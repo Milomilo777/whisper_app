@@ -71,6 +71,10 @@ a = Analysis(
     datas=[
         ('bin', 'bin'),
         ('assets', 'assets'),
+        # Static page served by the optional LAN/web HTTP job server
+        # (gui.py serve -> core.server). Ship it so the frozen build can
+        # serve the browser UI.
+        ('core/server/static', 'core/server/static'),
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
@@ -139,6 +143,10 @@ a = Analysis(
         'core.worker',
         'core.integrations.otranscribe',
         'core.integrations.smtv',
+        # Optional LAN/web HTTP job server (stdlib only).
+        'core.server',
+        'core.server.httpd',
+        'core.server.jobs',
         'core.writers',
         'core.writers.base',
         'core.writers.srt',
