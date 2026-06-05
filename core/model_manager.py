@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import re
 import shutil
@@ -15,6 +16,41 @@ import requests
 
 class DownloadCancelled(RuntimeError):
     pass
+
+
+class ModelDestinationNotWritable(RuntimeError):
+    """The model destination directory cannot be created or written.
+
+    Raised when creating / extracting into the model folder fails with
+    a permission error (Windows ``WinError 5`` "Access is denied" /
+    POSIX ``EACCES``). The most common cause is an ``<app_dir>/hub``
+    location under Program Files for a standard (non-admin) user. The
+    UI catches this to offer a writable folder instead of showing the
+    raw OS error string.
+
+    ``directory`` carries the offending path for the UI message.
+    """
+
+    def __init__(self, directory: str | Path, message: str | None = None) -> None:
+        self.directory = str(directory)
+        super().__init__(
+            message
+            or f"Cannot write to the model folder: {self.directory}"
+        )
+
+
+# OSError.errno values that mean "you don't have permission here".
+# EACCES is the POSIX form; on Windows, "Access is denied" (WinError 5)
+# surfaces as a PermissionError whose .errno is EACCES, and rarer cases
+# raise EPERM. We treat both as the not-writable signal.
+_PERMISSION_ERRNOS = {errno.EACCES, errno.EPERM}
+
+
+def _is_permission_error(exc: OSError) -> bool:
+    """True when ``exc`` indicates a lack of write permission."""
+    if isinstance(exc, PermissionError):
+        return True
+    return exc.errno in _PERMISSION_ERRNOS
 
 
 # Bound the download/verify retry loop. A permanently-bad mirror or a
@@ -191,14 +227,25 @@ def _download_zip(
         content_length=int(r.headers.get("content-length") or 0)
         total=existing + content_length if content_length else 0
 
-        with open(zip_path,mode) as f:
+        try:
+            zip_file=open(zip_path,mode)
+        except OSError as e:
+            if _is_permission_error(e):
+                raise ModelDestinationNotWritable(zip_path.parent) from e
+            raise
+        with zip_file as f:
             for chunk in r.iter_content(chunk_size=1024*1024):
                 if cancel_event and cancel_event.is_set():
                     raise DownloadCancelled("Model download cancelled")
                 if not chunk:
                     continue
 
-                f.write(chunk)
+                try:
+                    f.write(chunk)
+                except OSError as e:
+                    if _is_permission_error(e):
+                        raise ModelDestinationNotWritable(zip_path.parent) from e
+                    raise
                 downloaded += len(chunk)
                 elapsed=max(0.001,time.time()-started)
                 speed=(downloaded-existing)/elapsed
@@ -291,7 +338,12 @@ def ensure_model(
     md5_url=model["md5"]
 
     cache_dir=model_path.parent
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        if _is_permission_error(e):
+            raise ModelDestinationNotWritable(cache_dir) from e
+        raise
 
     zip_path=cache_dir / _zip_name_from_url(zip_url)
 
@@ -331,7 +383,12 @@ def ensure_model(
                 _target = (_cache_resolved / _member).resolve()
                 if _target != _cache_resolved and _cache_resolved not in _target.parents:
                     raise RuntimeError(f"Unsafe path in model archive: {_member!r}")
-            z.extractall(cache_dir)
+            try:
+                z.extractall(cache_dir)
+            except OSError as e:
+                if _is_permission_error(e):
+                    raise ModelDestinationNotWritable(cache_dir) from e
+                raise
 
         if not model_path.exists():
             raise RuntimeError(f"Extracted model folder missing: {model_path}")
