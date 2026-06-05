@@ -142,6 +142,7 @@ a = Analysis(
         'core.hub',
         'core.logging_setup',
         'core.model_manager',
+        'core.monitors',
         'core.paths',
         'core.task',
         'core.transcriber',
@@ -163,6 +164,11 @@ a = Analysis(
         'docx',
         'reportlab',
         'sherpa_onnx',
+        # Optional multi-monitor detection for Video Tiling. Lazy-imported in
+        # core.monitors with a ctypes Win32 fallback, so PyInstaller can't see
+        # it via static analysis — list it so the frozen build keeps the
+        # screeninfo path. Its absence only disables that one detection path.
+        'screeninfo',
     ],
     hookspath=[],
     runtime_hooks=[],
