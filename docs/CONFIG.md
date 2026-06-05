@@ -9,7 +9,8 @@ The file is read once at startup and written when the user changes a persisted s
 | Purpose | Path (Windows) | Helper |
 |---|---|---|
 | `config.json` | `%LOCALAPPDATA%\WhisperProject\config.json` | `core.config.config_path()` |
-| Cached models (default `model_path`) | `%LOCALAPPDATA%\WhisperProject\Cache\models\<model-folder>\` | `core.config.user_cache_dir()` |
+| Model hub (default `hub_folder`) | `%LOCALAPPDATA%\WhisperProject\Cache\hub\` | `core.hub.default_hub_folder()` |
+| Cached models (default `model_path`) | `%LOCALAPPDATA%\WhisperProject\Cache\hub\<model-folder>\` | `core.config.user_cache_dir()` |
 | Rotating logs | `%LOCALAPPDATA%\WhisperProject\Logs\app.log` (5 MB × 3) | `core.config.user_log_dir()` |
 
 `platformdirs` chooses the equivalent paths on macOS and Linux. The "Help → Open log folder" menu item opens the log directory.
@@ -22,7 +23,8 @@ The file is read once at startup and written when the user changes a persisted s
 | `model.name` | string | `"faster-whisper-large-v3"` | Display name in logs |
 | `model.url` | string | `https://smch.ir/models/...zip` | ZIP archive of the model |
 | `model.md5` | string | `<url>.md5` | URL of the per-file MD5 manifest |
-| `model_path` | string | (machine-specific) | Absolute path where the model is extracted. Default will become `<platformdirs.user_cache_dir>/WhisperProject/models/<name>` in Phase 1.2. |
+| `hub_folder` | string | `""` (first-run dialog) | Parent folder that holds the `models--Vendor--name` model directories. Empty triggers the first-run picker, which pre-fills `%LOCALAPPDATA%\WhisperProject\Cache\hub` — a per-user, always-writable location (never the Program Files install dir). |
+| `model_path` | string | (derived from `hub_folder`) | Absolute path where the model is extracted. When empty it is derived at startup from `hub_folder + model.name`; with no hub set it falls back to `%LOCALAPPDATA%\WhisperProject\Cache\hub\<name>`. A non-empty value is a per-model override. |
 | `device` | string | `"auto"` | `"auto"` / `"cuda"` / `"cpu"` |
 | `compute_type` | string | `"int8"` | `faster-whisper` compute type. Common values: `int8`, `int8_float16`, `float16`, `float32`. `int8` is the smallest/fastest on CPU; `float16` is preferred on GPU. |
 | `parallel_workers` | int | `2` | Maximum simultaneous transcription worker subprocesses. Each loads the model and uses ~3 GB RAM (or VRAM on GPU). |
@@ -84,7 +86,8 @@ When a new field is introduced, `load_config` will populate it with the default 
     "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
     "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5"
   },
-  "model_path": "C:\\Users\\Owner\\AppData\\Local\\WhisperProject\\models\\faster-whisper-large-v3",
+  "hub_folder": "C:\\Users\\Owner\\AppData\\Local\\WhisperProject\\Cache\\hub",
+  "model_path": "",
   "device": "auto",
   "compute_type": "int8",
   "parallel_workers": 2,

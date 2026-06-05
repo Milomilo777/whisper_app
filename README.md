@@ -1,5 +1,7 @@
 # Whisper Project
 
+> 📍 **Start at [`PROJECT_INDEX.md`](PROJECT_INDEX.md)** — a generated, tool-neutral repo map for fast, low-token onboarding by any AI agent or human.
+
 [![CI](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml/badge.svg?branch=chore%2Fcleanup-hardening)](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Milomilo777/whisper_project_direct_download_v2?label=release)](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)
 
@@ -51,11 +53,12 @@ Everything after that is fully offline.
 ## First-run setup — the Model Hub Folder
 
 On the first launch, the app asks where to store the Whisper model
-files via a folder-picker dialog. The default suggestion is a `hub`
-sub-folder next to the application; the user can pick any location
-(an external drive, a network share, etc.). The choice is persisted
-to `%LOCALAPPDATA%\WhisperProject\config.json` under the
-`hub_folder` key and the dialog never asks again.
+files via a folder-picker dialog. The default suggestion is a private
+per-user cache folder, `%LOCALAPPDATA%\WhisperProject\Cache\hub`, which
+is always writable (never the Program Files install dir); the user can
+pick any location (an external drive, a network share, etc.). The
+choice is persisted to `%LOCALAPPDATA%\WhisperProject\config.json`
+under the `hub_folder` key and the dialog never asks again.
 
 If you ever need to reset, run with `--safe-mode`:
 
