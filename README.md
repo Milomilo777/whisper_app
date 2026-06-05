@@ -129,6 +129,20 @@ Tk App  ── JSON stdio ──►  Worker subprocess (faster-whisper)
 Visuals: [docs/architecture.svg](docs/architecture.svg) (full
 diagram) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (prose).
 
+### Optional: share it on your local network
+
+Instead of installing the app on every machine, you can run a small
+stdlib-only HTTP server and let people on a trusted network transcribe
+through a browser:
+
+```cmd
+python gui.py serve          REM loopback only (no firewall prompt)
+python gui.py serve --lan    REM share on the LAN (allow the firewall prompt)
+```
+
+See [docs/SERVER.md](docs/SERVER.md) for routes, the upload cap, the
+optional `--token`, and the trusted-network security caveats.
+
 ---
 
 ## Documentation
@@ -136,6 +150,7 @@ diagram) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (prose).
 | Doc | Audience |
 |---|---|
 | [INSTALL.md](docs/INSTALL.md) | End-user install + troubleshooting |
+| [SERVER.md](docs/SERVER.md) | Optional local-network / web server mode (`gui.py serve`) |
 | [BUILD.md](docs/BUILD.md) | Build the three deliverables yourself |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Process model + threading + protocols |
 | [CONFIG.md](docs/CONFIG.md) | Every config key with defaults |
