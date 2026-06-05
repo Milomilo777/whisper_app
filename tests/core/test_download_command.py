@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import types
 
 import pytest
 
+from app.domain.tasks import VideoDownloadTask
 from app.services.download_service import (
     _cookies_from_browser_args,
     _download_sections_arg,
@@ -25,10 +25,14 @@ def _task(folder: str = "/tmp/out", url: str = "https://www.youtube.com/watch?v=
           audio_kind: str = "best_audio", audio_id: str = "140",
           video_kind: str = "best_video", video_id: str = "137",
           section_start: float | None = None,
-          section_end: float | None = None):
-    return types.SimpleNamespace(
-        folder=folder,
+          section_end: float | None = None) -> VideoDownloadTask:
+    # Build a REAL VideoDownloadTask (not a SimpleNamespace) so the call into
+    # build_download_command / build_subtitle_command — whose ``task`` param is
+    # typed VideoDownloadTask — is type-clean for pyright.
+    return VideoDownloadTask(
         url=url,
+        folder=folder,
+        format_label="x",
         format_info={
             "mode": mode,
             "output": output,
