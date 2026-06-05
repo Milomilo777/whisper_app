@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -88,6 +89,17 @@ MODEL: Any = None
 PIPELINE: Any = None  # BatchedInferencePipeline wrapper when device == "cuda"
 MODEL_READY = False
 MODEL_ERROR: str | None = None
+
+# R3: effective-device tracking. ``device`` / ``compute_type`` (assigned just
+# below) are what we *requested*. After a load we read back what CTranslate2
+# actually ran on and stash it here so the worker can report it to the UI.
+# _DEVICE_DOWNGRADED flips True when a requested CUDA load failed and we
+# self-healed onto CPU int8 (instead of the old hard crash + bogus
+# "re-download the model" prompt).
+_DEVICE_DOWNGRADED = False
+_REQUESTED_DEVICE = ""
+_EFFECTIVE_DEVICE = ""
+_EFFECTIVE_COMPUTE_TYPE = ""
 
 # Pluggable backend instance for non-default engines (e.g. whisper.cpp).
 # The default faster_whisper path keeps using MODEL/PIPELINE globals so
@@ -168,6 +180,122 @@ def _wrap_for_batched(model: Any) -> Any:
         return None
 
 
+@dataclass(frozen=True)
+class EffectiveDevice:
+    """What the model actually loaded onto, vs. what was requested.
+
+    ``downgraded`` is True when a requested ``cuda`` load failed and we
+    self-healed onto CPU int8. ``device`` / ``compute_type`` are read back
+    from the underlying CTranslate2 object after a successful load (falling
+    back to the requested values when those attributes aren't exposed).
+    """
+    device: str
+    compute_type: str
+    requested_device: str
+    downgraded: bool
+
+
+def get_effective_device() -> EffectiveDevice:
+    """Return the device the loaded model is actually running on.
+
+    Safe to call before any load — reports the requested values with
+    ``downgraded=False`` until a load populates the effective state. When a
+    non-default backend is active (``_ALT_BACKEND``), prefer its self-reported
+    device info if it exposes the R3 accessors; otherwise fall back to its
+    plain ``device`` (other backends don't track a downgrade).
+    """
+    if _ALT_BACKEND is not None:
+        bdev = str(getattr(_ALT_BACKEND, "device", "") or "") or device
+        bcompute = str(getattr(_ALT_BACKEND, "compute_type", "") or "") or compute_type
+        breq = str(getattr(_ALT_BACKEND, "requested_device", "") or "") or bdev
+        bdown = bool(getattr(_ALT_BACKEND, "downgraded", False))
+        return EffectiveDevice(
+            device=bdev,
+            compute_type=bcompute,
+            requested_device=breq,
+            downgraded=bdown,
+        )
+    return EffectiveDevice(
+        device=_EFFECTIVE_DEVICE or device,
+        compute_type=_EFFECTIVE_COMPUTE_TYPE or compute_type,
+        requested_device=_REQUESTED_DEVICE or device,
+        downgraded=_DEVICE_DOWNGRADED,
+    )
+
+
+# CPU self-heal target — what we retry with when a CUDA load fails. int8 is the
+# universal CPU fallback used everywhere else in the hardware tiering.
+_CPU_FALLBACK = ("cpu", "int8")
+
+
+def _capture_effective_device(model: Any, req_device: str, req_compute: str) -> None:
+    """Record what the loaded model actually runs on (getattr-guarded).
+
+    The underlying ``model.model`` is a dynamically-typed CTranslate2 object;
+    its ``device`` / ``compute_type`` attributes are read defensively so a
+    wheel that doesn't expose them can't break the load. Keeps the module
+    ``device`` / ``compute_type`` globals in sync with reality so
+    ``_wrap_for_batched`` (which reads the global ``device``) and the worker's
+    UI report agree.
+    """
+    global device, compute_type, _EFFECTIVE_DEVICE, _EFFECTIVE_COMPUTE_TYPE
+    ct2 = getattr(model, "model", None)
+    eff_device = str(getattr(ct2, "device", "") or "") or req_device
+    eff_compute = str(getattr(ct2, "compute_type", "") or "") or req_compute
+    _EFFECTIVE_DEVICE = eff_device
+    _EFFECTIVE_COMPUTE_TYPE = eff_compute
+    # Keep the module globals authoritative so the batched-pipeline wrap and
+    # any later detect_device() readers see the device we truly loaded on.
+    device = eff_device
+    compute_type = eff_compute
+
+
+def _load_whisper_model_self_healing(
+    model_path: str,
+    req_device: str,
+    req_compute: str,
+    status_cb: Callable[[str], None] | None = None,
+) -> Any:
+    """Construct a WhisperModel, self-healing a failed CUDA load onto CPU.
+
+    Returns the loaded model. On a CUDA construction failure (the classic
+    missing-cuDNN/cuBLAS RuntimeError) this logs the real reason, flips the
+    module-level downgrade flag, and RETRIES with ("cpu", "int8") instead of
+    propagating — turning a hard crash + bogus re-download prompt into a
+    visible, graceful downgrade. A CPU load that fails still raises (nothing to
+    fall back to).
+    """
+    global device, compute_type, _DEVICE_DOWNGRADED, _REQUESTED_DEVICE
+    _REQUESTED_DEVICE = req_device
+    _DEVICE_DOWNGRADED = False
+    try:
+        model = WhisperModel(model_path, device=req_device, compute_type=req_compute)
+        _capture_effective_device(model, req_device, req_compute)
+        return model
+    except Exception as e:
+        if req_device != "cuda":
+            raise
+        cpu_device, cpu_compute = _CPU_FALLBACK
+        logger.warning(
+            "CUDA model load failed (%s); downgrading to %s/%s. This usually "
+            "means the cuDNN/cuBLAS runtime libraries are missing or broken, "
+            "NOT that the model is corrupt.",
+            e, cpu_device, cpu_compute,
+        )
+        if status_cb:
+            status_cb(
+                f"GPU unavailable ({e}); falling back to CPU (slower)."
+            )
+        model = WhisperModel(model_path, device=cpu_device, compute_type=cpu_compute)
+        # Reflect the downgrade in the module globals so _wrap_for_batched
+        # does NOT try to wrap a CPU model in a CUDA batched pipeline.
+        device = cpu_device
+        compute_type = cpu_compute
+        _DEVICE_DOWNGRADED = True
+        _capture_effective_device(model, cpu_device, cpu_compute)
+        return model
+
+
 def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
     """Load the model for the configured backend.
 
@@ -230,7 +358,9 @@ def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
             "device=%s compute_type=%s",
             model_path, device, compute_type,
         )
-        MODEL = WhisperModel(str(model_path), device=device, compute_type=compute_type)
+        MODEL = _load_whisper_model_self_healing(
+            str(model_path), device, compute_type, status_cb
+        )
         PIPELINE = _wrap_for_batched(MODEL)
         MODEL_READY = True
         if status_cb:
@@ -260,7 +390,9 @@ def load_model(
         if progress_cb:
             progress_cb({"phase": "load", "status": "Loading Whisper model...",
                          "percent": 100, "detail": "Preparing model for transcription"})
-        MODEL = WhisperModel(model_path, device=device, compute_type=compute_type)
+        MODEL = _load_whisper_model_self_healing(
+            model_path, device, compute_type, status_cb
+        )
         PIPELINE = _wrap_for_batched(MODEL)
         MODEL_READY = True
         if status_cb:
