@@ -34,9 +34,25 @@ def test_resolve_app_dir_frozen_returns_exe_dir(monkeypatch, tmp_path):
 # ---------- default_hub_folder -------------------------------------------------
 
 
-def test_default_hub_folder_is_app_dir_slash_hub(monkeypatch, tmp_path):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
-    assert hub.default_hub_folder() == tmp_path / hub.HUB_SUBFOLDER_NAME
+def test_default_hub_folder_is_under_user_cache_not_app_dir(monkeypatch, tmp_path):
+    """The default hub must live under user_cache_dir() —
+    %LOCALAPPDATA%\\WhisperProject\\Cache\\hub on Windows — NEVER under
+    the install / app dir. A Program Files default was not writable for
+    a standard (non-admin) user, so the first-run model download failed
+    with "Access is denied". Regression for R5.
+    """
+    from core import config as _cfg
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(_cfg, "user_cache_dir", lambda: cache_root)
+    # Point resolve_app_dir() somewhere DIFFERENT so we can prove the
+    # default no longer derives from it.
+    app_dir = tmp_path / "app"
+    monkeypatch.setattr(hub, "resolve_app_dir", lambda: app_dir)
+
+    result = hub.default_hub_folder()
+    assert result == cache_root / hub.HUB_SUBFOLDER_NAME
+    # And it must NOT be under the app/install dir.
+    assert not hub.is_path_inside(result, app_dir)
 
 
 def test_default_hub_subfolder_name_is_hub():
@@ -70,7 +86,7 @@ def test_is_hub_configured_true_for_any_non_blank_value():
 
 
 def test_normalise_hub_path_empty_returns_default(monkeypatch, tmp_path):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     assert hub.normalise_hub_path("") == str(tmp_path / hub.HUB_SUBFOLDER_NAME)
     assert hub.normalise_hub_path(None) == str(tmp_path / hub.HUB_SUBFOLDER_NAME)  # type: ignore[arg-type]
 

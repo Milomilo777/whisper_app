@@ -245,3 +245,52 @@ def test_ensure_model_bounded_retry_raises(tmp_path):
     }
     with pytest.raises(RuntimeError, match="after .* attempts"):
         mm.ensure_model(config)
+
+
+# ---------- R5: non-writable destination ------------------------------------
+
+
+def test_is_permission_error_classifies_eacces_and_eperm():
+    import errno as _errno
+
+    assert mm._is_permission_error(PermissionError("denied")) is True
+    assert mm._is_permission_error(OSError(_errno.EACCES, "Access is denied")) is True
+    assert mm._is_permission_error(OSError(_errno.EPERM, "not permitted")) is True
+    # An unrelated OSError (e.g. disk full) is NOT a permission problem.
+    assert mm._is_permission_error(OSError(_errno.ENOSPC, "no space")) is False
+
+
+def test_ensure_model_permission_error_surfaces_as_not_writable(tmp_path, monkeypatch):
+    """R5 regression: a PermissionError while creating the model cache
+    dir (the Program Files / non-admin trap) must surface as the typed
+    ``ModelDestinationNotWritable`` carrying the offending directory —
+    NOT a raw OSError the UI would print verbatim.
+
+    No network is touched: ensure_model fails at the very first mkdir.
+    """
+    model_name = "fakemodel"
+    model_dir_name = f"models--Systran--{model_name}"
+    cache_dir = tmp_path / "ProgramFiles" / "WhisperProject" / "hub"
+    config = {
+        "model": {
+            "name": model_name,
+            "url": "https://fake.test/model.zip",
+            "md5": "https://fake.test/model.md5",
+        },
+        "model_path": str(cache_dir / model_dir_name),
+    }
+
+    real_mkdir = Path.mkdir
+
+    def _boom_mkdir(self, *args, **kwargs):
+        # Only block the model cache dir; let any other mkdir through.
+        if str(self) == str(cache_dir):
+            raise PermissionError(13, "Access is denied", str(self))
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _boom_mkdir)
+
+    with pytest.raises(mm.ModelDestinationNotWritable) as excinfo:
+        mm.ensure_model(config)
+    # The exception carries the offending directory for the UI message.
+    assert excinfo.value.directory == str(cache_dir)
