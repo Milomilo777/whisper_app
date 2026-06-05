@@ -63,6 +63,46 @@ def _resolve_entry_file() -> str:
     )
 
 
+def _split_dnd_paths(raw: str) -> list[str]:
+    """Split a tkdnd ``<<Drop>>`` payload into individual paths.
+
+    tkdnd packs all dropped items into one string: space-separated
+    tokens, with any token that contains a space wrapped in ``{...}``.
+    We intentionally do NOT use ``Tk.splitlist`` here: Tcl's list
+    parser treats a leading ``\\\\`` as an escaped backslash and
+    collapses it to a single one, so a UNC path like
+    ``{\\\\server\\share\\my file.mp4}`` comes back as
+    ``\\server\\share\\my file.mp4`` — no longer a valid UNC path, and
+    the dropped network file is then silently dropped by the later
+    ``os.path.isfile`` gate. This brace/space splitter preserves the
+    backslashes verbatim so UNC drops survive (local ``C:\\`` and mapped
+    ``Z:\\`` paths were never affected, having no leading ``\\\\``).
+    """
+    raw = raw.strip()
+    out: list[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        while i < n and raw[i] == " ":
+            i += 1
+        if i >= n:
+            break
+        if raw[i] == "{":
+            j = raw.find("}", i)
+            if j == -1:
+                # Unbalanced brace — take the rest as one token.
+                out.append(raw[i + 1:])
+                break
+            out.append(raw[i + 1:j])
+            i = j + 1
+        else:
+            j = i
+            while j < n and raw[j] != " ":
+                j += 1
+            out.append(raw[i:j])
+            i = j
+    return out
+
+
 class App(tk.Tk):
     """The Tk root.
 
@@ -2628,8 +2668,13 @@ class App(tk.Tk):
         """Handle a drag-and-drop onto the window.
 
         tkinterdnd2 packs all dropped paths into a single string with
-        space-or-brace separation. The simplest robust parser is
-        ``self.tk.splitlist`` — Tcl knows the encoding rules.
+        space-or-brace separation. We split it with ``_split_dnd_paths``
+        rather than ``self.tk.splitlist`` because Tcl's list parser
+        collapses a UNC path's leading double-backslash down to a single
+        one, which then fails the ``os.path.isfile`` gate and silently
+        drops network-share files. ``self.tk.splitlist`` is kept as a
+        fallback for any unexpected token shape, so behaviour is
+        otherwise unchanged.
         Behaviour:
           - one file dropped → populate the Transcribe tab's file
             field
@@ -2639,10 +2684,14 @@ class App(tk.Tk):
             into the Download tab's URL field
         """
         raw = getattr(event, "data", "") or ""
-        try:
-            items = list(self.tk.splitlist(raw))
-        except Exception:  # noqa: BLE001
-            items = [raw]
+        items = _split_dnd_paths(raw)
+        if not items and raw.strip():
+            # Helper found nothing in a non-empty payload — fall back to
+            # Tcl's own splitter so we don't regress on an odd token shape.
+            try:
+                items = list(self.tk.splitlist(raw))
+            except Exception:  # noqa: BLE001
+                items = [raw]
         paths: list[str] = []
         urls: list[str] = []
         for item in items:
