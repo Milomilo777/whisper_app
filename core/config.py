@@ -37,6 +37,15 @@ DEFAULT_CONFIG = {
     "download_subtitle_lang": "Automatic",
     "auto_update_yt_dlp": False,
     "last_yt_dlp_update_check": "",
+    # Optional, opt-in GitHub "update available" check (core.updates).
+    # When enabled, a quiet launch check (once per day, throttled via
+    # last_update_check) and a Help-menu manual check ask GitHub for the
+    # latest release tag and offer to open the download page — they NEVER
+    # auto-download or auto-install, and a private-repo 404 / offline box
+    # fails silently. last_update_check is the ISO date (YYYY-MM-DD) of
+    # the last quiet check, used only for the once-per-day throttle.
+    "update_check_enabled": True,
+    "last_update_check": "",
     # Browser to read cookies from for yt-dlp, so login-walled / age-gated
     # content downloads using the user's logged-in session (Facebook,
     # Instagram, TikTok stories; some YouTube Shorts). Empty = off. One of
