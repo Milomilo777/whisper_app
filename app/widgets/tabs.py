@@ -112,6 +112,86 @@ def marquee_cell(frame: int, percent: float | int = 0) -> str:
     return "".join(track) + f" {pct:>3d}%"
 
 
+# Transcription action keys surfaced by the per-row action bar AND the
+# right-click context menu. Keep this list in sync with the buttons built
+# in build_queue_tab so a status with no valid action disables them all.
+QUEUE_ACTION_KEYS = ("pause", "resume", "cancel", "rerun", "remove")
+
+
+def button_states_for_status(
+    status: str, has_checkpoint: bool = False
+) -> dict[str, bool]:
+    """Which transcription actions are valid for a task in ``status``.
+
+    The single source of truth shared by the Queue action bar and the
+    right-click ``menu_row`` so the two can never drift. Returns a dict
+    mapping each key in :data:`QUEUE_ACTION_KEYS` to whether that action
+    should be ENABLED for a task in this state. Pure (no Tk), so it is
+    unit-testable without a Tk root.
+
+    Mirrors ``App.menu_row``:
+      * waiting  -> Cancel
+      * running  -> Pause, Cancel
+      * paused   -> Resume, Cancel
+      * terminal (finished / cancelled / error) -> Re-run, Remove
+        (cancelled also offers Resume when a resumable checkpoint exists)
+
+    ``has_checkpoint`` only matters for the ``cancelled`` state — it maps
+    to the "Resume" entry ``menu_row`` adds above "Re-run".
+    """
+    states = {k: False for k in QUEUE_ACTION_KEYS}
+    if status == "waiting":
+        states["cancel"] = True
+    elif status == "running":
+        states["pause"] = True
+        states["cancel"] = True
+    elif status == "paused":
+        states["resume"] = True
+        states["cancel"] = True
+    elif status in ("finished", "cancelled", "error"):
+        states["rerun"] = True
+        states["remove"] = True
+        if status == "cancelled" and has_checkpoint:
+            states["resume"] = True
+    return states
+
+
+# Download action keys for the per-row Download action bar.
+DOWNLOAD_ACTION_KEYS = ("pause", "resume", "cancel", "rerun", "remove", "open")
+
+
+def download_button_states_for_status(
+    status: str, *, is_smtv: bool = False, has_saved_file: bool = False
+) -> dict[str, bool]:
+    """Which download actions are valid for a task in ``status``.
+
+    Single source of truth for the Download action bar (Phase 2). Pure (no
+    Tk) so it is unit-testable without a Tk root. Mirrors download_menu_row:
+      * waiting / running / transcribing -> Cancel  (and Pause for a running
+        non-SMTV download — yt-dlp can stop-and-continue; SMTV cannot)
+      * running paused                   -> Resume, Cancel
+      * terminal (finished/cancelled/error) -> Re-run, Remove (and Open when
+        a saved file exists on disk)
+
+    ``is_smtv`` disables Pause (SMTV CDN has no HTTP Range resume point).
+    ``has_saved_file`` gates Open to a finished download with a real file.
+    """
+    states = {k: False for k in DOWNLOAD_ACTION_KEYS}
+    if status in ("waiting", "running", "transcribing"):
+        states["cancel"] = True
+        if status == "running" and not is_smtv:
+            states["pause"] = True
+    elif status == "paused":
+        states["resume"] = True
+        states["cancel"] = True
+    elif status in ("finished", "cancelled", "error"):
+        states["rerun"] = True
+        states["remove"] = True
+        if status == "finished" and has_saved_file:
+            states["open"] = True
+    return states
+
+
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     """Beginner-friendly Transcribe tab.
 
@@ -384,6 +464,44 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     app.tree.bind("<Double-Button-1>", app.queue_row_double_click)
     app.row_map = {}
 
+    # R2 — always-visible per-task action bar. The right-click context
+    # menu is not discoverable for a non-technical operator, so mirror its
+    # actions as plain buttons that operate on the selected row(s). Enabled
+    # state is recomputed from the selected task's status (the same logic
+    # menu_row uses, via button_states_for_status) on every selection change
+    # AND inside App.refresh (which rebuilds the tree each tick).
+    action_bar = ttk.Frame(parent)
+    action_bar.pack(fill="x", padx=10, pady=(0, 6))
+    app.queue_action_buttons = {
+        "pause": ttk.Button(
+            action_bar, text="Pause",
+            command=lambda: app._action_bar_apply(app.pause, active_only=True),
+        ),
+        "resume": ttk.Button(
+            action_bar, text="Resume",
+            command=app._action_bar_resume,
+        ),
+        "cancel": ttk.Button(
+            action_bar, text="Cancel",
+            command=lambda: app._action_bar_apply(app.cancel, active_only=True),
+        ),
+        "rerun": ttk.Button(
+            action_bar, text="Re-run",
+            command=lambda: app._action_bar_apply(app._rerun_task, active_only=False),
+        ),
+        "remove": ttk.Button(
+            action_bar, text="Remove",
+            command=lambda: app._action_bar_apply(app.remove_task, active_only=False),
+        ),
+    }
+    for key in ("pause", "resume", "cancel", "rerun", "remove"):
+        app.queue_action_buttons[key].pack(side="left", padx=(0, 6))
+        app.queue_action_buttons[key].state(["disabled"])
+    # A single-click on a running/paused row's status or progress cell
+    # toggles pause/resume — a discoverable shortcut on top of the menu.
+    app.tree.bind("<Button-1>", app.queue_status_cell_click, add="+")
+    app.tree.bind("<<TreeviewSelect>>", lambda _e: app._update_queue_action_bar())
+
 
 def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     top = ttk.Frame(parent, padding=10)
@@ -589,6 +707,49 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.download_tree.bind("<Button-3>", app.download_menu_row)
     # See `app.row_map` above — annotation belongs on the class.
     app.download_row_map = {}
+
+    # R2 — Download action bar mirroring the Queue tab. Pause is the
+    # stop-and-continue semantics (tooltip below); SMTV downloads disable it.
+    dl_action_bar = ttk.Frame(parent, padding=(10, 0, 10, 4))
+    dl_action_bar.pack(fill="x")
+    app.download_action_buttons = {
+        "pause": ttk.Button(
+            dl_action_bar, text="Pause",
+            command=lambda: app._download_action_apply(app.pause_download),
+        ),
+        "resume": ttk.Button(
+            dl_action_bar, text="Resume",
+            command=lambda: app._download_action_apply(app.resume_download),
+        ),
+        "cancel": ttk.Button(
+            dl_action_bar, text="Cancel",
+            command=lambda: app._download_action_apply(app.cancel_download),
+        ),
+        "rerun": ttk.Button(
+            dl_action_bar, text="Re-run",
+            command=lambda: app._download_action_apply(app._rerun_download),
+        ),
+        "remove": ttk.Button(
+            dl_action_bar, text="Remove",
+            command=lambda: app._download_action_apply(app.remove_download),
+        ),
+        "open": ttk.Button(
+            dl_action_bar, text="Open",
+            command=app._download_action_open,
+        ),
+    }
+    for key in ("pause", "resume", "cancel", "rerun", "remove", "open"):
+        app.download_action_buttons[key].pack(side="left", padx=(0, 6))
+        app.download_action_buttons[key].state(["disabled"])
+    ttk.Label(
+        dl_action_bar,
+        text="(Pause stops the download but keeps the partial file; "
+             "Resume continues it)",
+        foreground="#888",
+    ).pack(side="left", padx=(8, 0))
+    app.download_tree.bind(
+        "<<TreeviewSelect>>", lambda _e: app._update_download_action_bar()
+    )
 
     app.update_download_mode()
     app.update_subtitle_state()

@@ -125,6 +125,8 @@ class App(tk.Tk):
     tree: "ttk.Treeview"
     pb: "ttk.Progressbar"
     row_map: dict[str, Any]
+    # R2 per-task action bar (assigned in tabs.build_queue_tab).
+    queue_action_buttons: dict[str, "ttk.Button"]
     # Download tab
     download_url_var: tk.StringVar
     download_folder_var: tk.StringVar
@@ -174,6 +176,8 @@ class App(tk.Tk):
     format_status_var: tk.StringVar
     download_tree: "ttk.Treeview"
     download_row_map: dict[str, Any]
+    # R2 per-download action bar (assigned in tabs.build_download_tab).
+    download_action_buttons: dict[str, "ttk.Button"]
     # Set by format_service.lookup_formats / _apply_smtv_formats
     _smtv_episode: Any | None
     # Set by tabs.build_download_tab — toggles the series checkbox.
@@ -1594,16 +1598,21 @@ class App(tk.Tk):
         task = self.row_map.get(item)
         if not task:
             return
+        # Drive the menu entries from the SAME pure helper the always-visible
+        # action bar uses (button_states_for_status), so the two can never
+        # disagree about which actions a status offers.
+        from app.widgets.tabs import button_states_for_status
+        states = button_states_for_status(
+            task.status, self._task_has_checkpoint(task)
+        )
         m = tk.Menu(self, tearoff=0)
-        if task.status == "waiting":
-            m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status == "running":
+        if states["pause"]:
             m.add_command(label="Pause", command=lambda: self.pause(task))
-            m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status == "paused":
+        if states["resume"] and task.status == "paused":
             m.add_command(label="Resume", command=lambda: self.resume(task))
+        if states["cancel"]:
             m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status in ("finished", "cancelled", "error"):
+        if task.status in ("finished", "cancelled", "error"):
             if task.status == "finished":
                 m.add_command(
                     label="Export → oTranscribe (.otr)",
@@ -1622,26 +1631,36 @@ class App(tk.Tk):
                     command=lambda: self._open_folder(os.path.dirname(task.file_path)),
                 )
                 m.add_separator()
-            # Resume-from-cancellation: if a partial checkpoint
-            # exists for this cancelled task, surface a "Resume"
-            # entry above "Re-run". Only the cancelled path is wired
-            # — for "error" and "finished" we don't want to invite
-            # the user to resume from a stale partial that may have
-            # been produced by a different config.
-            if task.status == "cancelled":
-                try:
-                    from core.transcriber import has_resumable_checkpoint
-                    if has_resumable_checkpoint(task.file_path):
-                        m.add_command(
-                            label="Resume",
-                            command=lambda: self.resume_task(task),
-                        )
-                except Exception:  # noqa: BLE001
-                    # Checkpoint probe must never block the menu.
-                    pass
-            m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
-            m.add_command(label="Remove", command=lambda: self.remove_task(task))
+            # Resume-from-cancellation: a "Resume" entry sits above "Re-run"
+            # only when a resumable checkpoint exists (states["resume"] for a
+            # cancelled task). Error / finished never invite a resume from a
+            # potentially stale partial.
+            if states["resume"] and task.status == "cancelled":
+                m.add_command(
+                    label="Resume",
+                    command=lambda: self.resume_task(task),
+                )
+            if states["rerun"]:
+                m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
+            if states["remove"]:
+                m.add_command(label="Remove", command=lambda: self.remove_task(task))
         m.tk_popup(e.x_root, e.y_root)
+
+    def _task_has_checkpoint(self, task: TranscriptionTask) -> bool:
+        """True when a cancelled task has a resumable partial on disk.
+
+        Cheap, defensive probe shared by menu_row and the action bar so
+        both surface "Resume" under the same condition. Any failure (the
+        checkpoint module missing, a bad path) is swallowed — the probe
+        must never block the menu or the action-bar refresh.
+        """
+        if getattr(task, "status", "") != "cancelled":
+            return False
+        try:
+            from core.transcriber import has_resumable_checkpoint
+            return bool(has_resumable_checkpoint(task.file_path))
+        except Exception:  # noqa: BLE001
+            return False
 
     def download_menu_row(self, e: tk.Event) -> None:
         item = self.download_tree.identify_row(e.y)
@@ -1656,11 +1675,23 @@ class App(tk.Tk):
         task = self.download_row_map.get(item)
         if not task:
             return
+        from app.services.download_service import _is_smtv_task
+        from app.widgets.tabs import download_button_states_for_status
+        saved_dl = getattr(task, "saved_path", None)
+        has_file_dl = bool(saved_dl) and os.path.isfile(saved_dl) if saved_dl else False
+        dstates = download_button_states_for_status(
+            task.status, is_smtv=_is_smtv_task(task), has_saved_file=has_file_dl
+        )
         m = tk.Menu(self, tearoff=0)
         if task.status in ("waiting", "running", "transcribing"):
             # "transcribing" = the download finished and handed off to an
             # auto-transcribe; Cancel here stops that linked task too
             # (cancel_download unlinks + cancels transcription_task).
+            if dstates["pause"]:
+                m.add_command(label="Pause", command=lambda: self.pause_download(task))
+            m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
+        elif task.status == "paused":
+            m.add_command(label="Resume", command=lambda: self.resume_download(task))
             m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
         elif task.status in ("finished", "cancelled", "error"):
             saved = getattr(task, "saved_path", None)
@@ -1865,6 +1896,10 @@ class App(tk.Tk):
 
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True
+        # Clear any pause hold so the (now cancelled) task can't be mistaken
+        # for resumable, and a stale torn-down "paused" event can't resurrect
+        # it (the _finish stale-pause guard only spares running/waiting).
+        task.paused = False
         task.status = "cancelled"
         # Freeze the Elapsed column at the cancel moment.
         if task.end_time is None:
@@ -1891,6 +1926,127 @@ class App(tk.Tk):
         if task in self.download_queue:
             self.download_queue.remove(task)
         self.refresh_download_queue()
+
+    def pause_download(self, task: VideoDownloadTask) -> None:
+        """R2 "pause" for a download = STOP-AND-CONTINUE (not a true freeze).
+
+        yt-dlp has no live pause signal, so we tear the process down the
+        same way ``cancel_download`` does (reusing kill_process_tree) BUT:
+          * land on status "paused" (not "cancelled"),
+          * KEEP the partial .part file so resume can continue it,
+          * only HOLD a linked auto-transcribe (don't cancel it permanently).
+
+        SMTV downloads can't be paused (no HTTP Range on the CDN stream), so
+        the action bar disables Pause for them; this method also guards.
+        """
+        from app.services.download_service import _is_smtv_task
+        if task.status not in ("waiting", "running"):
+            return
+        if _is_smtv_task(task):
+            self.log("Pause is unavailable for SMTV downloads (no resume point).")
+            return
+        task.paused = True
+        task.status = "paused"
+        if task.end_time is None:
+            task.end_time = time.time()
+        if task.process and task.process.poll() is None:
+            # Same tree-kill as cancel so the ffmpeg child dies with yt-dlp
+            # and releases the .part handle — but we do NOT delete the .part.
+            kill_process_tree(task.process, force=False)
+        # Hold (don't cancel) any linked auto-transcribe: keep it referenced
+        # so a resume can re-establish the hand-off. The download row stops
+        # mirroring its progress because the status is no longer "transcribing".
+        if self.download_current is task:
+            self.download_current = None
+        self.refresh_download_queue()
+        # Let the next waiting download (if any) start now that this one
+        # released the single-download slot.
+        self.download_service.process_queue()
+
+    def resume_download(self, task: VideoDownloadTask) -> None:
+        """Re-enqueue a paused download so yt-dlp continues its .part.
+
+        build_download_command passes ``-c``/``--continue``, so re-running
+        the SAME task resumes from the existing fragment instead of
+        restarting at zero. We don't build a fresh task (unlike _rerun_
+        download) precisely so the partial keeps its identity.
+        """
+        if task.status != "paused":
+            return
+        task.paused = False
+        task.cancelled = False
+        task.status = "waiting"
+        task.end_time = None
+        if task not in self.download_queue:
+            self.download_queue.append(task)
+        self.refresh_download_queue()
+        self.download_service.process_queue()
+
+    # --- R2: always-visible Download action bar ------------------------------
+    def _selected_downloads(self) -> list[VideoDownloadTask]:
+        tree = getattr(self, "download_tree", None)
+        if tree is None:
+            return []
+        return [
+            t for t in (self.download_row_map.get(i) for i in tree.selection()) if t
+        ]
+
+    def _download_action_apply(
+        self, fn: "Callable[[VideoDownloadTask], Any]"
+    ) -> None:
+        """Run a per-download handler over the current selection, then
+        refresh the action-bar enabled state. Each handler already guards
+        its own valid statuses, so we don't pre-filter here."""
+        for t in list(self._selected_downloads()):
+            try:
+                fn(t)
+            except Exception:  # noqa: BLE001
+                pass
+        self._update_download_action_bar()
+
+    def _download_action_open(self) -> None:
+        """Open button — opens the saved file of a finished download, else
+        falls back to its download folder."""
+        for t in list(self._selected_downloads()):
+            saved = getattr(t, "saved_path", None)
+            if t.status == "finished" and saved and os.path.isfile(saved):
+                self._open_file(saved)
+            elif getattr(t, "folder", ""):
+                self._open_folder(t.folder)
+
+    def _update_download_action_bar(self) -> None:
+        """Enable/disable Download action-bar buttons for the selection.
+
+        Recomputed on <<TreeviewSelect>> and inside refresh_download_queue
+        (which rebuilds the tree each tick) so a row whose status flipped
+        never leaves a stale button enabled. Uses the same pure helper
+        (download_button_states_for_status) as the design contract."""
+        buttons = getattr(self, "download_action_buttons", None)
+        if not buttons:
+            return
+        from app.services.download_service import _is_smtv_task
+        from app.widgets.tabs import (
+            DOWNLOAD_ACTION_KEYS,
+            download_button_states_for_status,
+        )
+
+        merged = {k: False for k in DOWNLOAD_ACTION_KEYS}
+        for t in self._selected_downloads():
+            saved = getattr(t, "saved_path", None)
+            has_file = bool(saved) and os.path.isfile(saved) if saved else False
+            states = download_button_states_for_status(
+                getattr(t, "status", ""),
+                is_smtv=_is_smtv_task(t),
+                has_saved_file=has_file,
+            )
+            for k, v in states.items():
+                if v:
+                    merged[k] = True
+        for key, btn in buttons.items():
+            if merged.get(key):
+                btn.state(["!disabled"])
+            else:
+                btn.state(["disabled"])
 
     def pause(self, t: TranscriptionTask) -> None:
         # Only a task actually running on a worker can be paused.
@@ -1936,6 +2092,98 @@ class App(tk.Tk):
         if t in self.queue:
             self.queue.remove(t)
         self.refresh()
+
+    # --- R2: always-visible Queue action bar ---------------------------------
+    def _selected_tasks(self) -> list[TranscriptionTask]:
+        """Tasks currently selected in the Queue Treeview (may be empty)."""
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return []
+        return [t for t in (self.row_map.get(i) for i in tree.selection()) if t]
+
+    def _action_bar_apply(
+        self, fn: "Callable[[TranscriptionTask], Any]", *, active_only: bool
+    ) -> None:
+        """Run a per-task handler over the current Queue selection.
+
+        ``active_only`` restricts Pause/Cancel to waiting/running/paused
+        rows; Re-run/Remove (active_only=False) apply to terminal rows.
+        Shared by the action-bar buttons; mirrors the bulk context menu.
+        """
+        active = {"waiting", "running", "paused"}
+        terminal = {"finished", "cancelled", "error"}
+        wanted = active if active_only else terminal
+        for t in list(self._selected_tasks()):
+            if getattr(t, "status", "") in wanted:
+                try:
+                    fn(t)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._update_queue_action_bar()
+
+    def _action_bar_resume(self) -> None:
+        """Resume button — paused tasks resume in place; a cancelled task
+        with a checkpoint re-enqueues from its partial (resume_task)."""
+        for t in list(self._selected_tasks()):
+            status = getattr(t, "status", "")
+            if status == "paused":
+                self.resume(t)
+            elif status == "cancelled" and self._task_has_checkpoint(t):
+                self.resume_task(t)
+        self._update_queue_action_bar()
+
+    def _update_queue_action_bar(self) -> None:
+        """Enable/disable the Queue action-bar buttons for the selection.
+
+        Recomputed on <<TreeviewSelect>> AND inside refresh() (which
+        rebuilds the tree every tick), so the buttons never reflect a
+        stale row. Uses the same button_states_for_status helper as
+        menu_row. With a multi-row selection a button is enabled when it
+        is valid for ANY selected row (matching the bulk menu).
+        """
+        buttons = getattr(self, "queue_action_buttons", None)
+        if not buttons:
+            return
+        from app.widgets.tabs import QUEUE_ACTION_KEYS, button_states_for_status
+
+        merged = {k: False for k in QUEUE_ACTION_KEYS}
+        for t in self._selected_tasks():
+            states = button_states_for_status(
+                getattr(t, "status", ""), self._task_has_checkpoint(t)
+            )
+            for k, v in states.items():
+                if v:
+                    merged[k] = True
+        for key, btn in buttons.items():
+            if merged.get(key):
+                btn.state(["!disabled"])
+            else:
+                btn.state(["disabled"])
+
+    def queue_status_cell_click(self, event: tk.Event) -> None:
+        """Single-click on a running/paused row's Status or Progress cell
+        toggles pause/resume — a discoverable shortcut on top of the menu.
+
+        Other cells / statuses fall through so normal row selection still
+        works (this is bound additively with ``add="+"``).
+        """
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        col = self.tree.identify_column(event.x)
+        # columns are ("file","status","progress","language","time")
+        # -> status is #2, progress is #3.
+        if col not in ("#2", "#3"):
+            return
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        task = self.row_map.get(item)
+        if not task:
+            return
+        if task.status == "running":
+            self.pause(task)
+        elif task.status == "paused":
+            self.resume(task)
 
     def clear_completed(self) -> None:
         self.queue[:] = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
@@ -2077,6 +2325,10 @@ class App(tk.Tk):
         # in their taskbar / Alt-Tab.
         self._refresh_window_title()
         self._ensure_animation()
+        # Recompute the action-bar enabled state: refresh rebuilds the tree
+        # every tick, so a row whose status flipped (e.g. running->finished)
+        # must not leave the buttons reflecting the old status.
+        self._update_queue_action_bar()
 
     def refresh_download_queue(self) -> None:
         from app.widgets.tabs import status_label
@@ -2103,6 +2355,7 @@ class App(tk.Tk):
             self.download_row_map[item_id] = task
         self._refresh_window_title()
         self._ensure_animation()
+        self._update_download_action_bar()
 
     # -- UX helpers (Phase v0.7.1 — user-friendly result surfacing) ----------
 
