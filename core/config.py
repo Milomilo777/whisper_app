@@ -133,6 +133,15 @@ DEFAULT_CONFIG = {
     "tiling_multi_monitor": False,
     "tiling_selected_monitors": [],
     "tiling_auto_restart": True,
+    # Optional local-network / web HTTP job server (``gui.py serve``).
+    # Defaulted here so reads never KeyError and pyright sees the type.
+    # ``server_port`` is the default listen port; ``server_max_upload_mb``
+    # caps a single upload (the worker's 1 MB command guard does NOT cover
+    # browser uploads). The server binds loopback by default — LAN access
+    # is an explicit ``--lan`` opt-in (the only path that triggers the
+    # Windows firewall prompt).
+    "server_port": 8765,
+    "server_max_upload_mb": 512,
 }
 
 
