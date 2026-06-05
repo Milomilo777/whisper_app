@@ -54,6 +54,12 @@ pywhispercpp>=1.4
 # ~75 MB Whisper checkpoint on first use).
 stable-ts>=2.17
 
+# Optional cloud Speech-to-Text backend (Google Gemini API): needs NO
+# new dependency. It talks to the Gemini REST API with the stdlib
+# urllib.request (no google-cloud-speech / google-generativeai). The
+# user pastes a free API key from aistudio.google.com in
+# Advanced > Backend. See docs/CLOUD_STT.md.
+
 # --- Notes -----------------------------------------------------------
 # * tkinter ships with the Windows Python installer. On Linux install
 #   python3-tk via the package manager. On macOS use the python.org build.

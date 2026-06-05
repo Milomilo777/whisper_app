@@ -112,6 +112,7 @@ a = Analysis(
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
         'core.backends.parakeet',
+        'core.backends.cloud_stt',
         'core.chapters',
         'core.llm',
         'core.recorder',
