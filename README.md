@@ -52,6 +52,14 @@ Step-by-step install guide: [docs/INSTALL.md](docs/INSTALL.md).
   file, and Resume continues from where it left off (via `yt-dlp`'s
   `-c`/`--continue`) instead of restarting. Pause is unavailable for
   Supreme Master TV downloads, which have no resume point.
+- **Video Tiling** — play one live stream as a full-screen N×N grid (a
+  "video wall") of identical tiles. One stream is downloaded once and
+  tiled; pick a quality band (Auto/1080p…/144p), mute, and — across
+  several monitors — a **Multi-monitor** wall with one window per screen
+  (use **Monitors…** to choose screens, with **Identify** to flash each
+  monitor's number). Reconnect is automatic with exponential backoff, and
+  yt-dlp self-heals (updates) after repeated drops. Needs `ffplay` on PATH
+  or in the app's `bin/` folder (it is not bundled).
 
 Keyboard: `Ctrl+O` Browse · `Ctrl+Enter` Transcribe · `Esc` Cancel ·
 `Ctrl+Q` Exit.

@@ -37,6 +37,19 @@ The file is read once at startup and written when the user changes a persisted s
 | `auto_update_yt_dlp` | bool | `false` | Phase 0 fix to AUDIT A1: yt-dlp's `--update` is now opt-in and gated to once per launch (with `last_yt_dlp_update_check`). When this is `false`, downloads never wait on `--update`. |
 | `last_yt_dlp_update_check` | string (ISO date) | `""` | Timestamp of the last update attempt (used by the once-per-day guard inside `maybe_update_yt_dlp`) |
 
+### Video Tiling
+
+Persisted choices for the Video Tiling tab (the `core.tiling.TilingController`
+video-wall engine). All are remembered between launches.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `tiling_quality` | string | `"Auto"` | yt-dlp quality band: `Auto` / `1080p` / `720p` / `480p` / `360p` / `240p` / `144p`. `Auto` lowers resolution as the grid gets denser (a dense grid needs far less than 1080p). Always ends in `/best` so playback never fails on a missing resolution. |
+| `tiling_mute` | bool | `false` | Mute audio. In a multi-monitor wall only the first window keeps audio anyway (to avoid echo); this mutes that one too. |
+| `tiling_multi_monitor` | bool | `false` | Fan the one download out to one `ffplay` window per selected monitor (a multi-screen wall) instead of a single full-screen window. |
+| `tiling_selected_monitors` | array of int | `[]` | Spatial monitor indices (from `core.monitors`, `0` = left-most) ticked in the **Monitors…** chooser. Empty = all monitors when multi-monitor is on, or the primary when off. Stale indices (a monitor that has been unplugged) are ignored at start. |
+| `tiling_auto_restart` | bool | `true` | Reconnect automatically with exponential backoff (3s→30s) when the stream drops; after repeated quick failures the engine self-heals by updating yt-dlp. Off = a drop just stops. |
+
 ## Coming in later phases
 
 | Field | Type | Default | Description |
