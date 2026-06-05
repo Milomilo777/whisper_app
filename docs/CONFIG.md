@@ -50,6 +50,24 @@ video-wall engine). All are remembered between launches.
 | `tiling_selected_monitors` | array of int | `[]` | Spatial monitor indices (from `core.monitors`, `0` = left-most) ticked in the **Monitors…** chooser. Empty = all monitors when multi-monitor is on, or the primary when off. Stale indices (a monitor that has been unplugged) are ignored at start. |
 | `tiling_auto_restart` | bool | `true` | Reconnect automatically with exponential backoff (3s→30s) when the stream drops; after repeated quick failures the engine self-heals by updating yt-dlp. Off = a drop just stops. |
 
+### Cloud Speech-to-Text (optional, Google Gemini API)
+
+Off by default. These keys only take effect when `transcribe_backend` is
+set to `cloud_stt` (in **Advanced > Backend**). Selecting this backend
+**uploads your audio to Google** — it breaks the offline guarantee. See
+[`CLOUD_STT.md`](CLOUD_STT.md) for the full setup, privacy, and quota
+notes. The API key is stored in **cleartext** in `config.json`,
+consistent with how cookies/paths are already stored (the file is
+per-user under `%LOCALAPPDATA%\WhisperProject` and is not encrypted).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `cloud_stt_api_key` | string | `""` | Google API key pasted from aistudio.google.com. Empty = the backend reports "No Google API key set". Stored in cleartext. |
+| `cloud_stt_model` | string | `"gemini-3.5-flash"` | The Gemini model used for transcription. A config value so a renamed/newer model needs no code change; an unavailable model surfaces a clear "model not found" error (HTTP 404), not a crash. |
+| `cloud_stt_minutes_used` | float | `0.0` | Minutes of audio transcribed via the cloud backend so far, accumulated **locally** after each successful run. The dollar free-credit balance is NOT readable from an API key, so this local counter is the only usage signal shown. |
+| `cloud_stt_free_minutes_cap` | int | `60` | Informational free-tier figure shown in the Advanced dialog. Not enforced — it does not block transcription. |
+| `cloud_stt_chunk_seconds` | int | `480` | Window size (seconds, ~8 min) the audio is split into before upload. Smaller windows give finer progress/cancel granularity and smaller uploads; larger windows mean fewer requests. |
+
 ## Coming in later phases
 
 | Field | Type | Default | Description |

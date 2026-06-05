@@ -105,10 +105,19 @@ Key fields:
 | `hub_folder` | Where Whisper model files are stored (set by first-run dialog) |
 | `model_path` | Per-model override; derived from `hub_folder + model.name` when unset |
 | `whisper_model` | One of `large-v3` (default), `large-v3-turbo`, `distil-large-v3.5` |
-| `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet` |
+| `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt` |
 | `auto_chapters_enabled`, `hallucination_detect_enabled` | Post-process toggles |
 
 Full reference: [docs/CONFIG.md](docs/CONFIG.md).
+
+### Optional cloud backend (uploads your audio)
+
+There is one **opt-in, non-offline** backend: `cloud_stt`, which sends
+audio to the Google Gemini API for transcription using a free API key you
+paste in **Advanced > Backend**. It **breaks the offline guarantee** — use
+it only for content you may send to a cloud service. Setup, privacy, and
+quota details are in [docs/CLOUD_STT.md](docs/CLOUD_STT.md). All default
+backends remain fully offline.
 
 ---
 
