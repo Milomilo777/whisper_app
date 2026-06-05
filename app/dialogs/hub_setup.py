@@ -10,11 +10,11 @@ UX:
   |  Choose Model Hub Folder                                   |
   +-----------------------------------------------------------+
   |  Whisper Project stores its speech-recognition models in   |
-  |  a "model hub" folder. The default sits next to the app    |
-  |  so uninstalling the app removes everything.               |
+  |  a "model hub" folder. The default is a private per-user   |
+  |  cache folder that is always writable.                     |
   |                                                            |
   |  Hub folder:                                               |
-  |  [ C:\\Program Files\\WhisperProject\\hub        ] [Browse…]|
+  |  [ %LOCALAPPDATA%\\WhisperProject\\Cache\\hub    ] [Browse…]|
   |                                                            |
   |  ☐ Use a different folder I'll pick                        |
   |                                                            |
@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Callable, Optional
 
 from core import hub as _hub
@@ -89,7 +90,7 @@ class HubSetupDialog(tk.Toplevel):
 
         # Initial value: any existing hub_folder (in case the dialog
         # was opened explicitly by a user re-picking), else the
-        # platform-default ``<app_dir>/hub``.
+        # platform-default per-user cache hub.
         initial = (config.get("hub_folder") or "").strip()
         if not initial:
             initial = str(_hub.default_hub_folder())
@@ -120,10 +121,10 @@ class HubSetupDialog(tk.Toplevel):
         ttk.Label(
             body,
             text=(
-                "These files are large (1–3 GB each). The default sits next\n"
-                "to the application so uninstalling removes everything in one\n"
-                "step. Pick a different folder (e.g. an external drive) if you\n"
-                "prefer to keep models outside the install directory."
+                "These files are large (1–3 GB each). The default is a\n"
+                "private per-user cache folder that is always writable.\n"
+                "Pick a different folder (e.g. an external drive) if you\n"
+                "want to keep the models somewhere with more space."
             ),
             foreground="#666",
             justify="left",
@@ -194,8 +195,39 @@ class HubSetupDialog(tk.Toplevel):
         self._path_var.set(str(_hub.default_hub_folder()))
         self._on_ok()
 
+    def _probe_writable(self, path: str) -> bool:
+        """Confirm we can create + write inside ``path``.
+
+        Creates the directory if needed and writes/deletes a temp file.
+        On failure, warns the user and returns False so the caller keeps
+        the dialog open. This catches the Program Files trap (a standard
+        user picking a non-writable location) BEFORE the model download
+        fails 3 GB in.
+        """
+        try:
+            os.makedirs(path, exist_ok=True)
+            fd, probe = tempfile.mkstemp(prefix=".whisper-write-test-", dir=path)
+            os.close(fd)
+            os.unlink(probe)
+            return True
+        except OSError as e:
+            logger.warning("Hub folder %r is not writable: %s", path, e)
+            messagebox.showwarning(
+                "Folder not writable",
+                (
+                    f"Whisper cannot write to:\n\n{path}\n\n"
+                    "Please pick a folder under your user profile (for "
+                    "example on your main drive or an external drive)."
+                ),
+                parent=self,
+            )
+            return False
+
     def _on_ok(self) -> None:
         path = _hub.normalise_hub_path(self._path_var.get())
+        if not self._probe_writable(path):
+            # Keep the dialog open so the user can pick somewhere else.
+            return
         self._chosen_path = path
         self._config["hub_folder"] = path
 
