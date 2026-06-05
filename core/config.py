@@ -45,6 +45,10 @@ DEFAULT_CONFIG = {
     "cookies_from_browser": "",
     "theme": "dark",
     "log_level": "INFO",
+    # R3: set once the first time a one-time "running on CPU (slower)"
+    # warning has been shown, so it never nags again. Defaulted here so
+    # reads are always a plain bool (no KeyError / wrong-type trap).
+    "cpu_warning_shown": False,
     # Phase 2a — Whisper masterpiece
     "vad_enabled": True,
     "vad_min_silence_ms": 500,

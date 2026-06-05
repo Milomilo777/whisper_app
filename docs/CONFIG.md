@@ -25,8 +25,9 @@ The file is read once at startup and written when the user changes a persisted s
 | `model.md5` | string | `<url>.md5` | URL of the per-file MD5 manifest |
 | `hub_folder` | string | `""` (first-run dialog) | Parent folder that holds the `models--Vendor--name` model directories. Empty triggers the first-run picker, which pre-fills `%LOCALAPPDATA%\WhisperProject\Cache\hub` — a per-user, always-writable location (never the Program Files install dir). |
 | `model_path` | string | (derived from `hub_folder`) | Absolute path where the model is extracted. When empty it is derived at startup from `hub_folder + model.name`; with no hub set it falls back to `%LOCALAPPDATA%\WhisperProject\Cache\hub\<name>`. A non-empty value is a per-model override. |
-| `device` | string | `"auto"` | `"auto"` / `"cuda"` / `"cpu"` |
+| `device` | string | `"auto"` | `"auto"` / `"cuda"` / `"cpu"`. With `"auto"`, the autodetect only selects CUDA when ctranslate2 reports a GPU **and** the cuDNN/cuBLAS runtime libraries actually load; otherwise it falls back to CPU. At model-load time a CUDA load that still fails self-heals to CPU `int8` instead of crashing the worker — the active tab shows a GPU/CPU badge and (once) a "running on CPU (slower)" warning. |
 | `compute_type` | string | `"int8"` | `faster-whisper` compute type. Common values: `int8`, `int8_float16`, `float16`, `float32`. `int8` is the smallest/fastest on CPU; `float16` is preferred on GPU. |
+| `cpu_warning_shown` | bool | `false` | Set to `true` after the one-time "running on CPU (slower)" warning has been shown, so it never repeats. The warning only appears when a GPU was detected-but-unusable or a CUDA→CPU downgrade happened — never on a genuine CPU-only machine. |
 | `parallel_workers` | int | `2` | Maximum simultaneous transcription worker subprocesses. Each loads the model and uses ~3 GB RAM (or VRAM on GPU). |
 | `download_folder` | string | `""` | Default destination for video downloads. Updated by the Folder Browse button. |
 | `download_subtitles_enabled` | bool | `false` | Last state of the subtitle checkbox on the Download Videos tab |
