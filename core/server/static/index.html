@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whisper Project</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #161616; color: #e8e8e8; margin: 0; padding: 0;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: #8a8a8a; font-size: .85rem; margin: 0 0 20px; }
+  fieldset { border: 1px solid #333; border-radius: 8px; margin: 0 0 16px; padding: 14px 16px; }
+  legend { padding: 0 6px; color: #9ad; font-size: .85rem; }
+  label { display: block; margin: 6px 0; }
+  input[type=text], input[type=url] {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid #444; background: #222; color: #eee; font-size: .95rem;
+  }
+  .fmts { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 6px; }
+  .fmts label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+  button {
+    background: #2d6cdf; color: #fff; border: 0; border-radius: 6px;
+    padding: 10px 18px; font-size: .95rem; cursor: pointer;
+  }
+  button:disabled { background: #444; cursor: default; }
+  .or { text-align: center; color: #666; margin: 4px 0; font-size: .8rem; }
+  #status { margin-top: 18px; }
+  .bar { height: 10px; background: #333; border-radius: 5px; overflow: hidden; margin: 8px 0; }
+  .bar > span { display: block; height: 100%; width: 0; background: #2d6cdf; transition: width .3s; }
+  .links a { display: inline-block; margin: 4px 10px 4px 0; color: #6cf; }
+  .err { color: #f77; }
+  .note { color: #8a8a8a; font-size: .8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Whisper Project</h1>
+  <p class="sub">Local transcription server. Upload a file or paste a link, pick formats, and download the result.</p>
+
+  <fieldset>
+    <legend>Source</legend>
+    <label>Upload audio/video<br>
+      <input type="file" id="file" accept="audio/*,video/*">
+    </label>
+    <div class="or">— or —</div>
+    <label>Link (YouTube, etc.)<br>
+      <input type="url" id="url" placeholder="https://...">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Output formats</legend>
+    <div class="fmts" id="fmts"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Options</legend>
+    <label>Language code (blank = auto-detect)<br>
+      <input type="text" id="lang" placeholder="en, es, fa, ...">
+    </label>
+    <label>Auth token (if the server requires one)<br>
+      <input type="text" id="token" placeholder="leave blank if none">
+    </label>
+  </fieldset>
+
+  <button id="start">Start transcription</button>
+
+  <div id="status"></div>
+  <p class="note" id="caveat"></p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var fmtBox = document.getElementById("fmts");
+  var startBtn = document.getElementById("start");
+  var statusEl = document.getElementById("status");
+  var pollTimer = null;
+
+  function authHeaders() {
+    var t = document.getElementById("token").value.trim();
+    return t ? { "X-Auth-Token": t } : {};
+  }
+  function tokenQuery() {
+    var t = document.getElementById("token").value.trim();
+    return t ? ("?token=" + encodeURIComponent(t)) : "";
+  }
+
+  function loadFormats() {
+    fetch("/api/health", { headers: authHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var formats = d.formats || ["srt", "txt", "json"];
+        var defaults = { srt: true, txt: true };
+        formats.forEach(function (f) {
+          var id = "fmt_" + f;
+          var lab = document.createElement("label");
+          lab.innerHTML = '<input type="checkbox" value="' + f + '" id="' + id +
+            '"' + (defaults[f] ? " checked" : "") + "> " + f;
+          fmtBox.appendChild(lab);
+        });
+      })
+      .catch(function () {
+        fmtBox.textContent = "Could not reach the server.";
+      });
+  }
+
+  function chosenFormats() {
+    var out = [];
+    fmtBox.querySelectorAll("input:checked").forEach(function (cb) {
+      out.push(cb.value);
+    });
+    return out;
+  }
+
+  function setStatus(html) { statusEl.innerHTML = html; }
+
+  function start() {
+    var file = document.getElementById("file").files[0];
+    var url = document.getElementById("url").value.trim();
+    var formats = chosenFormats();
+    var lang = document.getElementById("lang").value.trim();
+    if (!file && !url) { setStatus('<p class="err">Pick a file or paste a link.</p>'); return; }
+    if (!formats.length) { setStatus('<p class="err">Choose at least one format.</p>'); return; }
+
+    startBtn.disabled = true;
+    setStatus("<p>Submitting...</p>");
+
+    var opts = { method: "POST", headers: authHeaders() };
+    if (file) {
+      var fd = new FormData();
+      fd.append("file", file);
+      fd.append("formats", formats.join(","));
+      fd.append("language", lang);
+      opts.body = fd;
+    } else {
+      opts.headers = Object.assign({ "Content-Type": "application/json" }, authHeaders());
+      opts.body = JSON.stringify({ url: url, formats: formats, language: lang });
+    }
+
+    fetch("/api/jobs", opts)
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.d.error || "submit failed"); }
+        poll(res.d.job_id);
+      })
+      .catch(function (e) {
+        setStatus('<p class="err">' + e.message + "</p>");
+        startBtn.disabled = false;
+      });
+  }
+
+  function poll(jobId) {
+    if (pollTimer) { clearInterval(pollTimer); }
+    pollTimer = setInterval(function () {
+      fetch("/api/jobs/" + jobId, { headers: authHeaders() })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { render(jobId, j); })
+        .catch(function () { /* transient; keep polling */ });
+    }, 1500);
+  }
+
+  function render(jobId, j) {
+    var html = "<p>Status: <b>" + j.status + "</b></p>";
+    html += '<div class="bar"><span style="width:' + (j.progress || 0) + '%"></span></div>';
+    if (j.status === "error") {
+      html += '<p class="err">' + (j.error || "failed") + "</p>";
+    }
+    if (j.status === "finished" || j.status === "error" || j.status === "cancelled") {
+      clearInterval(pollTimer);
+      startBtn.disabled = false;
+    }
+    if (j.outputs && j.outputs.length) {
+      html += '<div class="links">';
+      j.outputs.forEach(function (o) {
+        var href = "/api/jobs/" + jobId + "/result?fmt=" + encodeURIComponent(o.fmt) +
+          (document.getElementById("token").value.trim() ?
+            "&token=" + encodeURIComponent(document.getElementById("token").value.trim()) : "");
+        html += '<a href="' + href + '" download>' + o.name + "</a>";
+      });
+      html += "</div>";
+    }
+    setStatus(html);
+  }
+
+  document.getElementById("caveat").textContent =
+    "Note: your audio is uploaded to the host running this server. Use only on a trusted network.";
+  startBtn.addEventListener("click", start);
+  loadFormats();
+})();
+</script>
+</body>
+</html>
