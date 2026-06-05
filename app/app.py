@@ -376,6 +376,15 @@ class App(tk.Tk):
         self.after(100, self._on_start)
         self.after(300, self.loop)
 
+        # Optional, opt-in GitHub update check. Fired ~4 s after launch
+        # so it never competes with first-paint / model-setup work. The
+        # check runs on a daemon thread; it is gated by
+        # update_check_enabled AND a once-per-day throttle, and it stays
+        # SILENT unless an update is actually available (no nagging when
+        # up to date, offline, or on a private repo). See
+        # _run_update_check / core.updates.
+        self.after(4000, self._maybe_quiet_update_check)
+
     def _sweep_partials_at_startup(self) -> None:
         """Off-thread best-effort cleanup of the partials/ checkpoint dir."""
         import threading as _t
@@ -486,6 +495,13 @@ class App(tk.Tk):
                       command=self.integrations_service.open_otranscribe)
         h.add_separator()
         h.add_command(label="Open log folder", command=self.open_log_folder)
+        h.add_separator()
+        # Manual update check — always runs (ignores the once-per-day
+        # throttle the quiet launch check obeys) and DOES report the
+        # "you're up to date" / "couldn't reach the server" cases, unlike
+        # the silent launch check. Never downloads/installs anything.
+        h.add_command(label="Check for updates...",
+                      command=self._check_for_updates_manual)
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
@@ -2782,6 +2798,108 @@ class App(tk.Tk):
                 self.after(250, self._drain_watched_paths)
             except Exception:  # noqa: BLE001
                 pass
+
+    # Update check ------------------------------------------------------------
+    def _maybe_quiet_update_check(self) -> None:
+        """Fire the silent launch-time GitHub update check, if eligible.
+
+        Runs on the Tk main thread (scheduled via ``after``). Gated by
+        ``update_check_enabled`` and a once-per-day throttle keyed on
+        ``last_update_check`` (an ISO date). When eligible, the date is
+        stamped immediately (so a second launch the same day won't
+        re-check) and the network call runs on a daemon thread. The
+        result only ever pops the "update available" prompt — it shows
+        NOTHING when up to date, offline, or on a private repo.
+        """
+        if self._closing:
+            return
+        try:
+            if not bool(self.app_config.get("update_check_enabled", True)):
+                return
+            from datetime import date
+            today = date.today().isoformat()
+            if (self.app_config.get("last_update_check") or "") == today:
+                return  # already checked today
+            # Stamp the date up-front so we throttle even if the check
+            # races / fails; persist via save_config so it survives a
+            # restart.
+            self.app_config["last_update_check"] = today
+            try:
+                save_config(self.app_config)
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not persist last_update_check", exc_info=True)
+        except Exception:  # noqa: BLE001
+            logger.debug("Quiet update-check gate failed", exc_info=True)
+            return
+        self._run_update_check(manual=False)
+
+    def _check_for_updates_manual(self) -> None:
+        """Help-menu "Check for updates..." — always runs, reports all cases."""
+        self._run_update_check(manual=True)
+
+    def _run_update_check(self, *, manual: bool) -> None:
+        """Run core.updates.check_for_update on a daemon thread.
+
+        The network call happens off the Tk thread (it can block for up
+        to the urllib timeout); the result is marshalled back via
+        :meth:`post_to_main` so all widget work stays on the main
+        thread. ``manual`` controls whether the "up to date" /
+        "couldn't reach the server" cases are surfaced (manual) or
+        swallowed (the quiet launch check).
+        """
+
+        def _worker() -> None:
+            from core import updates as _updates
+            info = _updates.check_for_update()
+            self.post_to_main(lambda: self._on_update_result(info, manual=manual))
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="update-check")
+
+    def _on_update_result(self, info: object, *, manual: bool) -> None:
+        """Show the appropriate dialog for an update-check result (main thread).
+
+        ``info`` is a ``core.updates.UpdateInfo`` or ``None`` (typed as
+        ``object`` here to keep this glue free of a hard import at the
+        annotation site). On a found newer release we ask whether to open
+        the download page; on a manual check we also report up-to-date /
+        unreachable; the quiet launch check stays silent in those cases.
+        """
+        if self._closing:
+            return
+        from core.updates import RELEASES_PAGE_URL, UpdateInfo
+
+        if info is None:
+            if manual:
+                messagebox.showinfo(
+                    "Check for updates",
+                    "Could not reach the update server.\n\n"
+                    "Please check your internet connection and try again "
+                    "later.",
+                    parent=self,
+                )
+            return
+
+        if not isinstance(info, UpdateInfo):  # defensive; never expected
+            return
+
+        if info.is_newer:
+            open_page = messagebox.askyesno(
+                "Update available",
+                f"A newer version ({info.latest_tag}) is available — "
+                f"you have v{_APP_VERSION}.\n\n"
+                "Open the download page?",
+                parent=self,
+            )
+            if open_page:
+                import webbrowser
+                webbrowser.open(info.html_url or RELEASES_PAGE_URL)
+        elif manual:
+            messagebox.showinfo(
+                "Check for updates",
+                f"You're on the latest version (v{_APP_VERSION}).",
+                parent=self,
+            )
 
     def _drain_main_calls(self) -> None:
         """Drain the cross-thread queue of main-thread callables.

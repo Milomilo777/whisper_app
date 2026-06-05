@@ -140,6 +140,7 @@ a = Analysis(
         'core.paths',
         'core.task',
         'core.transcriber',
+        'core.updates',
         'core.watcher',
         'core.worker',
         'core.integrations.otranscribe',
