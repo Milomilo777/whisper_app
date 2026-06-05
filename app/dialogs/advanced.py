@@ -76,6 +76,14 @@ class AdvancedDialog(tk.Toplevel):
         self._whisper_model = tk.StringVar(
             value=str(cfg.get("whisper_model") or DEFAULT_MODEL_SLUG)
         )
+        # Cloud Speech-to-Text (Google Gemini API) — opt-in, uploads audio.
+        self._cloud_api_key = tk.StringVar(
+            value=str(cfg.get("cloud_stt_api_key") or "")
+        )
+        self._cloud_model = tk.StringVar(
+            value=str(cfg.get("cloud_stt_model") or "gemini-3.5-flash")
+        )
+        self._cloud_test_result = tk.StringVar(value="")
         self._hallucination_detect = tk.BooleanVar(
             value=bool(cfg.get("hallucination_detect_enabled", True))
         )
@@ -252,7 +260,7 @@ class AdvancedDialog(tk.Toplevel):
             extras,
             textvariable=self._transcribe_backend,
             state="readonly",
-            values=("faster_whisper", "whisper_cpp", "parakeet"),
+            values=("faster_whisper", "whisper_cpp", "parakeet", "cloud_stt"),
             width=20,
         )
         backend_combo.grid(row=4, column=1, sticky="w", padx=8, pady=4)
@@ -331,6 +339,79 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
             variable=self._voiceprint_enabled,
         ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+
+        # Cloud Speech-to-Text (Google) — OPTIONAL, uploads audio.
+        cloud = ttk.LabelFrame(
+            body, text="Cloud Speech-to-Text (Google) — optional, uploads audio"
+        )
+        cloud.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            cloud,
+            text=(
+                "PRIVACY: selecting the 'cloud_stt' backend UPLOADS your "
+                "audio to Google for transcription. This BREAKS the offline "
+                "guarantee — only use it for content you may send to a cloud "
+                "service. The default engines stay fully offline."
+            ),
+            foreground="#b00020",
+            wraplength=820,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
+        ttk.Label(cloud, text="Google API key").grid(
+            row=1, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(
+            cloud, textvariable=self._cloud_api_key, show="*", width=52,
+        ).grid(row=1, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Button(
+            cloud, text="Test key", command=self._test_cloud_key,
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            cloud,
+            textvariable=self._cloud_test_result,
+            foreground="#666",
+            wraplength=820,
+            justify="left",
+        ).grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(
+            cloud,
+            text="Get a free key at aistudio.google.com (paste it above).",
+            foreground="#666",
+        ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(cloud, text="Model").grid(
+            row=4, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(
+            cloud, textvariable=self._cloud_model, width=32,
+        ).grid(row=4, column=1, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            cloud,
+            text="Default: gemini-3.5-flash (a current Gemini audio model).",
+            foreground="#666",
+        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
+        _cloud_cfg = self.app.app_config
+        used = float(_cloud_cfg.get("cloud_stt_minutes_used") or 0.0)
+        cap = int(_cloud_cfg.get("cloud_stt_free_minutes_cap") or 60)
+        ttk.Label(
+            cloud,
+            text=(
+                f"Cloud minutes used: {used:.1f} (free tier ~{cap} min/month, "
+                "tracked LOCALLY). The dollar credit balance is NOT readable "
+                "from an API key — check your usage in Google's billing "
+                "console:"
+            ),
+            wraplength=820,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
+        link = ttk.Label(
+            cloud,
+            text="https://console.cloud.google.com/billing",
+            foreground="#1a73e8",
+            cursor="hand2",
+        )
+        link.grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+        link.bind("<Button-1>", lambda _e: self._open_billing_console())
+        cloud.columnconfigure(1, weight=1)
 
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
@@ -469,6 +550,10 @@ class AdvancedDialog(tk.Toplevel):
         tpl = (self._filename_template.get() or "").strip() or "{base}.{ext}"
         cfg["output_filename_template"] = tpl
         cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
+        cfg["cloud_stt_api_key"] = self._cloud_api_key.get().strip()
+        cfg["cloud_stt_model"] = (
+            self._cloud_model.get().strip() or "gemini-3.5-flash"
+        )
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
         cfg["demucs_enabled"] = bool(self._demucs_enabled.get())
@@ -605,3 +690,49 @@ class AdvancedDialog(tk.Toplevel):
 
         from core._threads import safe_thread
         safe_thread(_worker, name="whispercpp-model-download")
+
+    def _test_cloud_key(self) -> None:
+        """Validate the pasted Google API key on a DAEMON thread.
+
+        The check is a tiny ``models.list`` HTTPS request — it must
+        never block the UI thread, and its result is posted back to the
+        Tk main thread via ``app.post_to_main`` before touching the
+        result StringVar (off-thread widget writes raise on 3.14).
+        """
+        key = self._cloud_api_key.get().strip()
+        model = self._cloud_model.get().strip() or "gemini-3.5-flash"
+        if not key:
+            self._cloud_test_result.set("Paste an API key first.")
+            return
+        self._cloud_test_result.set("Testing key…")
+
+        def _set_result(msg: str) -> None:
+            try:
+                self._cloud_test_result.set(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _worker() -> None:
+            try:
+                from core.backends.cloud_stt import CloudSttBackend
+                backend = CloudSttBackend(
+                    config={"cloud_stt_api_key": key, "cloud_stt_model": model}
+                )
+                backend.load()
+                ok, msg = backend.ping_key()
+            except Exception as e:  # noqa: BLE001
+                ok, msg = False, f"Key check failed: {e}"
+            text = ("OK — " if ok else "FAILED — ") + msg
+            self.app.post_to_main(lambda: _set_result(text))
+            self.app.log(f"Cloud STT key test: {text}")
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="cloud-stt-key-test")
+
+    def _open_billing_console(self) -> None:
+        """Open Google's billing console in the default browser."""
+        import webbrowser
+        try:
+            webbrowser.open("https://console.cloud.google.com/billing")
+        except Exception as e:  # noqa: BLE001
+            self.app.log(f"Could not open billing console: {e}")
