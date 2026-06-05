@@ -25,10 +25,16 @@ Resolution order used by the rest of the codebase (in ``model_manager``
      headless from the CLI with a fresh profile).
 
 The first-run UI dialog (``app/dialogs/hub_setup``) shows
-:func:`default_hub_folder` as its initial value, which is the app's
-sibling ``hub/`` directory. The user can pick a different folder
-(e.g. a big external drive) and we persist that choice to
-``config["hub_folder"]``.
+:func:`default_hub_folder` as its initial value, which is a writable
+per-user cache directory (``%LOCALAPPDATA%\\WhisperProject\\Cache\\hub``
+on Windows). The user can pick a different folder (e.g. a big external
+drive) and we persist that choice to ``config["hub_folder"]``.
+
+The default deliberately lives under the per-user cache, NEVER under
+the install directory. The installers put the app in Program Files
+(admin-only, non-writable for a standard user), so an ``<app_dir>/hub``
+default made the very first model download fail with "Access is denied"
+for non-admin accounts.
 
 This module is Tk-free so it can be called from worker subprocesses
 and the installer-side Pascal Script (via reading the JSON file
@@ -50,6 +56,12 @@ HUB_SUBFOLDER_NAME = "hub"
 
 def resolve_app_dir() -> Path:
     """Return the directory the user thinks of as "the app folder".
+
+    NOTE: this no longer backs the model hub (see
+    :func:`default_hub_folder`). It is kept only for installer-side
+    "is the hub inside the install dir?" detection and uninstall
+    prompts — never use it to derive a writable data location, because
+    a Program Files install dir is not writable for a standard user.
 
     Three runtime contexts:
 
@@ -74,9 +86,18 @@ def resolve_app_dir() -> Path:
 def default_hub_folder() -> Path:
     """The pre-filled value the first-run dialog shows.
 
-    ``<app_dir>/hub`` matches the user-request wording exactly.
+    Returns ``user_cache_dir() / "hub"`` —
+    ``%LOCALAPPDATA%\\WhisperProject\\Cache\\hub`` on Windows. This is
+    always writable by the current user, so the first-run model
+    download cannot fail with "Access is denied" the way an
+    ``<app_dir>/hub`` default did under a Program Files install.
+
+    We reuse ``core.config.user_cache_dir`` (the single platformdirs
+    wrapper, ``appname=WhisperProject`` / ``appauthor=False``) so the
+    hub stays consistent with every other cache path in the app.
     """
-    return resolve_app_dir() / HUB_SUBFOLDER_NAME
+    from .config import user_cache_dir  # local import avoids a cycle
+    return user_cache_dir() / HUB_SUBFOLDER_NAME
 
 
 def is_hub_configured(config: dict[str, Any]) -> bool:

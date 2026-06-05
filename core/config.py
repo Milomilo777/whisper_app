@@ -111,9 +111,12 @@ DEFAULT_CONFIG = {
     # ``models--Vendor--name`` subdirectories. Empty by default so
     # ``app.dialogs.hub_setup`` fires its first-run picker. The
     # picker pre-fills ``core.hub.default_hub_folder()`` =
-    # ``<app_dir>/hub``. ``model_path`` (above) remains as a per-
-    # model override for users with an existing config; new
-    # installs derive ``model_path`` from ``hub_folder + model.name``.
+    # ``%LOCALAPPDATA%\WhisperProject\Cache\hub`` (a per-user,
+    # always-writable location — NOT under the Program Files install
+    # dir, which is not writable for a standard user).
+    # ``model_path`` (above) remains as a per-model override for users
+    # with an existing config; new installs derive ``model_path`` from
+    # ``hub_folder + model.name``.
     "hub_folder": "",
 }
 
@@ -228,15 +231,14 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     # explicit model_path wins → hub_folder + model_name → the same
     # default_hub_folder() value the first-run dialog suggests.
     #
-    # Using default_hub_folder() (not user_cache_dir) as the empty-
-    # hub fallback fixes a re-download race: the hub-setup dialog is
-    # asynchronous, so the worker subprocess starts before the user
-    # has clicked OK. If the worker downloads to user_cache_dir and
-    # the user then accepts the dialog's <app_dir>/hub default, the
-    # next launch resolves model_path to <app_dir>/hub and triggers
-    # a full re-download. Aligning the fallback with the dialog
-    # default means "accept default" is a no-op for the model
-    # location.
+    # Using default_hub_folder() as the empty-hub fallback fixes a
+    # re-download race: the hub-setup dialog is asynchronous, so the
+    # worker subprocess starts before the user has clicked OK. If the
+    # worker resolved a different path than the dialog's default, the
+    # next launch (with hub_folder now saved) would resolve a new
+    # model_path and trigger a full re-download. Aligning the fallback
+    # with default_hub_folder() — now %LOCALAPPDATA%\...\Cache\hub —
+    # means "accept default" is a no-op for the model location.
     if not model_path or not _drive_is_mounted(model_path):
         model_name = (config.get("model") or {}).get("name") or "whisper-model"
         effective_hub = hub_folder or str(_hub.default_hub_folder())
