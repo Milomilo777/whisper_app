@@ -287,7 +287,11 @@ def build_download_command(
     command = [yt_dlp_path]
     if bin_path:
         command += ["--ffmpeg-location", bin_path]
-    command += ["--newline", "-o", output]
+    # ``-c`` / ``--continue`` so a resumed download (R2 stop-and-continue
+    # "pause") picks up the existing .part fragment instead of restarting
+    # from zero. yt-dlp continues by default for plain downloads, but being
+    # explicit also covers the modes where it would otherwise overwrite.
+    command += ["--newline", "-c", "-o", output]
     command.extend(_cookies_from_browser_args(cookies_from_browser))
     if progress_template:
         command.extend(["--progress-template", progress_template])
@@ -1099,6 +1103,12 @@ class DownloadService:
         return_code = task.process.wait()
         if task.cancelled:
             app.download_events.put(("done", task, "cancelled"))
+        elif getattr(task, "paused", False):
+            # R2 stop-and-continue "pause": the process was tree-killed by
+            # pause_download, so the wait() returns nonzero — but this is a
+            # deliberate hold, not a failure. Land on "paused" and keep the
+            # partial .part so a later resume continues via -c/--continue.
+            app.download_events.put(("done", task, "paused"))
         elif return_code:
             # Surface the real reason (yt-dlp's ERROR line) rather than a
             # bare exit code, so a login-walled site (Facebook → enable
@@ -1206,6 +1216,12 @@ class DownloadService:
 
     def _finish(self, task: "VideoDownloadTask", status: str, saved_path: str | None) -> None:
         app = self.app
+        # Stale-pause guard: a paused task that the user already resumed has
+        # been re-dispatched (status running/waiting) and may even be the
+        # current download again. The torn-down thread's late "paused" event
+        # must not clobber that fresh run back to "paused".
+        if status == "paused" and getattr(task, "status", "") in ("running", "waiting"):
+            return
         task.status = status
         # Freeze the Elapsed column the moment the task is terminal,
         # regardless of which status it ended in (finished / error /

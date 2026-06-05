@@ -32,6 +32,13 @@ class VideoDownloadTask:
         self.title = title
         self.status = "waiting"
         self.progress: float = 0
+        # R2 — download "pause" is stop-and-continue (yt-dlp has no live
+        # pause signal): pause tears down the process like cancel but keeps
+        # the partial .part file and flips status to "paused"; resume
+        # re-enqueues the SAME task and yt-dlp continues via -c/--continue.
+        # Distinct from ``cancelled`` so the teardown path can tell which
+        # terminal status to land on.
+        self.paused: bool = False
         self.start_time: float | None = None
         # Frozen wall-clock for terminal downloads (finished /
         # cancelled / error) — same role as on TranscriptionTask.

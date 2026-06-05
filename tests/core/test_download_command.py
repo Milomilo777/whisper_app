@@ -205,6 +205,23 @@ def test_build_download_command_url_is_last():
     assert cmd[-1] == task.url
 
 
+# --- R2: -c/--continue so a resumed "pause" continues the .part -------------
+
+
+def test_build_download_command_includes_continue_flag():
+    # R2 stop-and-continue "pause" resumes the existing .part fragment; the
+    # command must pass -c/--continue so yt-dlp doesn't restart from zero.
+    task = _task()
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "-c" in cmd or "--continue" in cmd
+
+
+def test_build_download_command_continue_flag_present_audio_mode():
+    task = _task(mode="Audio", output="mp3", audio_kind="best_audio")
+    cmd = build_download_command(task, yt_dlp_path="ytdlp", bin_path="bin")
+    assert "-c" in cmd or "--continue" in cmd
+
+
 # --- parse_progress_line ----------------------------------------------------
 
 
@@ -525,3 +542,21 @@ def test_time_range_label_open_bounds():
         section_start=51.0,
     )
     assert right_open.time_range_label() == "0:51 -> end"
+
+
+# --- R2: VideoDownloadTask.paused default ----------------------------------
+
+
+def test_video_download_task_paused_defaults_false():
+    # R2 added a ``paused`` flag distinct from ``cancelled`` so the teardown
+    # path can tell which terminal status a stopped download lands on.
+    from app.domain.tasks import VideoDownloadTask
+
+    t = VideoDownloadTask(
+        url="https://example.com/v", folder="/tmp", format_label="x",
+        format_info={"mode": "Audio", "output": "mp3",
+                     "audio": {"kind": "best_audio"},
+                     "video": {"kind": "best_video"}},
+    )
+    assert t.paused is False
+    assert t.cancelled is False
