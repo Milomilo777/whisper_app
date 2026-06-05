@@ -122,6 +122,17 @@ DEFAULT_CONFIG = {
     # with an existing config; new installs derive ``model_path`` from
     # ``hub_folder + model.name``.
     "hub_folder": "",
+    # Video Tiling tab — persisted UI choices for the tiling engine
+    # (core.tiling.TilingController). quality is a band from
+    # core.tiling.QUALITY_CHOICES ("Auto"/"1080p"/…/"144p"); multi_monitor
+    # fans the one download out to one ffplay per selected monitor; the
+    # selected list holds spatial monitor indices from core.monitors
+    # (0 = left-most); auto_restart reconnects with backoff on a drop.
+    "tiling_quality": "Auto",
+    "tiling_mute": False,
+    "tiling_multi_monitor": False,
+    "tiling_selected_monitors": [],
+    "tiling_auto_restart": True,
 }
 
 
