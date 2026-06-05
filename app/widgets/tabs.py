@@ -284,6 +284,18 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         command=app.open_advanced_dialog,
     ).pack(side="right")
 
+    # R3: GPU/CPU device badge — primary placement, next to the CTA so users
+    # see it where they start a job. Driven by app.device_badge_var (set in
+    # TranscriptionService.update_model_state). Registers with the App so
+    # apply_device_badge can recolour it + attach the hover tooltip.
+    device_badge = ttk.Label(
+        cta_row, textvariable=app.device_badge_var, anchor="center",
+    )
+    device_badge.pack(side="right", padx=(0, 16))
+    app.register_device_badge_label(
+        device_badge, tier_label="Open the Hardware wizard for accelerator details."
+    )
+
     parent.columnconfigure(0, weight=1)
     parent.columnconfigure(1, weight=1)
     parent.columnconfigure(2, weight=1)
@@ -357,7 +369,15 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     app.pb = ttk.Progressbar(parent, length=400)
     app.pb.pack(fill="x", padx=10, pady=10)
 
-    ttk.Label(parent, textvariable=app.status_var).pack()
+    status_line = ttk.Frame(parent)
+    status_line.pack()
+    ttk.Label(status_line, textvariable=app.status_var).pack(side="left")
+    # R3: mirror the GPU/CPU device badge next to the queue status line.
+    queue_device_badge = ttk.Label(
+        status_line, textvariable=app.device_badge_var,
+    )
+    queue_device_badge.pack(side="left", padx=(12, 0))
+    app.register_device_badge_label(queue_device_badge)
     app.tree.bind("<Button-3>", app.menu_row)
     # Double-click on a finished row -> open the file's containing
     # folder. Discoverable shortcut for the right-click menu entry.

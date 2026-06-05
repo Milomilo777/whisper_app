@@ -132,6 +132,91 @@ class TranscriptionService:
             self.app.status_var.set(
                 f"Model ready ({ready_count} worker{'s' if ready_count != 1 else ''})"
             )
+        self._refresh_device_badge()
+
+    def _refresh_device_badge(self) -> None:
+        """Drive the GPU/CPU device badge + one-time CPU warning (R3).
+
+        Reads the effective device of the ready workers (newest wins) and
+        sets ``app.device_badge_var`` / ``device_badge_kind`` so the UI shows
+        a green GPU badge, an amber CPU badge, or an amber downgrade badge.
+        Defers the actual Tk text/colour update to the App (which owns the
+        widgets) via ``app.apply_device_badge`` when present.
+        """
+        app = self.app
+        ready = self.ready_workers()
+        if not ready:
+            return
+        # Prefer a worker that reported real device info; among those, a
+        # downgraded one is the most important to surface.
+        informed = [w for w in ready if w.get("device")]
+        chosen = None
+        for w in informed:
+            if w.get("downgraded"):
+                chosen = w
+                break
+        if chosen is None and informed:
+            chosen = informed[-1]
+        if chosen is None:
+            return
+
+        device = str(chosen.get("device") or "").lower()
+        compute_type = str(chosen.get("compute_type") or "")
+        downgraded = bool(chosen.get("downgraded"))
+
+        if device == "cuda":
+            kind = "gpu"
+            text = f"GPU - CUDA {compute_type}".strip()
+        elif downgraded:
+            kind = "cpu_downgraded"
+            text = f"GPU unavailable, using CPU - {compute_type or 'int8'} (slower)"
+        else:
+            kind = "cpu"
+            text = f"CPU - {compute_type or 'int8'} (slower)"
+
+        apply = getattr(app, "apply_device_badge", None)
+        if callable(apply):
+            apply(text, kind, chosen)
+
+        # One-time CPU warning: only when on CPU AND either a real downgrade
+        # happened OR a GPU tier was detected-but-unusable. Never nag on a
+        # genuine CPU-only box (nothing the user can act on).
+        if device != "cuda":
+            self._maybe_warn_cpu(downgraded, chosen)
+
+    def _maybe_warn_cpu(self, downgraded: bool, worker: dict[str, Any]) -> None:
+        """Show the one-time CPU warning the first time it's warranted.
+
+        Gated by the ``cpu_warning_shown`` config flag so it never repeats.
+        Only fires when the situation is actionable: a CUDA->CPU downgrade
+        happened, or a GPU tier was detected on the host but is unusable. A
+        plain CPU-only machine with no GPU at all is left alone.
+        """
+        app = self.app
+        if app.app_config.get("cpu_warning_shown"):
+            return
+        gpu_detected_unusable = False
+        if not downgraded:
+            # Was a GPU tier detected on this host but not actually usable?
+            try:
+                from core import hardware as _hw
+                tiers = _hw.probe_tiers()
+                gpu_detected_unusable = any(
+                    t.device == "cuda" for t in tiers
+                ) and not _hw.cuda_load_ok()
+            except Exception:  # noqa: BLE001
+                gpu_detected_unusable = False
+        if not (downgraded or gpu_detected_unusable):
+            return
+        warn = getattr(app, "warn_cpu_once", None)
+        if callable(warn):
+            warn(downgraded)
+        app.app_config["cpu_warning_shown"] = True
+        try:
+            from core.config import save_config
+            save_config(app.app_config)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not persist cpu_warning_shown flag")
 
     # Lifecycle ---------------------------------------------------------------
     def start_standby(self) -> None:
@@ -279,6 +364,12 @@ class TranscriptionService:
                 "ready": False,
                 "task": None,
                 "temporary": temporary,
+                # R3: effective device reported by the worker's "ready"
+                # event. Defaults cover an OLD worker that omits the fields.
+                "device": "",
+                "compute_type": "",
+                "requested_device": "",
+                "downgraded": False,
                 # Audit A4: per-worker UUID echoed back in every event
                 # so PID recycling can't misroute an old event onto a
                 # new worker.
@@ -504,6 +595,15 @@ class TranscriptionService:
                 app.model_status(event.get("message", ""))
             elif event_type == "ready":
                 worker["ready"] = True
+                # R3: the worker's ready event additively carries the device
+                # it actually loaded onto. .get() defaults keep an OLD worker
+                # (no device fields) working — it just leaves these blank.
+                worker["device"] = str(event.get("device", "") or "")
+                worker["compute_type"] = str(event.get("compute_type", "") or "")
+                worker["requested_device"] = str(
+                    event.get("requested_device", "") or ""
+                )
+                worker["downgraded"] = bool(event.get("downgraded", False))
                 self.update_model_state()
                 # If this is the worker an ensure_worker_ready() call is
                 # awaiting, unblock it (headless Event) and close its modal.

@@ -164,6 +164,12 @@ class App(tk.Tk):
     transcribe_lang_var: tk.StringVar
     device_var: tk.StringVar
     compute_type_var: tk.StringVar
+    # R3: GPU/CPU device badge. The text var is set in update_model_state();
+    # the two Labels (Transcribe-tab header + Queue-tab status line) are built
+    # in tabs.py and registered here so apply_device_badge can recolour them.
+    device_badge_var: tk.StringVar
+    device_badge_labels: "list[ttk.Label]"
+    device_badge_tip: str
     hotwords_var: tk.StringVar
     format_status_var: tk.StringVar
     download_tree: "ttk.Treeview"
@@ -234,6 +240,12 @@ class App(tk.Tk):
         self.download_current: VideoDownloadTask | None = None
 
         self.status_var = tk.StringVar(value="Initializing...")
+        # R3: device badge state created up-front so a worker "ready" event
+        # firing before the tabs are built can't AttributeError. The Labels
+        # register themselves in tabs.py; apply_device_badge recolours them.
+        self.device_badge_var = tk.StringVar(value="")
+        self.device_badge_labels: list[ttk.Label] = []
+        self.device_badge_tip = ""
         self.model_ready = False
         self.model_loading = False
         self.model_setup_running = False
@@ -1126,6 +1138,119 @@ class App(tk.Tk):
         # could desync the app-global flag from real worker state (P2-30).
         self.status_var.set(msg)
         self.log(msg)
+
+    # R3: device badge --------------------------------------------------------
+    def register_device_badge_label(self, label: "ttk.Label", tier_label: str = "") -> None:
+        """Register a badge Label so apply_device_badge can recolour it.
+
+        Called by tabs.py for each placement (Transcribe header + Queue
+        status line). Stores an optional tier label used in the tooltip.
+        """
+        self.device_badge_labels.append(label)
+        if tier_label:
+            self.device_badge_tip = tier_label
+        self._bind_device_badge_tooltip(label)
+
+    def apply_device_badge(self, text: str, kind: str, worker: dict[str, Any]) -> None:
+        """Set the badge text + colour from the worker's effective device.
+
+        ``kind`` is one of ``gpu`` (green), ``cpu`` (amber), ``cpu_downgraded``
+        (amber). Colours are theme-agnostic enough to read on sv_ttk's dark
+        and light palettes. The tooltip is refreshed with the full detail.
+        """
+        self.device_badge_var.set(text)
+        colour = {
+            "gpu": "#2e9e44",            # green — running on the GPU
+            "cpu": "#d08a1d",            # amber — CPU (slower)
+            "cpu_downgraded": "#d08a1d",  # amber — GPU asked, fell back to CPU
+        }.get(kind, "")
+        req = str(worker.get("requested_device") or "")
+        ct = str(worker.get("compute_type") or "")
+        dev = str(worker.get("device") or "")
+        tip = f"Transcribing on {dev or 'cpu'}"
+        if ct:
+            tip += f" ({ct})"
+        if kind in ("cpu", "cpu_downgraded"):
+            tip += (
+                ". CPU is much slower than a GPU. Open the Hardware wizard to "
+                "check for a CUDA GPU; if you have an NVIDIA card, install its "
+                "drivers + the cuDNN/cuBLAS runtime."
+            )
+        if kind == "cpu_downgraded" and req:
+            tip = f"Requested {req} but it was unavailable. " + tip
+        self.device_badge_tip = tip
+        for label in self.device_badge_labels:
+            try:
+                if colour:
+                    label.configure(foreground=colour)
+                label.configure(text=text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _bind_device_badge_tooltip(self, widget: "ttk.Label") -> None:
+        """Lightweight hover tooltip showing the full device detail.
+
+        Self-contained (no shared tooltip helper exists in the codebase yet);
+        creates a borderless Toplevel on <Enter> and destroys it on <Leave>.
+        """
+        state: dict[str, Any] = {"tip": None}
+
+        def _show(_event: Any) -> None:
+            if state["tip"] is not None or not self.device_badge_tip:
+                return
+            try:
+                tip = tk.Toplevel(widget)
+                tip.wm_overrideredirect(True)
+                x = widget.winfo_rootx() + 12
+                y = widget.winfo_rooty() + widget.winfo_height() + 4
+                tip.wm_geometry(f"+{x}+{y}")
+                tk.Label(
+                    tip, text=self.device_badge_tip, justify="left",
+                    background="#ffffe0", foreground="#000000",
+                    relief="solid", borderwidth=1, wraplength=320,
+                ).pack()
+                state["tip"] = tip
+            except Exception:  # noqa: BLE001
+                state["tip"] = None
+
+        def _hide(_event: Any) -> None:
+            tip = state["tip"]
+            state["tip"] = None
+            if tip is not None:
+                try:
+                    tip.destroy()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        widget.bind("<Enter>", _show)
+        widget.bind("<Leave>", _hide)
+
+    def warn_cpu_once(self, downgraded: bool) -> None:
+        """One-time modal + log warning that transcription is on CPU (slower).
+
+        Only invoked by TranscriptionService when the situation is actionable
+        (a CUDA->CPU downgrade, or a GPU detected-but-unusable). Kept short.
+        """
+        if downgraded:
+            msg = (
+                "Your GPU could not be used, so transcription is running on "
+                "the CPU — this is much slower.\n\n"
+                "This usually means the NVIDIA cuDNN/cuBLAS runtime is missing "
+                "or broken (not a corrupt model). Open the Hardware wizard "
+                "for details."
+            )
+        else:
+            msg = (
+                "A GPU was detected but cannot be used, so transcription is "
+                "running on the CPU — this is much slower.\n\n"
+                "Check your NVIDIA drivers and the cuDNN/cuBLAS runtime. Open "
+                "the Hardware wizard for details."
+            )
+        self.log(msg.replace("\n\n", " "))
+        try:
+            messagebox.showwarning("Running on CPU (slower)", msg, parent=self)
+        except Exception:  # noqa: BLE001
+            pass
 
     # Modal model setup -------------------------------------------------------
     def ensure_model_with_modal(self, mandatory: bool = False) -> bool:
