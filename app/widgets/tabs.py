@@ -758,7 +758,10 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
 
 
 def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
-    """Video Tiling: fill the screen with an N×N grid of one live stream."""
+    """Video Tiling: fill the screen(s) with an N×N grid of one live stream."""
+    from core.tiling import QUALITY_CHOICES, ffplay_available
+
+    cfg = app.app_config
     frame = ttk.Frame(parent, padding=16)
     frame.pack(fill="both", expand=True)
 
@@ -768,10 +771,11 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Label(
         frame,
         text=(
-            "Play one live stream as a full-screen N×N grid (a video wall). "
-            "Paste a stream URL (YouTube, X / Twitter, and the other yt-dlp "
-            "sites), pick the grid size, and Start. Press Q or Esc in the "
-            "video window — or the Stop button — to end it."
+            "Play one live stream as a full-screen N×N grid (a video wall), "
+            "optionally across several monitors. Paste a stream URL (YouTube, "
+            "X / Twitter, and the other yt-dlp sites), pick the grid size, and "
+            "Start. Press Q or Esc in the video window — or the Stop button — "
+            "to end it. Reconnect is automatic with backoff."
         ),
         wraplength=620, justify="left", foreground="#666",
     ).pack(anchor="w", pady=(4, 10))
@@ -789,19 +793,71 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Label(row2, text="Grid (N×N):").pack(side="left")
     app.tiling_divisions_var = tk.IntVar(value=3)
     ttk.Spinbox(
-        row2, from_=1, to=8, width=5, textvariable=app.tiling_divisions_var,
+        row2, from_=1, to=64, width=5, textvariable=app.tiling_divisions_var,
     ).pack(side="left", padx=(8, 0))
+
+    ttk.Label(row2, text="Quality:").pack(side="left", padx=(16, 0))
+    saved_quality = cfg.get("tiling_quality", "Auto")
+    if saved_quality not in QUALITY_CHOICES:
+        saved_quality = "Auto"
+    app.tiling_quality_var = tk.StringVar(value=saved_quality)
+    quality_combo = ttk.Combobox(
+        row2, textvariable=app.tiling_quality_var, state="readonly",
+        values=QUALITY_CHOICES, width=8,
+    )
+    quality_combo.pack(side="left", padx=(8, 0))
+    quality_combo.bind(
+        "<<ComboboxSelected>>", lambda _e: app._save_tiling_prefs()
+    )
+
     ttk.Button(row2, text="Start tiling", command=app.start_tiling).pack(
         side="left", padx=(16, 4)
     )
     ttk.Button(row2, text="Stop", command=app.stop_tiling).pack(side="left")
+
+    # Options row: Mute, Multi-monitor, Auto-restart, Monitors chooser.
+    row3 = ttk.Frame(frame)
+    row3.pack(fill="x", pady=(0, 8))
+    app.tiling_mute_var = tk.BooleanVar(value=bool(cfg.get("tiling_mute", False)))
+    ttk.Checkbutton(
+        row3, text="Mute", variable=app.tiling_mute_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left")
+    app.tiling_multi_monitor_var = tk.BooleanVar(
+        value=bool(cfg.get("tiling_multi_monitor", False))
+    )
+    ttk.Checkbutton(
+        row3, text="Multi-monitor", variable=app.tiling_multi_monitor_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left", padx=(16, 0))
+    app.tiling_auto_restart_var = tk.BooleanVar(
+        value=bool(cfg.get("tiling_auto_restart", True))
+    )
+    ttk.Checkbutton(
+        row3, text="Auto-restart", variable=app.tiling_auto_restart_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left", padx=(16, 0))
+    ttk.Button(
+        row3, text="Monitors…", command=app.choose_tiling_monitors,
+    ).pack(side="left", padx=(16, 0))
+
+    # Restore the saved monitor selection (spatial indices from core.monitors).
+    saved_sel = cfg.get("tiling_selected_monitors") or []
+    app.tiling_selected_monitors = [
+        int(i) for i in saved_sel if isinstance(i, int)
+    ]
+
+    app.tiling_monitors_info_var = tk.StringVar(value="")
+    ttk.Label(
+        frame, textvariable=app.tiling_monitors_info_var, foreground="#888",
+    ).pack(anchor="w", pady=(2, 0))
+    app.refresh_tiling_monitor_info()
 
     app.tiling_status_var = tk.StringVar(value="")
     ttk.Label(
         frame, textvariable=app.tiling_status_var, foreground="#666",
     ).pack(anchor="w", pady=(6, 0))
 
-    from core.tiling import ffplay_available
     if not ffplay_available():
         ffplay_name = "ffplay.exe" if os.name == "nt" else "ffplay"
         ttk.Label(

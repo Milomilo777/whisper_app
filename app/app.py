@@ -142,6 +142,13 @@ class App(tk.Tk):
     tiling_url_var: tk.StringVar
     tiling_divisions_var: tk.IntVar
     tiling_status_var: tk.StringVar
+    tiling_quality_var: tk.StringVar
+    tiling_mute_var: tk.BooleanVar
+    tiling_multi_monitor_var: tk.BooleanVar
+    tiling_auto_restart_var: tk.BooleanVar
+    tiling_monitors_info_var: tk.StringVar
+    # Spatial monitor indices (core.monitors) ticked for multi-monitor.
+    tiling_selected_monitors: list[int]
     # Download-tab position sliders (created by tabs.build_download_tab).
     download_start_scale: "ttk.Scale"
     download_end_scale: "ttk.Scale"
@@ -2190,15 +2197,155 @@ class App(tk.Tk):
         self.refresh()
 
     # Video tiling ------------------------------------------------------------
+    def _save_tiling_prefs(self) -> None:
+        """Persist the Video Tiling tab choices to config.
+
+        Mirrors the Tk vars into ``app_config`` and saves. Surfaces a save
+        failure in the status line rather than letting the choice silently
+        revert on the next launch.
+        """
+        self.app_config["tiling_quality"] = self.tiling_quality_var.get()
+        self.app_config["tiling_mute"] = bool(self.tiling_mute_var.get())
+        self.app_config["tiling_multi_monitor"] = bool(
+            self.tiling_multi_monitor_var.get()
+        )
+        self.app_config["tiling_auto_restart"] = bool(
+            self.tiling_auto_restart_var.get()
+        )
+        self.app_config["tiling_selected_monitors"] = list(
+            getattr(self, "tiling_selected_monitors", [])
+        )
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not save tiling settings: {e}")
+
+    def refresh_tiling_monitor_info(self) -> None:
+        """Update the detected-monitors info line under the tiling controls."""
+        try:
+            from core.monitors import list_monitors
+            mons = list_monitors()
+            sel = [
+                m for m in mons
+                if m["index"] in getattr(self, "tiling_selected_monitors", [])
+            ]
+            txt = ", ".join("#{}".format(m["index"] + 1) for m in sel) or "none"
+            self.tiling_monitors_info_var.set(
+                f"Detected {len(mons)} monitor(s).  "
+                f"Selected for multi-monitor: {txt}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def identify_tiling_monitors(self) -> None:
+        """Flash each monitor's number on its own borderless overlay (~2.5s)."""
+        try:
+            from core.monitors import list_monitors
+            wins: list[tk.Toplevel] = []
+            for m in list_monitors():
+                w = tk.Toplevel(self)
+                w.overrideredirect(True)
+                w.geometry(
+                    "{w}x{h}+{x}+{y}".format(
+                        w=m["width"], h=m["height"], x=m["x"], y=m["y"]
+                    )
+                )
+                w.configure(bg="black")
+                try:
+                    w.attributes("-topmost", True)
+                except Exception:  # noqa: BLE001
+                    pass
+                tk.Label(
+                    w, text=str(m["index"] + 1), fg="#39d0ff", bg="black",
+                    font=("Helvetica", 240, "bold"),
+                ).pack(expand=True)
+                wins.append(w)
+            self.after(2500, lambda: [w.destroy() for w in wins])
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Identify monitors failed: {e}")
+
+    def choose_tiling_monitors(self) -> None:
+        """Modal chooser: tick which monitors get a tiled-playback window."""
+        from core.monitors import describe, list_monitors
+        monitors = list_monitors()
+        dlg = tk.Toplevel(self)
+        dlg.title("Select monitors")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+        ttk.Label(
+            dlg, text="Tick the monitors to use for tiled playback:",
+        ).pack(padx=12, pady=(12, 6), anchor="w")
+        rows: list[tuple[int, tk.BooleanVar]] = []
+        current = getattr(self, "tiling_selected_monitors", [])
+        for m in monitors:
+            var = tk.BooleanVar(value=(m["index"] in current))
+            ttk.Checkbutton(dlg, text=describe(m), variable=var).pack(
+                padx=18, pady=2, anchor="w"
+            )
+            rows.append((m["index"], var))
+
+        def set_all(value: bool) -> None:
+            for _, v in rows:
+                v.set(value)
+
+        def apply_sel() -> None:
+            chosen = [idx for idx, v in rows if v.get()]
+            if not chosen:
+                messagebox.showwarning(
+                    "Monitors", "Please tick at least one monitor.", parent=dlg
+                )
+                return
+            self.tiling_selected_monitors = chosen
+            if len(chosen) > 1:
+                self.tiling_multi_monitor_var.set(True)
+            self._save_tiling_prefs()
+            self.refresh_tiling_monitor_info()
+            dlg.destroy()
+
+        helpers = ttk.Frame(dlg)
+        helpers.pack(pady=(8, 0))
+        ttk.Button(
+            helpers, text="Select all", command=lambda: set_all(True)
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            helpers, text="Select none", command=lambda: set_all(False)
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            helpers, text="Identify", command=self.identify_tiling_monitors
+        ).pack(side="left", padx=6)
+        btns = ttk.Frame(dlg)
+        btns.pack(pady=12)
+        ttk.Button(btns, text="OK", width=10, command=apply_sel).pack(
+            side="left", padx=10
+        )
+        ttk.Button(btns, text="Cancel", width=10, command=dlg.destroy).pack(
+            side="left", padx=10
+        )
+
+    def _tiling_status(self, message: str, color: str) -> None:
+        """Status callback for the tiling engine (called from its worker
+        thread). Marshals the widget update onto the Tk main thread."""
+        self.post_to_main(
+            lambda: self.tiling_status_var.set(f"Tiling: {message}")
+        )
+
     def start_tiling(self) -> None:
         try:
             self.tiling.start(
                 self.tiling_url_var.get(),
                 self.tiling_divisions_var.get(),
+                quality=self.tiling_quality_var.get(),
+                mute=bool(self.tiling_mute_var.get()),
+                multi_monitor=bool(self.tiling_multi_monitor_var.get()),
+                selected_monitors=list(
+                    getattr(self, "tiling_selected_monitors", [])
+                ),
+                auto_restart=bool(self.tiling_auto_restart_var.get()),
                 log=self.log,
+                status=self._tiling_status,
             )
-            n = self.tiling_divisions_var.get()
-            self.tiling_status_var.set(f"Tiling running ({n}×{n}). Stop with the button or Q/Esc in the video window.")
+            self._save_tiling_prefs()
         except (FileNotFoundError, RuntimeError) as e:
             self.tiling_status_var.set(str(e))
         except Exception as e:  # noqa: BLE001
