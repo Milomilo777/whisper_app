@@ -5,7 +5,11 @@ protocol is intentionally frozen — adding fields is safe, renaming
 or removing them breaks the parent UI.
 
 Events emitted:
-  - ``ready``                          : model loaded; accepting commands
+  - ``ready``  ([device, compute_type, requested_device, downgraded])
+                                       : model loaded; accepting commands.
+    The device fields are additive (R3) — they report which device the model
+    actually loaded onto and whether a requested CUDA load self-healed onto
+    CPU. Older parents that don't read them keep working unchanged.
   - ``startup_error``                  : model failed to load; exiting
   - ``log``       (message)             : free-text log line
   - ``progress``  (percent)             : current task progress 0–100
@@ -41,6 +45,7 @@ from .config import load_config
 from .logging_setup import setup_logging
 from .task import TranscriptionTask
 from .transcriber import (
+    get_effective_device,
     get_model_error,
     load_existing_model,
     resume_transcription,
@@ -149,7 +154,23 @@ def main() -> int:
         emit("startup_error", message=detail)
         return 1
 
-    emit("ready")
+    # R3: tell the parent which device the model actually loaded onto so the
+    # UI can show a GPU/CPU badge and warn on a silent CUDA->CPU downgrade.
+    # Strictly ADDITIVE to the frozen protocol — old parents ignore the extra
+    # fields; new parents read them with .get() defaults. Guarded so a probe
+    # failure never blocks the (essential) bare ``ready`` signal.
+    try:
+        eff = get_effective_device()
+        emit(
+            "ready",
+            device=eff.device,
+            compute_type=eff.compute_type,
+            requested_device=eff.requested_device,
+            downgraded=eff.downgraded,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not read effective device; emitting bare ready")
+        emit("ready")
 
     # Audit D8: heartbeat thread. Without this the parent has no way
     # to distinguish "worker is mid-CPU-bound-transcribe" from

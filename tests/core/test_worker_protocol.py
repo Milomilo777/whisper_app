@@ -52,6 +52,62 @@ def test_main_emits_ready_then_handles_shutdown(monkeypatch, capsys):
     assert events[0]["event"] == "ready"
 
 
+def test_ready_event_carries_effective_device_fields(monkeypatch, capsys):
+    """R3: the ready event additively reports the effective device."""
+    from core import transcriber as _t
+
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+    monkeypatch.setattr(
+        worker, "get_effective_device",
+        lambda: _t.EffectiveDevice(
+            device="cpu", compute_type="int8",
+            requested_device="cuda", downgraded=True,
+        ),
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"action": "shutdown"}) + "\n"))
+    worker.main()
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    ready = next(e for e in events if e["event"] == "ready")
+    assert ready["device"] == "cpu"
+    assert ready["compute_type"] == "int8"
+    assert ready["requested_device"] == "cuda"
+    assert ready["downgraded"] is True
+
+
+def test_ready_event_backward_compatible_parser_ignores_new_fields(monkeypatch, capsys):
+    """An OLD parser that only checks event type still works (additive proof)."""
+    from core import transcriber as _t
+
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+    monkeypatch.setattr(
+        worker, "get_effective_device",
+        lambda: _t.EffectiveDevice(
+            device="cuda", compute_type="float16",
+            requested_device="cuda", downgraded=False,
+        ),
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"action": "shutdown"}) + "\n"))
+    worker.main()
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    # A naive parser that only switches on event type sees a valid "ready".
+    assert any(e.get("event") == "ready" for e in events)
+
+
+def test_ready_falls_back_to_bare_ready_if_probe_raises(monkeypatch, capsys):
+    """If get_effective_device blows up, the essential bare ready still fires."""
+    monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
+
+    def _boom():
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(worker, "get_effective_device", _boom)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"action": "shutdown"}) + "\n"))
+    rc = worker.main()
+    assert rc == 0
+    events = [json.loads(l) for l in capsys.readouterr().out.strip().splitlines() if l.strip()]
+    assert any(e.get("event") == "ready" for e in events)
+
+
 def test_main_rejects_invalid_json_command(monkeypatch, capsys):
     monkeypatch.setattr(worker, "load_existing_model", lambda cb: True)
     inputs = "not-json\n" + json.dumps({"action": "shutdown"}) + "\n"
