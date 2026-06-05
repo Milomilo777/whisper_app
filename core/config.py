@@ -80,6 +80,20 @@ DEFAULT_CONFIG = {
     # default; whisper_cpp is opt-in via pywhispercpp; future backends slot in
     # here).
     "transcribe_backend": "faster_whisper",
+    # OPTIONAL cloud Speech-to-Text backend (Google Gemini API). Off
+    # unless the user selects transcribe_backend="cloud_stt". The API
+    # key is stored in CLEARTEXT here, consistent with how cookies and
+    # paths are already stored — config.json lives per-user under
+    # %LOCALAPPDATA%\WhisperProject and is not encrypted. Using this
+    # backend UPLOADS audio to Google (breaks the offline guarantee).
+    # cloud_stt_minutes_used is tracked LOCALLY (the $ free credit is
+    # NOT readable from an API key); cloud_stt_free_minutes_cap is just
+    # the informational free-tier figure shown in the UI.
+    "cloud_stt_api_key": "",
+    "cloud_stt_model": "gemini-3.5-flash",
+    "cloud_stt_minutes_used": 0.0,
+    "cloud_stt_free_minutes_cap": 60,
+    "cloud_stt_chunk_seconds": 480,
     # v0.8 — hallucination detector (BoH + repetition + optional VAD
     # disagreement). Flags segments in the JSON output and the viewer.
     "hallucination_detect_enabled": True,

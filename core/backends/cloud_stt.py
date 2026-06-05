@@ -1,0 +1,772 @@
+"""Optional cloud Speech-to-Text backend via the Google Gemini API.
+
+This backend uploads audio to Google and transcribes it with a Gemini
+multimodal model. It is **opt-in** and breaks the project's "everything
+stays on this machine" guarantee — the audio leaves the device. The UI
+makes that trade-off loud; this module just implements the transport.
+
+Why the Gemini API and NOT Google Cloud Speech-to-Text
+-------------------------------------------------------
+Google *Cloud* Speech-to-Text (the ``speech.googleapis.com`` v2 service)
+does **not** authenticate with a simple pasted API key — it needs a GCP
+project plus a service-account / OAuth JSON credential. That defeats the
+goal of "the user pastes a key from a web page and it just works", so we
+do not target it.
+
+The only Google speech path that works with a *bare pasted key* (the kind
+you copy from https://aistudio.google.com/apikey) is the **Gemini API**
+on ``generativelanguage.googleapis.com`` with ``?key=<API_KEY>``. So this
+backend targets the Gemini ``generateContent`` audio-understanding flow
+and asks the model to produce a verbatim, timestamped transcript.
+
+On the "$300 / 90-day free credit"
+-----------------------------------
+That credit balance is a Cloud Billing concept and is **not readable from
+an API key** (the Cloud Billing API needs OAuth / a service account). So
+this backend does NOT display a live "$300 remaining" figure. Instead it
+tracks *minutes transcribed* locally (``cloud_stt_minutes_used`` in
+config) and the UI links to Google's billing console. The local counter
+is an estimate of usage, not an authoritative balance.
+
+Verified request shape (Google AI / Gemini API docs, fetched 2026-06-06)
+------------------------------------------------------------------------
+* generateContent endpoint + API-key query param, inline base64 ``parts``,
+  the 20 MB inline limit, and the ``file_data``/``file_uri`` reference:
+  https://ai.google.dev/gemini-api/docs/audio
+* Files API resumable upload (``X-Goog-Upload-*`` headers) + polling the
+  uploaded file until ``state == "ACTIVE"``:
+  https://ai.google.dev/gemini-api/docs/files
+* Current model list — ``gemini-2.0-flash`` was shut down 2026-06-01;
+  ``gemini-3.5-flash`` is the current GA flash model (released
+  2026-05-19) and the default here:
+  https://ai.google.dev/gemini-api/docs/models
+  https://ai.google.dev/gemini-api/docs/changelog
+
+Because we chunk the audio (~8 min windows) each chunk usually exceeds the
+20 MB *inline* request cap once decoded, so the Files API upload path is
+the default. ``_should_inline`` keeps the inline path available for very
+small chunks / future tuning.
+
+No new third-party dependency: every HTTP call uses ``urllib.request``
+from the stdlib (mirroring ``core/backends/whisper_cpp.py``'s download
+style). Audio is decoded + chunked to FLAC with the bundled ffmpeg.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from .._liveness_tick import liveness_tick
+from ..config import load_config
+from .base import Backend, LanguageInfo
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------- constants
+
+API_HOST = "https://generativelanguage.googleapis.com"
+API_VERSION = "v1beta"
+#: Default model. A CONFIG value (``cloud_stt_model``) overrides it so a
+#: renamed / newer model needs no code change. See module docstring for
+#: why this is the current GA flash model.
+DEFAULT_MODEL = "gemini-3.5-flash"
+#: The Gemini inline-request hard cap is 20 MB *including* the prompt; we
+#: only inline well under it. Anything larger goes through the Files API.
+INLINE_LIMIT_BYTES = 18 * 1024 * 1024
+#: How long to wait for an uploaded file to reach state ACTIVE.
+FILE_ACTIVE_TIMEOUT_S = 120.0
+#: Per-request network timeout for the generateContent call.
+GENERATE_TIMEOUT_S = 600.0
+
+#: FLAC is lossless, far smaller than WAV, and a Gemini-supported mime.
+CHUNK_MIME = "audio/flac"
+CHUNK_EXT = ".flac"
+
+#: The transcription instruction. Asks for strict verbatim output with
+#: per-line timestamps we can parse back into segments. Kept terse so the
+#: model spends its budget transcribing, not narrating.
+_PROMPT_TEMPLATE = (
+    "Transcribe this audio VERBATIM. Output ONLY the transcript, no "
+    "preamble, no commentary, no markdown fences. Use one line per "
+    "utterance in EXACTLY this format:\n"
+    "[HH:MM:SS.mmm --> HH:MM:SS.mmm] text\n"
+    "Timestamps are relative to the START of THIS audio clip. Do not "
+    "translate; transcribe in the spoken language.{lang_hint}"
+)
+
+
+# ---------------------------------------------------------------- pure seams
+# Everything in this block is network-free and unit-testable.
+
+
+def build_generate_request(
+    *,
+    model: str,
+    prompt: str,
+    file_uri: str | None = None,
+    file_mime: str = CHUNK_MIME,
+    inline_b64: str | None = None,
+    inline_mime: str = CHUNK_MIME,
+) -> tuple[str, dict[str, Any]]:
+    """Build the (url, json_body) for a generateContent call.
+
+    Exactly one of ``file_uri`` (Files API reference) or ``inline_b64``
+    (inline base64 audio) must be given. Returns the endpoint URL WITHOUT
+    the ``?key=`` query (the key is appended by the caller so it never
+    appears in logs / test fixtures) and the request body dict.
+
+    The field names match the Gemini REST docs: ``contents`` -> ``parts``
+    with a ``text`` part plus either a ``file_data`` part
+    (``mime_type`` + ``file_uri``) or an ``inline_data`` part
+    (``mime_type`` + ``data``).
+    """
+    if (file_uri is None) == (inline_b64 is None):
+        raise ValueError(
+            "build_generate_request needs exactly one of file_uri / inline_b64"
+        )
+    url = f"{API_HOST}/{API_VERSION}/models/{model}:generateContent"
+    media_part: dict[str, Any]
+    if file_uri is not None:
+        media_part = {"file_data": {"mime_type": file_mime, "file_uri": file_uri}}
+    else:
+        media_part = {"inline_data": {"mime_type": inline_mime, "data": inline_b64}}
+    body: dict[str, Any] = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    media_part,
+                ],
+            }
+        ],
+        # Deterministic-ish verbatim output: low temperature, no fancy
+        # sampling. Kept minimal so it survives model renames.
+        "generationConfig": {"temperature": 0.0},
+    }
+    return url, body
+
+
+def build_prompt(language: str | None) -> str:
+    """Build the transcription prompt, optionally hinting a language.
+
+    ``language`` is the already-normalised Whisper-style code (e.g.
+    ``"en"``, ``"fa"``) or None for auto-detect.
+    """
+    if language:
+        hint = (
+            f"\nThe spoken language is '{language}'; transcribe in that "
+            "language."
+        )
+    else:
+        hint = ""
+    return _PROMPT_TEMPLATE.format(lang_hint=hint)
+
+
+_TS_LINE = re.compile(
+    r"""^\s*
+    \[?\s*
+    (?P<start>\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?|\d{1,2}:\d{2}(?:[.,]\d{1,3})?)
+    \s*-->\s*
+    (?P<end>\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?|\d{1,2}:\d{2}(?:[.,]\d{1,3})?)
+    \s*\]?\s*
+    (?P<text>.*\S)\s*$
+    """,
+    re.VERBOSE,
+)
+
+
+def _parse_ts(value: str) -> float:
+    """Parse ``HH:MM:SS.mmm`` / ``MM:SS.mmm`` into seconds."""
+    value = value.strip().replace(",", ".")
+    parts = value.split(":")
+    parts_f = [float(p) for p in parts]
+    if len(parts_f) == 3:
+        h, m, s = parts_f
+    elif len(parts_f) == 2:
+        h, m, s = 0.0, parts_f[0], parts_f[1]
+    else:  # pragma: no cover — regex guarantees 2 or 3 parts
+        h, m, s = 0.0, 0.0, parts_f[0]
+    return h * 3600.0 + m * 60.0 + s
+
+
+def extract_text_from_response(resp: dict[str, Any]) -> str:
+    """Pull the concatenated text out of a Gemini generateContent JSON.
+
+    Surfaces a clear RuntimeError when the model returned no usable text
+    (e.g. a safety block, an empty candidate, or a finishReason other
+    than STOP), so the caller never silently writes an empty transcript.
+    """
+    if "error" in resp:
+        err = resp["error"]
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise RuntimeError(f"Gemini API error: {msg or 'unknown error'}")
+    candidates = resp.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        # A promptFeedback block (whole-prompt safety reject) lives here.
+        feedback = resp.get("promptFeedback")
+        if isinstance(feedback, dict) and feedback.get("blockReason"):
+            raise RuntimeError(
+                f"Gemini blocked the request: {feedback.get('blockReason')}"
+            )
+        raise RuntimeError("Gemini response contained no candidates.")
+    first = candidates[0]
+    if not isinstance(first, dict):
+        raise RuntimeError("Gemini response candidate was malformed.")
+    content = first.get("content")
+    parts = content.get("parts") if isinstance(content, dict) else None
+    texts: list[str] = []
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+    text = "".join(texts).strip()
+    if not text:
+        reason = first.get("finishReason")
+        if reason and reason != "STOP":
+            raise RuntimeError(
+                f"Gemini returned no transcript (finishReason={reason}). "
+                "The clip may have been blocked or exceeded the output limit."
+            )
+        raise RuntimeError("Gemini returned an empty transcript for this clip.")
+    return text
+
+
+def parse_transcript_to_segments(text: str) -> list[dict[str, Any]]:
+    """Parse the model's timestamped lines into segment dicts.
+
+    Each recognised line ``[HH:MM:SS.mmm --> HH:MM:SS.mmm] text`` becomes
+    ``{"start": float, "end": float, "text": str}``. Lines without a
+    timestamp prefix are appended to the previous segment's text (the
+    model occasionally wraps a long utterance). When NO line matches the
+    expected shape but there IS text, the whole thing is returned as a
+    single ``start=0`` segment so the user still gets output instead of
+    an empty file.
+    """
+    segments: list[dict[str, Any]] = []
+    stripped = text.strip()
+    if not stripped:
+        return []
+    for raw_line in stripped.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Drop a stray markdown fence if the model added one despite the
+        # prompt.
+        if line.startswith("```"):
+            continue
+        m = _TS_LINE.match(line)
+        if m:
+            try:
+                start = _parse_ts(m.group("start"))
+                end = _parse_ts(m.group("end"))
+            except ValueError:
+                # A malformed timestamp on an otherwise-matching line:
+                # treat the whole line as continuation text rather than
+                # crashing the whole transcript.
+                if segments:
+                    segments[-1]["text"] = (
+                        segments[-1]["text"] + " " + line
+                    ).strip()
+                continue
+            segments.append({
+                "start": float(start),
+                "end": float(max(end, start)),
+                "text": m.group("text").strip(),
+            })
+        elif segments:
+            # Continuation of the previous utterance.
+            segments[-1]["text"] = (segments[-1]["text"] + " " + line).strip()
+        else:
+            # First line had no timestamp — start a zero-based segment.
+            segments.append({"start": 0.0, "end": 0.0, "text": line})
+    if not segments:
+        return [{"start": 0.0, "end": 0.0, "text": stripped}]
+    return segments
+
+
+def offset_segments(
+    segments: list[dict[str, Any]], offset_seconds: float
+) -> list[dict[str, Any]]:
+    """Return new segment dicts with start/end shifted by ``offset_seconds``.
+
+    Used to place a chunk's chunk-relative timestamps onto the global
+    file timeline. Pure — does not mutate the input. Any nested
+    ``words`` list (start/end) is shifted too.
+    """
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        new_seg = dict(seg)
+        new_seg["start"] = float(seg.get("start", 0.0)) + offset_seconds
+        new_seg["end"] = float(seg.get("end", 0.0)) + offset_seconds
+        words = seg.get("words")
+        if isinstance(words, list):
+            new_words: list[dict[str, Any]] = []
+            for w in words:
+                if isinstance(w, dict):
+                    nw = dict(w)
+                    if "start" in nw:
+                        nw["start"] = float(nw.get("start", 0.0)) + offset_seconds
+                    if "end" in nw:
+                        nw["end"] = float(nw.get("end", 0.0)) + offset_seconds
+                    new_words.append(nw)
+            new_seg["words"] = new_words
+        out.append(new_seg)
+    return out
+
+
+def plan_chunks(duration: float, chunk_seconds: float) -> list[tuple[float, float]]:
+    """Split ``[0, duration]`` into (start, end) windows of ``chunk_seconds``.
+
+    Pure. Returns at least one chunk even for a zero / unknown duration so
+    a file with an unreadable duration still gets transcribed whole.
+    """
+    if chunk_seconds <= 0:
+        chunk_seconds = 480.0
+    if duration <= 0:
+        return [(0.0, 0.0)]  # 0.0 end = "to end of file" for the slicer
+    chunks: list[tuple[float, float]] = []
+    start = 0.0
+    while start < duration - 0.001:
+        end = min(start + chunk_seconds, duration)
+        chunks.append((start, end))
+        start = end
+    return chunks or [(0.0, duration)]
+
+
+def _should_inline(num_bytes: int) -> bool:
+    """True when a chunk is small enough to send inline (base64)."""
+    return num_bytes <= INLINE_LIMIT_BYTES
+
+
+def classify_http_error(status: int, body: str) -> str:
+    """Map an HTTP status + body into a clear, user-facing message.
+
+    Keeps the raw traceback out of the UI (mirrors parakeet's
+    error-translation style).
+    """
+    snippet = (body or "").strip()[:300]
+    if status in (401, 403):
+        return (
+            "Invalid Google API key (or it lacks Gemini API access). "
+            "Check the key in Advanced > Backend, or get a new one at "
+            "aistudio.google.com. "
+            f"[HTTP {status}] {snippet}"
+        )
+    if status == 429:
+        return (
+            "Free quota reached for this Google API key — see Google AI "
+            "Studio (aistudio.google.com) for your limits, or wait and "
+            f"retry later. [HTTP 429] {snippet}"
+        )
+    if status == 404:
+        return (
+            f"The cloud model was not found (it may have been renamed or "
+            f"retired). Set a current model name in Advanced > Backend. "
+            f"[HTTP 404] {snippet}"
+        )
+    if status >= 500:
+        return (
+            f"Google's servers returned an error — try again later. "
+            f"[HTTP {status}] {snippet}"
+        )
+    return f"Cloud transcription failed [HTTP {status}]: {snippet}"
+
+
+# ---------------------------------------------------------------- backend
+
+
+class CloudSttBackend(Backend):
+    """Gemini-API cloud transcription backend.
+
+    Stateless apart from the API key + model read from config at load().
+    Each ``transcribe_to_segments`` call decodes the audio to FLAC,
+    chunks it, uploads + transcribes each chunk, and stitches the
+    chunk-relative segments onto the global timeline.
+    """
+
+    name = "cloud_stt"
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self._config = config
+        self._api_key: str = ""
+        self._model: str = DEFAULT_MODEL
+        self._chunk_seconds: float = 480.0
+        self._error: str | None = None
+        self._ready = False
+        self._lock = threading.Lock()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def _cfg(self) -> dict[str, Any]:
+        return self._config if self._config is not None else load_config()
+
+    def load(
+        self,
+        status_cb: Callable[[str], None] | None = None,
+        progress_cb: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        self._ready = False
+        self._error = None
+        cfg = self._cfg()
+        self._api_key = str(cfg.get("cloud_stt_api_key") or "").strip()
+        self._model = str(cfg.get("cloud_stt_model") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        try:
+            self._chunk_seconds = float(cfg.get("cloud_stt_chunk_seconds") or 480.0)
+        except (TypeError, ValueError):
+            self._chunk_seconds = 480.0
+        if not self._api_key:
+            self._error = (
+                "No Google API key set — paste one in Advanced > Backend "
+                "(get a free key at aistudio.google.com)."
+            )
+            if status_cb:
+                status_cb(self._error)
+            return False
+        # We deliberately do NOT make a network ping mandatory at load:
+        # construction must stay fast and offline-safe. The key is
+        # validated on the first real request (and by the Advanced
+        # dialog's explicit "Test key" button via ping_key()).
+        self._ready = True
+        if status_cb:
+            status_cb(f"Cloud STT ready (model {self._model}).")
+        if progress_cb:
+            progress_cb({
+                "phase": "loaded", "status": "Cloud backend ready",
+                "percent": 100, "detail": f"Gemini {self._model}",
+            })
+        return True
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+    def get_error(self) -> str | None:
+        return self._error
+
+    # -- key liveness ping (used by the "Test key" button) ----------------
+
+    def ping_key(self) -> tuple[bool, str]:
+        """Cheap key check: list models. Returns (ok, message).
+
+        Never raises — returns a clear message on any failure so the UI
+        thread can report it. Uses a short timeout so the daemon thread
+        the dialog spawns never hangs.
+        """
+        if not self._api_key:
+            return False, "No API key set."
+        url = f"{API_HOST}/{API_VERSION}/models?key={self._api_key}&pageSize=1"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
+                _ = resp.read(1)
+            return True, "Key OK — Gemini API reachable."
+        except urllib.error.HTTPError as e:
+            body = _read_err_body(e)
+            return False, classify_http_error(e.code, body)
+        except urllib.error.URLError as e:
+            return False, (
+                "Could not reach Google (offline or blocked): "
+                f"{getattr(e, 'reason', e)}"
+            )
+        except Exception as e:  # noqa: BLE001
+            return False, f"Key check failed: {e}"
+
+    # -- transcription -----------------------------------------------------
+
+    def transcribe_to_segments(
+        self,
+        audio_path: str,
+        *,
+        language: str | None = None,
+        want_words: bool = False,
+        vad_parameters: dict[str, Any] | None = None,
+        initial_prompt: str | None = None,
+        hotwords: str | None = None,
+        batch_size: int = 16,
+        progress_cb: Callable[[int], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        paused: Callable[[], bool] | None = None,
+        duration: float = 0.0,
+    ) -> tuple[list[dict[str, Any]], LanguageInfo]:
+        with self._lock:
+            if not self.is_ready() and not self.load(log_cb):
+                raise RuntimeError(self._error or "Cloud STT backend not ready")
+        if not self._api_key:
+            raise RuntimeError(
+                self._error or "No Google API key set for the cloud backend."
+            )
+
+        prompt = build_prompt(language)
+        chunks = plan_chunks(duration, self._chunk_seconds)
+        total = len(chunks)
+        if log_cb:
+            log_cb(
+                f"Cloud STT: uploading {total} chunk(s) to Google "
+                f"(model {self._model}). Audio leaves this machine."
+            )
+
+        all_segments: list[dict[str, Any]] = []
+        for idx, (chunk_start, chunk_end) in enumerate(chunks):
+            if cancelled and cancelled():
+                if log_cb:
+                    log_cb("Task cancelled")
+                break
+            while paused and paused() and not (cancelled and cancelled()):
+                time.sleep(0.2)
+
+            flac_path = _encode_chunk_flac(
+                audio_path, chunk_start, chunk_end
+            )
+            try:
+                with liveness_tick(log_cb, f"Cloud STT chunk {idx + 1}/{total}"):
+                    text = self._transcribe_one_chunk(flac_path, prompt)
+            finally:
+                try:
+                    os.unlink(flac_path)
+                except OSError:
+                    pass
+
+            seg = parse_transcript_to_segments(text)
+            seg = offset_segments(seg, chunk_start)
+            all_segments.extend(seg)
+
+            if progress_cb:
+                progress_cb(min(100, int(((idx + 1) / max(total, 1)) * 100)))
+            if log_cb:
+                log_cb(
+                    f"Cloud STT: chunk {idx + 1}/{total} -> "
+                    f"{len(seg)} segment(s)."
+                )
+
+        if want_words:
+            # Gemini's transcript is line-level; we don't get reliable
+            # word timings. Surface an empty list so word-timestamp
+            # writers don't KeyError (mirrors whisper_cpp).
+            for s in all_segments:
+                s.setdefault("words", [])
+
+        # The model transcribes in the spoken language; report the forced
+        # hint when given (we have no separate language-ID signal).
+        detected = language or ""
+        return all_segments, LanguageInfo(
+            language=detected, probability=1.0 if detected else 0.0
+        )
+
+    # -- one chunk: upload (or inline) + generateContent ------------------
+
+    def _transcribe_one_chunk(self, flac_path: str, prompt: str) -> str:
+        num_bytes = os.path.getsize(flac_path)
+        if _should_inline(num_bytes):
+            import base64
+            with open(flac_path, "rb") as fp:
+                b64 = base64.b64encode(fp.read()).decode("ascii")
+            url, body = build_generate_request(
+                model=self._model, prompt=prompt,
+                inline_b64=b64, inline_mime=CHUNK_MIME,
+            )
+        else:
+            file_uri = self._upload_file(flac_path, num_bytes)
+            url, body = build_generate_request(
+                model=self._model, prompt=prompt,
+                file_uri=file_uri, file_mime=CHUNK_MIME,
+            )
+        resp = self._post_json(f"{url}?key={self._api_key}", body, GENERATE_TIMEOUT_S)
+        return extract_text_from_response(resp)
+
+    # -- Files API resumable upload ---------------------------------------
+
+    def _upload_file(self, path: str, num_bytes: int) -> str:
+        """Upload ``path`` via the Files API, return its file_uri.
+
+        Resumable two-step protocol: start (get an upload URL) then
+        upload+finalize, then poll the file until ``state == "ACTIVE"``.
+        """
+        start_url = f"{API_HOST}/upload/{API_VERSION}/files?key={self._api_key}"
+        start_req = urllib.request.Request(
+            start_url,
+            data=json.dumps({"file": {"display_name": os.path.basename(path)}}).encode("utf-8"),
+            method="POST",
+            headers={
+                "X-Goog-Upload-Protocol": "resumable",
+                "X-Goog-Upload-Command": "start",
+                "X-Goog-Upload-Header-Content-Length": str(num_bytes),
+                "X-Goog-Upload-Header-Content-Type": CHUNK_MIME,
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(start_req, timeout=120) as resp:  # noqa: S310
+                upload_url = resp.headers.get("X-Goog-Upload-URL")
+                resp.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(classify_http_error(e.code, _read_err_body(e))) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"Could not reach Google to upload audio: {getattr(e, 'reason', e)}"
+            ) from e
+        if not upload_url:
+            raise RuntimeError(
+                "Gemini Files API did not return an upload URL "
+                "(X-Goog-Upload-URL missing)."
+            )
+
+        with open(path, "rb") as fp:
+            data = fp.read()
+        up_req = urllib.request.Request(
+            upload_url,
+            data=data,
+            method="POST",
+            headers={
+                "Content-Length": str(num_bytes),
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+        )
+        try:
+            with urllib.request.urlopen(up_req, timeout=300) as resp:  # noqa: S310
+                meta = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(classify_http_error(e.code, _read_err_body(e))) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"Audio upload to Google failed: {getattr(e, 'reason', e)}"
+            ) from e
+
+        file_obj = meta.get("file") if isinstance(meta, dict) else None
+        if not isinstance(file_obj, dict):
+            raise RuntimeError("Gemini Files API returned an unexpected response.")
+        file_uri = file_obj.get("uri")
+        file_name = file_obj.get("name")
+        state = file_obj.get("state")
+        if not file_uri or not file_name:
+            raise RuntimeError("Gemini Files API response missing file uri/name.")
+        if state != "ACTIVE":
+            self._wait_for_active(str(file_name))
+        return str(file_uri)
+
+    def _wait_for_active(self, file_name: str) -> None:
+        """Poll GET /files/{name} until state==ACTIVE (or FAILED/timeout)."""
+        url = f"{API_HOST}/{API_VERSION}/{file_name}?key={self._api_key}"
+        deadline = time.time() + FILE_ACTIVE_TIMEOUT_S
+        while time.time() < deadline:
+            req = urllib.request.Request(url, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                    meta = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                raise RuntimeError(classify_http_error(e.code, _read_err_body(e))) from e
+            except urllib.error.URLError as e:
+                raise RuntimeError(
+                    f"Could not check uploaded-file status: {getattr(e, 'reason', e)}"
+                ) from e
+            state = meta.get("state") if isinstance(meta, dict) else None
+            if state == "ACTIVE":
+                return
+            if state == "FAILED":
+                raise RuntimeError("Google could not process the uploaded audio.")
+            time.sleep(2.0)
+        raise RuntimeError(
+            "Timed out waiting for Google to process the uploaded audio."
+        )
+
+    # -- POST + JSON helper ------------------------------------------------
+
+    def _post_json(
+        self, url: str, body: dict[str, Any], timeout: float
+    ) -> dict[str, Any]:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(classify_http_error(e.code, _read_err_body(e))) from e
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                "Could not reach Google for transcription (offline or "
+                f"blocked): {getattr(e, 'reason', e)}"
+            ) from e
+
+
+# ---------------------------------------------------------------- helpers
+
+
+def _read_err_body(e: urllib.error.HTTPError) -> str:
+    try:
+        return e.read().decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _encode_chunk_flac(
+    audio_path: str, start_seconds: float, end_seconds: float
+) -> str:
+    """Decode ``audio_path[start:end]`` to a temp 16 kHz mono FLAC file.
+
+    Uses the bundled ffmpeg (same approach as the parakeet backend) so
+    the cloud backend accepts every format the Whisper backend does, and
+    so the upload is compact (16 kHz mono FLAC is ~1/10th of the source
+    bitrate for typical speech). Returns the temp file path; the caller
+    deletes it. ``end_seconds <= start_seconds`` means "to end of file".
+    """
+    import tempfile
+    from ..paths import bundled_binary
+
+    fd, out_path = tempfile.mkstemp(prefix="cloudstt-", suffix=CHUNK_EXT)
+    os.close(fd)
+
+    ffmpeg = bundled_binary("ffmpeg")
+    cmd = [ffmpeg, "-nostdin", "-loglevel", "error", "-y"]
+    if start_seconds > 0:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-i", audio_path]
+    if end_seconds > start_seconds:
+        cmd += ["-t", f"{end_seconds - start_seconds:.3f}"]
+    cmd += ["-ac", "1", "-ar", "16000", "-c:a", "flac", out_path]
+
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "check": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        subprocess.run(cmd, **kwargs)
+    except (FileNotFoundError, OSError) as e:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "ffmpeg is required to prepare audio for the cloud backend but "
+            "was not found. Use the default engine, or install ffmpeg."
+        ) from e
+    except subprocess.CalledProcessError as e:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+        detail = (e.stderr or b"").decode("utf-8", "replace").strip()[-400:]
+        raise RuntimeError(
+            "ffmpeg could not prepare this file for the cloud backend "
+            f"(it may be corrupt or an unsupported format): "
+            f"{detail or 'no error output'}"
+        ) from e
+    return out_path

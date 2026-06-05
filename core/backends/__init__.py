@@ -16,6 +16,12 @@ Currently supported:
     are much smaller (e.g. ``ggml-large-v3-q5_0.bin`` ≈ 1.1 GB) and
     run on weak CPUs that struggle with the float16 faster-whisper
     build. Opt-in via the Advanced dialog.
+
+  * ``parakeet`` — NVIDIA Parakeet TDT v3 via sherpa-onnx. Opt-in.
+
+  * ``cloud_stt`` — OPTIONAL cloud transcription via the Google Gemini
+    API (uploads audio to Google; breaks the offline guarantee). Opt-in
+    via the Advanced dialog with a pasted API key.
 """
 from __future__ import annotations
 
@@ -35,6 +41,9 @@ def get_backend(name: str) -> Backend:
     if name == "parakeet":
         from .parakeet import ParakeetBackend
         return ParakeetBackend()
+    if name == "cloud_stt":
+        from .cloud_stt import CloudSttBackend
+        return CloudSttBackend()
     from .faster_whisper_be import FasterWhisperBackend
     return FasterWhisperBackend()
 
