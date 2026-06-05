@@ -107,6 +107,11 @@ def test_probe_cuda_returns_both_compute_types_when_supported(monkeypatch):
     }
     monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
     monkeypatch.setattr(hw, "_gpu_name", lambda: "RTX 9999")
+    # R3: a device alone is no longer enough — the cuDNN/cuBLAS runtime must
+    # also load. Stub the runtime gate True so this test still exercises the
+    # compute-type ordering (the broken-runtime case is covered separately in
+    # test_hardware_cuda_gate.py).
+    monkeypatch.setattr(hw, "_cuda_runtime_dlls_loadable", lambda: True)
     tiers = hw._probe_cuda()
     slugs = [t.slug for t in tiers]
     assert "cuda_float16" in slugs
@@ -213,6 +218,9 @@ def test_device_choice_honours_cuda_when_still_present(tmp_path, monkeypatch):
     fake_ct2 = types.ModuleType("ctranslate2")
     fake_ct2.contains_cuda_device = lambda: True  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    # R3: the persisted CUDA choice is only honoured if the runtime libs also
+    # load now; stub the gate True for this "still present" path.
+    monkeypatch.setattr(hw, "_cuda_runtime_dlls_loadable", lambda: True)
     assert hw.device_choice_from_hardware_file() == ("cuda", "float16")
 
 
