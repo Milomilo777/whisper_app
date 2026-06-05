@@ -126,6 +126,16 @@ For EACH of the three deliverables:
 If any step fails, **fix the bug and rebuild from Step 5**. Do not
 ship the release with a known install / uninstall regression.
 
+6. **In-place upgrade** (Standard installer) — without uninstalling,
+   run the NEW `...-Setup-Standard.exe` over the existing install.
+   `installer_embed.iss` uses a stable `AppId`, so this upgrades the
+   files in place: the user does NOT need to uninstall first. Confirm
+   the new version launches, the Start-menu shortcut still works, and
+   `%LOCALAPPDATA%\WhisperProject\config.json` (settings + hub choice)
+   survives. This is the path most existing users take to update; the
+   in-app **Help → Check for updates...** notify-only check just points
+   them at the download page (`core.updates`, opt-in, never auto-installs).
+
 ## Step 7 — Tag + push
 
 ```cmd

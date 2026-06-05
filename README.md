@@ -107,6 +107,8 @@ Key fields:
 | `whisper_model` | One of `large-v3` (default), `large-v3-turbo`, `distil-large-v3.5` |
 | `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt` |
 | `auto_chapters_enabled`, `hallucination_detect_enabled` | Post-process toggles |
+| `update_check_enabled` | Opt-in GitHub "update available" check (on by default; notify-only, never auto-downloads) |
+| `last_update_check` | ISO date of the last quiet update check (once-per-day throttle) |
 
 Full reference: [docs/CONFIG.md](docs/CONFIG.md).
 
@@ -118,6 +120,26 @@ paste in **Advanced > Backend**. It **breaks the offline guarantee** — use
 it only for content you may send to a cloud service. Setup, privacy, and
 quota details are in [docs/CLOUD_STT.md](docs/CLOUD_STT.md). All default
 backends remain fully offline.
+
+---
+
+## Updating to a newer version
+
+**In-place upgrade — no uninstall needed.** The Standard installer uses a
+stable application ID, so to move to a newer version you simply download
+the new `...-Setup-Standard.exe` and run it; it upgrades over the existing
+install (keeping your Start-menu shortcut and settings). You do **not** need
+to uninstall the previous version first. The Portable build is self-contained
+— just replace the old folder/EXE with the new one.
+
+**Optional update check.** The app can check GitHub for a newer release.
+It is **opt-in** (on by default, toggle `update_check_enabled`) and
+**notify-only**: it never downloads or installs anything. A quiet check
+runs at most once per day on launch and stays silent unless a newer
+version exists; if one does, it offers to open the download page in your
+browser. **Help → Check for updates...** runs the same check on demand
+and also tells you when you're already up to date. The check fails
+silently when offline (nothing is shown).
 
 ---
 

@@ -36,6 +36,8 @@ The file is read once at startup and written when the user changes a persisted s
 | `log_level` | string | `"INFO"` | Python logging level for the file handler (Phase 1.3) |
 | `auto_update_yt_dlp` | bool | `false` | Phase 0 fix to AUDIT A1: yt-dlp's `--update` is now opt-in and gated to once per launch (with `last_yt_dlp_update_check`). When this is `false`, downloads never wait on `--update`. |
 | `last_yt_dlp_update_check` | string (ISO date) | `""` | Timestamp of the last update attempt (used by the once-per-day guard inside `maybe_update_yt_dlp`) |
+| `update_check_enabled` | bool | `true` | Opt-in GitHub "update available" check (`core.updates`). When on, a quiet launch check runs at most once per day (throttled by `last_update_check`) and stays SILENT unless a newer release exists — never nagging when up to date, offline, or when the repo is private (a 404 is swallowed). When a newer release is found it offers to open the download page. It is **notify-only**: it never auto-downloads or auto-installs. Set to `false` to disable the quiet launch check; the **Help → Check for updates...** menu item still runs on demand. |
+| `last_update_check` | string (ISO date) | `""` | Date (`YYYY-MM-DD`) of the last *quiet* update check, used only for the once-per-day throttle. The manual **Help → Check for updates...** menu item ignores it. |
 
 ### Video Tiling
 
