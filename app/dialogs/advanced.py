@@ -24,6 +24,14 @@ if TYPE_CHECKING:
     from app.app import App
 
 
+# Output-format checkbox labels. Defaults to NAME.upper(); override
+# here when the registry key isn't a clean display string. ``smtv_docx``
+# is the transcription team's templated Word export.
+_FORMAT_LABELS: dict[str, str] = {
+    "smtv_docx": "SMTV transcription",
+}
+
+
 _SPONSORBLOCK_CATEGORIES = [
     ("sponsor", "Sponsor"),
     ("intro", "Intro"),
@@ -285,9 +293,11 @@ class AdvancedDialog(tk.Toplevel):
         outputs = ttk.LabelFrame(body, text="Output formats")
         outputs.pack(fill="x", pady=(0, 8))
         for i, name in enumerate(supported_formats()):
-            ttk.Checkbutton(outputs, text=name.upper(), variable=self._format_vars[name]).grid(
-                row=i // 3, column=i % 3, sticky="w", padx=8, pady=4
-            )
+            ttk.Checkbutton(
+                outputs,
+                text=_FORMAT_LABELS.get(name, name.upper()),
+                variable=self._format_vars[name],
+            ).grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=4)
 
         # Whisper extras
         extras = ttk.LabelFrame(body, text="Whisper extras")
