@@ -38,7 +38,15 @@ def _karaoke_payload(seg: dict) -> str:
             except (TypeError, ValueError):
                 ts_seconds = 0.0
         ts = fmt_vtt_time(ts_seconds)
-        token = escape_cue_separator((w.get("word") or "").strip())
+        # The word text can be a non-string (e.g. a number) in a
+        # hand-edited / externally produced JSON re-fed for re-export.
+        # ``(w.get("word") or "")`` keeps that non-string truthy value,
+        # so the bare ``.strip()`` would AttributeError and abort the
+        # whole VTT write. Coerce to str defensively (mirroring
+        # speaker_prefix) before the string ops.
+        word_val = w.get("word")
+        word_text = "" if word_val is None else str(word_val)
+        token = escape_cue_separator(word_text.strip())
         if not token:
             continue
         if parts:
