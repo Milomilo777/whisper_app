@@ -86,6 +86,9 @@ def test_server_task_mirrors_engine_read_attributes():
         language = "en"
         formats = ["srt", "txt"]
         cancelled = False
+        paused = False
+        clip_start = None
+        clip_end = None
 
     task = jobs_mod._ServerTask(_FakeJob())  # type: ignore[arg-type]
     for attr in (
@@ -300,8 +303,11 @@ def test_public_dict_shape(tmp_path):
         job = mgr.get(jid)
         assert job is not None
         d = job.public_dict()
-        assert set(d) == {"job_id", "status", "progress", "error", "outputs"}
+        assert set(d) == {
+            "job_id", "status", "progress", "error", "paused", "outputs",
+        }
         assert d["job_id"] == jid
+        assert d["paused"] is False
         for o in d["outputs"]:
             assert set(o) == {"fmt", "name"}
     finally:
