@@ -817,6 +817,16 @@ class AdvancedDialog(tk.Toplevel):
                 cfg["whisper_model"] = new_slug
                 cfg["model"] = entry
                 cfg["model_path"] = ""
+                # Stop any live worker so the OLD model stops transcribing.
+                # The worker loads the model once at spawn and keeps it hot;
+                # rewriting cfg alone left it serving the previous model until
+                # the process happened to restart. stop_all() forces a fresh
+                # worker (loading the new model) on the next transcribe — the
+                # same mechanism _offer_optional_install uses after an install.
+                try:
+                    self.app.transcription_service.stop_all()
+                except Exception as e:  # noqa: BLE001
+                    self.app.log(f"Could not restart the transcription worker: {e}")
                 self.app.log(
                     f"Whisper model changed to {new_slug}. The new model "
                     "will download on the next transcription."
