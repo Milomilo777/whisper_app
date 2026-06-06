@@ -1,0 +1,1096 @@
+"""Optional REAL Google **Cloud** Speech-to-Text v2 backend.
+
+This is distinct from ``core/backends/cloud_stt.py`` (the Gemini-API
+"paste a free key" backend). This backend targets the production
+``speech.googleapis.com`` v2 service, which:
+
+  * Authenticates with a **service-account JSON file** (NOT a pasted API
+    key). The user downloads it from the Google Cloud console
+    (IAM & Admin > Service Accounts > Keys) and points the app at it.
+  * Returns real word-level timestamps and (optionally) speaker
+    diarization labels.
+
+Like the Gemini backend it **uploads audio to Google** and therefore
+breaks the project's offline guarantee — the UI makes that loud.
+
+Two modes (config ``gcloud_stt_batch_mode``)
+--------------------------------------------
+* **STANDARD (online, default)** — ``client.recognize`` accepts inline
+  audio only up to ~1 minute / ~10 MB per request, so we decode the file
+  to 16 kHz mono FLAC with the bundled ffmpeg, split it into <=~55 s
+  chunks, call ``recognize`` per chunk inline, offset each chunk's
+  timestamps by the chunk start, and stitch. No Google Cloud Storage
+  needed. (~$0.016/min)
+* **BATCH (cheaper, slower)** — v2 ``batch_recognize`` only accepts a
+  ``gs://`` URI, so this mode REQUIRES a user-configured GCS bucket
+  (``gcloud_stt_bucket``). We upload the decoded audio, run a
+  long-running batch op with ``ProcessingStrategy.DYNAMIC_BATCHING``
+  (~75% cheaper, up to ~24 h turnaround), read the inline result, and
+  delete the uploaded blob. Needs ``google-cloud-storage`` (on-demand).
+  If no bucket is configured, batch is refused with a clear message.
+
+Verified request shapes (Google Cloud STT v2 docs, fetched 2026-06-06)
+----------------------------------------------------------------------
+* Synchronous recognize (``SpeechClient.recognize``), the special
+  ``recognizers/_`` inline recognizer path, ``RecognitionConfig`` with
+  ``auto_decoding_config`` / ``explicit_decoding_config``,
+  ``language_codes``, ``model``, ``features`` (word time offsets +
+  ``SpeakerDiarizationConfig``):
+  https://docs.cloud.google.com/speech-to-text/v2/docs/transcribe-client-libraries
+* Batch recognize (``BatchRecognizeRequest`` with
+  ``BatchRecognizeFileMetadata(uri="gs://...")``,
+  ``RecognitionOutputConfig(inline_response_config=InlineOutputConfig())``,
+  the long-running operation, and reading
+  ``response.results[uri].transcript.results``):
+  https://docs.cloud.google.com/speech-to-text/v2/docs/batch-recognize
+* ``WordInfo`` fields (``word``, ``start_offset`` / ``end_offset`` are
+  ``google.protobuf.duration_pb2.Duration``, exposed as
+  ``datetime.timedelta`` at the proto-plus attribute level;
+  ``confidence``, ``speaker_label``):
+  https://docs.cloud.google.com/python/docs/reference/speech/latest/google.cloud.speech_v2.types.WordInfo
+* Available models (``long`` is the long-form default; ``short``,
+  ``chirp``, ``chirp_2``, ``telephony``…):
+  https://docs.cloud.google.com/speech-to-text/v2/docs/speech-to-text-supported-languages
+
+The heavy ``google-cloud-speech`` / ``google-cloud-storage`` libraries
+are installed **on demand** via ``core.optional_deps`` (feature key
+``google_cloud_stt``); they are NEVER bundled into the slim embed tree
+(mirrors how ``alignment`` / ``whisper_backend`` pull torch on demand).
+Audio is decoded + chunked to FLAC with the bundled ffmpeg.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import logging
+import os
+import subprocess
+import threading
+import time
+from typing import Any, Callable
+
+from .._liveness_tick import liveness_tick
+from ..config import load_config
+from .base import Backend, LanguageInfo
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------- constants
+
+#: Default v2 model. A CONFIG value (``gcloud_stt_model``) overrides it so
+#: a renamed / newer model needs no code change. ``long`` is Google's
+#: recommended general model for long-form audio.
+DEFAULT_MODEL = "long"
+#: Default location/region. ``global`` works for the common models
+#: (``long`` / ``short`` / ``chirp_2``). Some newer models are region-only;
+#: a config value (``gcloud_stt_location``) overrides this.
+DEFAULT_LOCATION = "global"
+#: STANDARD (online) recognize caps inline audio at ~1 min / ~10 MB. Keep
+#: chunks comfortably under the 1-minute wall so a chunk never gets
+#: rejected for length. A config value (``gcloud_stt_chunk_seconds``)
+#: overrides this.
+DEFAULT_CHUNK_SECONDS = 55.0
+
+#: FLAC is lossless, far smaller than WAV, and a v2-supported encoding the
+#: ``auto_decoding_config`` recogniser detects without an explicit config.
+CHUNK_MIME = "audio/flac"
+CHUNK_EXT = ".flac"
+
+
+# ---------------------------------------------------------------- availability
+
+
+def runtime_available() -> bool:
+    """True iff the google-cloud-speech client imports cleanly.
+
+    A wrong-arch / broken native dependency can raise something other
+    than ImportError at import time (the VLC bug class), so we degrade to
+    "unavailable" on ANY exception rather than crash the worker probe.
+    """
+    try:
+        import google.cloud.speech_v2  # type: ignore[import-not-found]  # noqa: F401
+        from google.oauth2 import service_account  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def storage_available() -> bool:
+    """True iff google-cloud-storage imports (needed only for BATCH mode)."""
+    try:
+        import google.cloud.storage  # type: ignore[import-not-found]  # noqa: F401
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+# ---------------------------------------------------------------- pure seams
+# Everything in this block is network-free, google-lib-free, and
+# unit-testable with canned data.
+
+
+def read_project_id(credentials_json_path: str) -> str:
+    """Read ``project_id`` out of a service-account JSON file.
+
+    Raises a clear ``RuntimeError`` (never a raw traceback) when the file
+    is missing, unreadable, not JSON, or lacks a ``project_id`` — the
+    exact failures a non-technical user hits when they pick the wrong
+    file. Pure: only touches the filesystem, no google libs.
+    """
+    path = (credentials_json_path or "").strip()
+    if not path:
+        raise RuntimeError(
+            "Pick your Google Cloud service-account JSON file in "
+            "Advanced > Backend."
+        )
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"Service-account JSON file not found: {path}. Pick the file "
+            "you downloaded from the Google Cloud console in "
+            "Advanced > Backend."
+        )
+    try:
+        with open(path, "r", encoding="utf-8") as fp:
+            data = json.load(fp)
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise RuntimeError(
+            f"Could not read the service-account JSON file ({path}). It may "
+            f"be corrupt or not a real key file: {e}"
+        ) from e
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            "The selected file is not a valid service-account JSON key "
+            "(expected a JSON object)."
+        )
+    project_id = data.get("project_id")
+    if not project_id or not isinstance(project_id, str):
+        raise RuntimeError(
+            "The selected JSON file has no 'project_id' — it does not look "
+            "like a Google Cloud service-account key. Download a key from "
+            "IAM & Admin > Service Accounts in the Google Cloud console."
+        )
+    return project_id
+
+
+def recognizer_path(project_id: str, location: str = DEFAULT_LOCATION) -> str:
+    """Build the inline recognizer resource path.
+
+    The special ``recognizers/_`` form means "no pre-created recognizer";
+    the request carries its own inline ``config``. Pure.
+    """
+    loc = (location or DEFAULT_LOCATION).strip() or DEFAULT_LOCATION
+    return f"projects/{project_id}/locations/{loc}/recognizers/_"
+
+
+def plan_chunks(duration: float, chunk_seconds: float) -> list[tuple[float, float]]:
+    """Split ``[0, duration]`` into (start, end) windows of ``chunk_seconds``.
+
+    Pure. Returns at least one chunk even for a zero / unknown duration so
+    a file with an unreadable duration still gets transcribed whole
+    (``(0.0, 0.0)`` end means "to end of file" for the ffmpeg slicer).
+    """
+    if chunk_seconds <= 0:
+        chunk_seconds = DEFAULT_CHUNK_SECONDS
+    if duration <= 0:
+        return [(0.0, 0.0)]
+    chunks: list[tuple[float, float]] = []
+    start = 0.0
+    while start < duration - 0.001:
+        end = min(start + chunk_seconds, duration)
+        chunks.append((start, end))
+        start = end
+    return chunks or [(0.0, duration)]
+
+
+def offset_segments(
+    segments: list[dict[str, Any]], offset_seconds: float
+) -> list[dict[str, Any]]:
+    """Return new segment dicts with start/end shifted by ``offset_seconds``.
+
+    Places a chunk's chunk-relative timestamps onto the global file
+    timeline. Pure — does not mutate the input. Any nested ``words`` list
+    (start/end) is shifted too.
+    """
+    if not offset_seconds:
+        return [dict(seg) for seg in segments]
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        new_seg = dict(seg)
+        new_seg["start"] = float(seg.get("start", 0.0)) + offset_seconds
+        new_seg["end"] = float(seg.get("end", 0.0)) + offset_seconds
+        words = seg.get("words")
+        if isinstance(words, list):
+            new_words: list[dict[str, Any]] = []
+            for w in words:
+                if isinstance(w, dict):
+                    nw = dict(w)
+                    if "start" in nw:
+                        nw["start"] = float(nw.get("start", 0.0)) + offset_seconds
+                    if "end" in nw:
+                        nw["end"] = float(nw.get("end", 0.0)) + offset_seconds
+                    new_words.append(nw)
+            new_seg["words"] = new_words
+        out.append(new_seg)
+    return out
+
+
+def _offset_to_seconds(value: Any) -> float:
+    """Convert a v2 word offset to float seconds.
+
+    proto-plus exposes ``WordInfo.start_offset`` / ``end_offset`` (a
+    protobuf ``Duration``) as a ``datetime.timedelta``; we also tolerate a
+    raw ``Duration`` (``.seconds`` + ``.nanos``) and a plain number so the
+    parser is robust across client-library versions and easy to unit-test
+    with canned values. Returns 0.0 for None / unparseable.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, _dt.timedelta):
+        return value.total_seconds()
+    # Raw protobuf Duration (seconds + nanos).
+    seconds = getattr(value, "seconds", None)
+    nanos = getattr(value, "nanos", None)
+    if seconds is not None or nanos is not None:
+        return float(seconds or 0) + float(nanos or 0) / 1e9
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_recognize_results(
+    results: Any,
+    *,
+    want_words: bool = False,
+    want_speaker: bool = False,
+) -> list[dict[str, Any]]:
+    """Convert v2 ``response.results`` into Whisper-shaped segment dicts.
+
+    Each ``SpeechRecognitionResult`` carries ``alternatives``; we take the
+    top alternative's ``transcript`` and (when requested) its per-word
+    timings + speaker labels. One result → one segment. The segment's
+    start/end come from the first/last word offsets when present, else
+    fall back to ``result_end_offset`` (the running end of the result) so
+    a words-disabled run still gets monotonically increasing timestamps.
+
+    Accepts any iterable of duck-typed result objects (real proto objects
+    OR simple namespaces in tests). Pure: no google lib import, no network.
+    """
+    segments: list[dict[str, Any]] = []
+    prev_end = 0.0
+    for result in results or []:
+        alternatives = getattr(result, "alternatives", None) or []
+        if not alternatives:
+            continue
+        top = alternatives[0]
+        text = (getattr(top, "transcript", "") or "").strip()
+        words_raw = list(getattr(top, "words", None) or [])
+
+        word_dicts: list[dict[str, Any]] = []
+        seg_speaker: str | None = None
+        for w in words_raw:
+            w_start = _offset_to_seconds(getattr(w, "start_offset", None))
+            w_end = _offset_to_seconds(getattr(w, "end_offset", None))
+            wd: dict[str, Any] = {
+                "start": w_start,
+                "end": max(w_end, w_start),
+                "word": getattr(w, "word", "") or "",
+                "probability": float(getattr(w, "confidence", 0.0) or 0.0),
+            }
+            speaker_label = getattr(w, "speaker_label", "") or ""
+            if speaker_label:
+                wd["speaker"] = speaker_label
+                if seg_speaker is None:
+                    seg_speaker = speaker_label
+            word_dicts.append(wd)
+
+        if word_dicts:
+            seg_start = word_dicts[0]["start"]
+            seg_end = max(w["end"] for w in word_dicts)
+        else:
+            # No word timings (want_words off, or model returned none) —
+            # use the result-level end offset to advance the timeline.
+            seg_start = prev_end
+            seg_end = _offset_to_seconds(getattr(result, "result_end_offset", None))
+            if seg_end <= seg_start:
+                seg_end = seg_start
+
+        if not text and not word_dicts:
+            continue
+
+        seg: dict[str, Any] = {
+            "start": float(seg_start),
+            "end": float(max(seg_end, seg_start)),
+            "text": text,
+        }
+        if want_words:
+            seg["words"] = word_dicts
+        if want_speaker and seg_speaker:
+            seg["speaker"] = seg_speaker
+        segments.append(seg)
+        prev_end = seg["end"]
+    return segments
+
+
+def normalize_language_code(code: str | None) -> str:
+    """Map a Whisper-style code (``en`` / ``fa``) to a v2 ``language_codes``
+    entry, or ``"auto"`` for auto-detect.
+
+    The v2 API accepts BCP-47 (``en-US``); a bare ISO code (``en``) is also
+    accepted by the common models, and ``["auto"]`` requests language
+    detection. We keep it simple: pass the code through (lower-cased base),
+    or ``"auto"`` when none is given. Pure.
+    """
+    if not code:
+        return "auto"
+    return code.strip().lower() or "auto"
+
+
+def build_recognition_config(
+    cloud_speech: Any,
+    *,
+    language_code: str,
+    model: str,
+    want_words: bool,
+    diarization: bool,
+    min_speakers: int = 0,
+    max_speakers: int = 0,
+) -> Any:
+    """Build a v2 ``RecognitionConfig`` for inline FLAC recognition.
+
+    ``cloud_speech`` is the ``google.cloud.speech_v2.types.cloud_speech``
+    module, injected so this builder stays import-free and unit-testable
+    with a fake module exposing the same class names. Uses
+    ``auto_decoding_config`` so the recogniser detects the FLAC encoding;
+    enables word time offsets and (optionally) speaker diarization via
+    ``RecognitionFeatures``.
+    """
+    features_kwargs: dict[str, Any] = {
+        "enable_word_time_offsets": bool(want_words),
+        "enable_word_confidence": bool(want_words),
+    }
+    if diarization:
+        diar_kwargs: dict[str, Any] = {}
+        if min_speakers > 0:
+            diar_kwargs["min_speaker_count"] = int(min_speakers)
+        if max_speakers > 0:
+            diar_kwargs["max_speaker_count"] = int(max_speakers)
+        features_kwargs["diarization_config"] = cloud_speech.SpeakerDiarizationConfig(
+            **diar_kwargs
+        )
+        # Diarization needs the word stream to carry speaker_label.
+        features_kwargs["enable_word_time_offsets"] = True
+    features = cloud_speech.RecognitionFeatures(**features_kwargs)
+    return cloud_speech.RecognitionConfig(
+        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+        language_codes=[language_code],
+        model=model,
+        features=features,
+    )
+
+
+def classify_google_error(exc: Exception) -> str:
+    """Map a google-api / client exception into a clear, user-facing message.
+
+    Keeps the raw traceback out of the UI (mirrors parakeet / cloud_stt
+    error-translation style). Pure — inspects the exception's class name +
+    message string so it needs no google import at test time.
+    """
+    name = type(exc).__name__
+    msg = str(exc) or name
+    low = msg.lower()
+    # Permission / API-not-enabled.
+    if (
+        "PermissionDenied" in name
+        or "permission_denied" in low
+        or "permission denied" in low
+        or "serviceusage" in low
+        or "service_disabled" in low
+        or "has not been used" in low
+        or "is disabled" in low
+        or "api is not enabled" in low
+    ):
+        return (
+            "Enable the Speech-to-Text API in your Google Cloud project "
+            "(console.cloud.google.com > APIs & Services), and make sure "
+            "the service account has the 'Cloud Speech-to-Text User' role. "
+            f"[{name}] {msg[:300]}"
+        )
+    # Auth / bad credentials.
+    if (
+        "Unauthenticated" in name
+        or "unauthenticated" in low
+        or "invalid_grant" in low
+        or "could not automatically determine credentials" in low
+        or "default credentials" in low
+        or "invalid jwt" in low
+    ):
+        return (
+            "Google rejected the service-account credentials. Re-download a "
+            "fresh JSON key from the Google Cloud console and pick it in "
+            f"Advanced > Backend. [{name}] {msg[:300]}"
+        )
+    # Quota / rate limit.
+    if (
+        "ResourceExhausted" in name
+        or "resource_exhausted" in low
+        or "quota" in low
+        or "429" in msg
+        or "rate limit" in low
+    ):
+        return (
+            "Google Cloud quota / rate limit reached for this project — "
+            "check your quotas in the Cloud console, or wait and retry. "
+            f"[{name}] {msg[:300]}"
+        )
+    # Bad argument (e.g. unknown model, bad language).
+    if "InvalidArgument" in name or "invalid_argument" in low:
+        return (
+            "Google rejected the request (often an unknown model name or "
+            "unsupported language). Check the model in Advanced > Backend. "
+            f"[{name}] {msg[:300]}"
+        )
+    # Offline / transport.
+    if (
+        "ServiceUnavailable" in name
+        or "unavailable" in low
+        or "failed to connect" in low
+        or "connection" in low
+        or "getaddrinfo" in low
+        or "dns" in low
+    ):
+        return (
+            "Could not reach Google Cloud (offline or blocked). Check your "
+            f"internet connection and retry. [{name}] {msg[:300]}"
+        )
+    return f"Google Cloud transcription failed [{name}]: {msg[:400]}"
+
+
+# -- monthly-usage accumulator (pure, testable) ---------------------------
+
+
+def month_marker(now: _dt.datetime | None = None) -> str:
+    """Return the ``YYYY-MM`` marker for ``now`` (UTC default). Pure."""
+    n = now or _dt.datetime.now(_dt.timezone.utc)
+    return f"{n.year:04d}-{n.month:02d}"
+
+
+def accumulate_minutes(
+    prev_minutes: float,
+    prev_month: str,
+    added_minutes: float,
+    *,
+    now: _dt.datetime | None = None,
+) -> tuple[float, str]:
+    """Roll the local minutes-used counter forward, resetting on a new month.
+
+    Returns ``(new_total_minutes, current_month_marker)``. When the stored
+    month marker differs from the current month (or is empty), the counter
+    resets to just the freshly-added minutes — the free tier (60 min/month)
+    resets monthly and is NOT readable from a service-account key, so we
+    track it locally. Pure (clock injectable for tests).
+    """
+    current = month_marker(now)
+    added = max(0.0, float(added_minutes or 0.0))
+    if (prev_month or "") != current:
+        return added, current
+    return max(0.0, float(prev_minutes or 0.0)) + added, current
+
+
+# ---------------------------------------------------------------- backend
+
+
+class GoogleCloudSttBackend(Backend):
+    """Real Google Cloud Speech-to-Text v2 backend (service-account auth)."""
+
+    name = "google_cloud_stt"
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self._config = config
+        self._error: str | None = None
+        self._ready = False
+        self._project_id: str = ""
+        self._location: str = DEFAULT_LOCATION
+        self._model: str = DEFAULT_MODEL
+        self._credentials_path: str = ""
+        self._batch_mode = False
+        self._bucket: str = ""
+        self._chunk_seconds: float = DEFAULT_CHUNK_SECONDS
+        self._diarization = False
+        self._client: Any = None
+        self._lock = threading.Lock()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def _cfg(self) -> dict[str, Any]:
+        return self._config if self._config is not None else load_config()
+
+    def load(
+        self,
+        status_cb: Callable[[str], None] | None = None,
+        progress_cb: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> bool:
+        """Validate the service-account file + read config. Cheap & offline.
+
+        Deliberately does NOT make a network call (which could hang) — the
+        client is built lazily on the first transcribe. Sets a clear
+        ``_error`` and returns False on any misconfiguration.
+        """
+        self._ready = False
+        self._error = None
+        self._client = None
+        cfg = self._cfg()
+
+        if not runtime_available():
+            self._error = (
+                "The Google Cloud Speech library is not installed. Switch to "
+                "this backend in Advanced > Backend to install it on first "
+                "use (needs internet), or use the default engine."
+            )
+            if status_cb:
+                status_cb(self._error)
+            return False
+
+        self._credentials_path = str(cfg.get("gcloud_stt_credentials_json") or "").strip()
+        self._location = str(cfg.get("gcloud_stt_location") or DEFAULT_LOCATION).strip() or DEFAULT_LOCATION
+        self._model = str(cfg.get("gcloud_stt_model") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        self._batch_mode = bool(cfg.get("gcloud_stt_batch_mode", False))
+        self._bucket = str(cfg.get("gcloud_stt_bucket") or "").strip()
+        self._diarization = bool(cfg.get("gcloud_stt_diarization", False))
+        try:
+            self._chunk_seconds = float(
+                cfg.get("gcloud_stt_chunk_seconds") or DEFAULT_CHUNK_SECONDS
+            )
+        except (TypeError, ValueError):
+            self._chunk_seconds = DEFAULT_CHUNK_SECONDS
+
+        # Validate the service-account JSON (parses + has project_id). This
+        # is the most common user error, so surface it precisely.
+        try:
+            self._project_id = read_project_id(self._credentials_path)
+        except RuntimeError as e:
+            self._error = str(e)
+            if status_cb:
+                status_cb(self._error)
+            return False
+
+        # Batch mode needs a bucket + the storage lib. Refuse cleanly here.
+        if self._batch_mode and not self._bucket:
+            self._error = (
+                "Batch mode is on but no Google Cloud Storage bucket is set. "
+                "Enter a bucket name in Advanced > Backend, or turn off batch "
+                "mode to use the standard (online) path."
+            )
+            if status_cb:
+                status_cb(self._error)
+            return False
+
+        self._ready = True
+        if status_cb:
+            mode = "batch" if self._batch_mode else "standard"
+            status_cb(
+                f"Google Cloud STT ready (project {self._project_id}, "
+                f"model {self._model}, {mode} mode)."
+            )
+        if progress_cb:
+            progress_cb({
+                "phase": "loaded",
+                "status": "Google Cloud backend ready",
+                "percent": 100,
+                "detail": f"{self._project_id} / {self._model}",
+            })
+        return True
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+    def get_error(self) -> str | None:
+        return self._error
+
+    # -- lazy client build -------------------------------------------------
+
+    def _build_client(self) -> Any:
+        """Build (and cache) the v2 ``SpeechClient`` from the JSON key.
+
+        Lazy + guarded — any failure becomes a clean RuntimeError, never a
+        raw traceback. Honours a custom ``api_endpoint`` for regional
+        locations (e.g. ``europe-west4`` needs that regional endpoint).
+        """
+        if self._client is not None:
+            return self._client
+        try:
+            from google.cloud.speech_v2 import SpeechClient  # type: ignore[import-not-found]
+            from google.oauth2 import service_account  # type: ignore[import-not-found]
+            from google.api_core import client_options as _co  # type: ignore[import-not-found]
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                "The Google Cloud Speech library failed to import. Re-select "
+                "this backend in Advanced > Backend to (re)install it."
+            ) from e
+        try:
+            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+                self._credentials_path
+            )
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(classify_google_error(e)) from e
+
+        opts = None
+        loc = (self._location or DEFAULT_LOCATION).strip()
+        if loc and loc != "global":
+            # Regional models must hit the regional endpoint.
+            opts = _co.ClientOptions(  # type: ignore[no-untyped-call]
+                api_endpoint=f"{loc}-speech.googleapis.com"
+            )
+        try:
+            self._client = SpeechClient(credentials=creds, client_options=opts)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(classify_google_error(e)) from e
+        return self._client
+
+    def _cloud_speech_types(self) -> Any:
+        from google.cloud.speech_v2.types import cloud_speech  # type: ignore[import-not-found]
+        return cloud_speech
+
+    # -- transcription -----------------------------------------------------
+
+    def transcribe_to_segments(
+        self,
+        audio_path: str,
+        *,
+        language: str | None = None,
+        want_words: bool = False,
+        vad_parameters: dict[str, Any] | None = None,
+        initial_prompt: str | None = None,
+        hotwords: str | None = None,
+        batch_size: int = 16,
+        progress_cb: Callable[[int], None] | None = None,
+        log_cb: Callable[[str], None] | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        paused: Callable[[], bool] | None = None,
+        duration: float = 0.0,
+    ) -> tuple[list[dict[str, Any]], LanguageInfo]:
+        with self._lock:
+            if not self.is_ready() and not self.load(log_cb):
+                raise RuntimeError(
+                    self._error or "Google Cloud STT backend not ready"
+                )
+
+        language_code = normalize_language_code(language)
+        # Diarization needs word offsets to carry the speaker label.
+        effective_words = bool(want_words) or self._diarization
+
+        if self._batch_mode:
+            segments = self._run_batch(
+                audio_path, language_code, effective_words, duration,
+                progress_cb, log_cb, cancelled,
+            )
+        else:
+            segments = self._run_standard(
+                audio_path, language_code, effective_words, duration,
+                progress_cb, log_cb, cancelled, paused,
+            )
+
+        # Local monthly minute accounting (free tier is 60 min/month and
+        # NOT readable from the key) — done on success only.
+        self._accumulate_usage(audio_path, duration, log_cb)
+
+        detected = language or ""
+        return segments, LanguageInfo(
+            language=detected, probability=1.0 if detected else 0.0
+        )
+
+    # -- STANDARD (online, chunked inline) --------------------------------
+
+    def _run_standard(
+        self,
+        audio_path: str,
+        language_code: str,
+        want_words: bool,
+        duration: float,
+        progress_cb: Callable[[int], None] | None,
+        log_cb: Callable[[str], None] | None,
+        cancelled: Callable[[], bool] | None,
+        paused: Callable[[], bool] | None,
+    ) -> list[dict[str, Any]]:
+        client = self._build_client()
+        cloud_speech = self._cloud_speech_types()
+        recognizer = recognizer_path(self._project_id, self._location)
+        config = build_recognition_config(
+            cloud_speech,
+            language_code=language_code,
+            model=self._model,
+            want_words=want_words,
+            diarization=self._diarization,
+            min_speakers=self._diar_min(),
+            max_speakers=self._diar_max(),
+        )
+
+        chunks = plan_chunks(duration, self._chunk_seconds)
+        total = len(chunks)
+        if log_cb:
+            log_cb(
+                f"Google Cloud STT: {total} chunk(s) to Google "
+                f"(project {self._project_id}, model {self._model}). "
+                "Audio leaves this machine."
+            )
+
+        all_segments: list[dict[str, Any]] = []
+        for idx, (chunk_start, chunk_end) in enumerate(chunks):
+            if cancelled and cancelled():
+                if log_cb:
+                    log_cb("Task cancelled")
+                break
+            while paused and paused() and not (cancelled and cancelled()):
+                time.sleep(0.2)
+
+            flac_path = _encode_chunk_flac(audio_path, chunk_start, chunk_end)
+            try:
+                with open(flac_path, "rb") as fp:
+                    content = fp.read()
+                request = cloud_speech.RecognizeRequest(
+                    recognizer=recognizer,
+                    config=config,
+                    content=content,
+                )
+                try:
+                    with liveness_tick(
+                        log_cb, f"Google Cloud STT chunk {idx + 1}/{total}"
+                    ):
+                        response = client.recognize(request=request)
+                except Exception as e:  # noqa: BLE001
+                    raise RuntimeError(classify_google_error(e)) from e
+            finally:
+                try:
+                    os.unlink(flac_path)
+                except OSError:
+                    pass
+
+            seg = parse_recognize_results(
+                getattr(response, "results", None),
+                want_words=want_words,
+                want_speaker=self._diarization,
+            )
+            seg = offset_segments(seg, chunk_start)
+            all_segments.extend(seg)
+
+            if progress_cb:
+                progress_cb(min(100, int(((idx + 1) / max(total, 1)) * 100)))
+            if log_cb:
+                log_cb(
+                    f"Google Cloud STT: chunk {idx + 1}/{total} -> "
+                    f"{len(seg)} segment(s)."
+                )
+        return all_segments
+
+    # -- BATCH (GCS upload + long-running op + inline result) -------------
+
+    def _run_batch(
+        self,
+        audio_path: str,
+        language_code: str,
+        want_words: bool,
+        duration: float,
+        progress_cb: Callable[[int], None] | None,
+        log_cb: Callable[[str], None] | None,
+        cancelled: Callable[[], bool] | None,
+    ) -> list[dict[str, Any]]:
+        if not self._bucket:
+            raise RuntimeError(
+                "Batch mode needs a Google Cloud Storage bucket. Set one in "
+                "Advanced > Backend, or turn off batch mode."
+            )
+        if not storage_available():
+            raise RuntimeError(
+                "Batch mode needs the google-cloud-storage library. Re-select "
+                "this backend in Advanced > Backend to install it, or turn "
+                "off batch mode to use the standard (online) path."
+            )
+
+        client = self._build_client()
+        cloud_speech = self._cloud_speech_types()
+        recognizer = recognizer_path(self._project_id, self._location)
+        config = build_recognition_config(
+            cloud_speech,
+            language_code=language_code,
+            model=self._model,
+            want_words=want_words,
+            diarization=self._diarization,
+            min_speakers=self._diar_min(),
+            max_speakers=self._diar_max(),
+        )
+
+        # Decode the WHOLE file once (batch accepts up to 8 h; no chunking).
+        flac_path = _encode_chunk_flac(audio_path, 0.0, 0.0)
+        gcs_uri = ""
+        blob_name = ""
+        try:
+            if log_cb:
+                log_cb("Batch submitted (cheaper, may take a while)...")
+            gcs_uri, blob_name = self._upload_to_gcs(flac_path, log_cb)
+        finally:
+            try:
+                os.unlink(flac_path)
+            except OSError:
+                pass
+
+        try:
+            request = cloud_speech.BatchRecognizeRequest(
+                recognizer=recognizer,
+                config=config,
+                files=[cloud_speech.BatchRecognizeFileMetadata(uri=gcs_uri)],
+                recognition_output_config=cloud_speech.RecognitionOutputConfig(
+                    inline_response_config=cloud_speech.InlineOutputConfig(),
+                ),
+                # Dynamic batching is ~75% cheaper (longer turnaround).
+                processing_strategy=(
+                    cloud_speech.BatchRecognizeRequest.ProcessingStrategy.DYNAMIC_BATCHING
+                ),
+            )
+            try:
+                with liveness_tick(log_cb, "Google Cloud STT batch"):
+                    operation = client.batch_recognize(request=request)
+                    response = operation.result(timeout=self._batch_timeout())
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(classify_google_error(e)) from e
+        finally:
+            # Always delete the uploaded blob, success or failure.
+            self._delete_gcs_blob(blob_name, log_cb)
+
+        segments = self._parse_batch_response(
+            response, gcs_uri, want_words
+        )
+        if progress_cb:
+            progress_cb(100)
+        if log_cb:
+            log_cb(f"Google Cloud STT (batch): {len(segments)} segment(s).")
+        return segments
+
+    def _parse_batch_response(
+        self, response: Any, gcs_uri: str, want_words: bool
+    ) -> list[dict[str, Any]]:
+        """Pull the inline transcript out of a BatchRecognizeResponse.
+
+        ``response.results`` is a map keyed by the input ``gs://`` URI; each
+        value's ``transcript`` is a ``BatchRecognizeResults`` whose
+        ``.results`` mirror the synchronous shape. We look up our URI, and
+        fall back to the single map value when the key doesn't match.
+        """
+        results_map = getattr(response, "results", None) or {}
+        file_result = None
+        try:
+            file_result = results_map.get(gcs_uri)  # type: ignore[union-attr]
+        except AttributeError:
+            file_result = None
+        if file_result is None:
+            try:
+                values = list(results_map.values())  # type: ignore[union-attr]
+            except AttributeError:
+                values = []
+            if values:
+                file_result = values[0]
+        if file_result is None:
+            raise RuntimeError(
+                "Google returned no batch results for the uploaded audio."
+            )
+        transcript = getattr(file_result, "transcript", None)
+        inner = getattr(transcript, "results", None)
+        return parse_recognize_results(
+            inner,
+            want_words=want_words,
+            want_speaker=self._diarization,
+        )
+
+    # -- GCS upload / delete ----------------------------------------------
+
+    def _upload_to_gcs(
+        self, local_path: str, log_cb: Callable[[str], None] | None
+    ) -> tuple[str, str]:
+        """Upload ``local_path`` to the configured bucket; return (uri, name)."""
+        try:
+            from google.cloud import storage  # type: ignore[import-not-found]
+            from google.oauth2 import service_account  # type: ignore[import-not-found]
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                "The google-cloud-storage library failed to import."
+            ) from e
+        try:
+            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+                self._credentials_path
+            )
+            storage_client = storage.Client(
+                project=self._project_id, credentials=creds
+            )
+            bucket = storage_client.bucket(self._bucket)
+            blob_name = f"whisper-project/{int(time.time())}-{os.path.basename(local_path)}"
+            blob = bucket.blob(blob_name)
+            blob.upload_from_filename(local_path, content_type=CHUNK_MIME)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(classify_google_error(e)) from e
+        if log_cb:
+            log_cb(f"Uploaded audio to gs://{self._bucket}/{blob_name}")
+        return f"gs://{self._bucket}/{blob_name}", blob_name
+
+    def _delete_gcs_blob(
+        self, blob_name: str, log_cb: Callable[[str], None] | None
+    ) -> None:
+        if not blob_name:
+            return
+        try:
+            from google.cloud import storage  # type: ignore[import-not-found]
+            from google.oauth2 import service_account  # type: ignore[import-not-found]
+            creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
+                self._credentials_path
+            )
+            storage_client = storage.Client(
+                project=self._project_id, credentials=creds
+            )
+            storage_client.bucket(self._bucket).blob(blob_name).delete()
+            if log_cb:
+                log_cb(f"Deleted uploaded audio gs://{self._bucket}/{blob_name}")
+        except Exception as e:  # noqa: BLE001
+            # Cleanup failure is non-fatal — the transcript already
+            # succeeded. Warn so the user can prune the bucket manually.
+            if log_cb:
+                log_cb(
+                    f"Note: could not delete uploaded audio "
+                    f"gs://{self._bucket}/{blob_name}: {e}"
+                )
+
+    # -- usage accounting --------------------------------------------------
+
+    def _accumulate_usage(
+        self,
+        audio_path: str,
+        duration: float,
+        log_cb: Callable[[str], None] | None,
+    ) -> None:
+        """Add this run's minutes to the local monthly counter (rolls over).
+
+        Uses the passed ``duration`` (already in seconds) when known, else
+        probes the file. Persists via save_config so the UI can show
+        "minutes used this month". Never raises — accounting must not break
+        a successful transcription.
+        """
+        try:
+            minutes = _minutes_for(audio_path, duration)
+            if minutes <= 0:
+                return
+            from ..config import save_config
+            cfg = self._cfg()
+            prev = float(cfg.get("gcloud_stt_minutes_used") or 0.0)
+            prev_month = str(cfg.get("gcloud_stt_minutes_month") or "")
+            new_total, marker = accumulate_minutes(prev, prev_month, minutes)
+            cfg["gcloud_stt_minutes_used"] = round(new_total, 3)
+            cfg["gcloud_stt_minutes_month"] = marker
+            # When using a live config (the default), persist it so the UI
+            # reads the updated counter. When a test injects a config dict,
+            # we still update it in place but skip the disk write.
+            if self._config is None:
+                save_config(cfg)
+            if log_cb:
+                log_cb(
+                    f"Google Cloud STT minutes this month ({marker}): "
+                    f"{new_total:.1f}"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("gcloud_stt usage accounting failed: %s", e)
+
+    # -- small config readers ---------------------------------------------
+
+    def _diar_min(self) -> int:
+        try:
+            return int(self._cfg().get("gcloud_stt_min_speakers") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _diar_max(self) -> int:
+        try:
+            return int(self._cfg().get("gcloud_stt_max_speakers") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _batch_timeout(self) -> float:
+        try:
+            return float(self._cfg().get("gcloud_stt_batch_timeout_s") or 3600.0)
+        except (TypeError, ValueError):
+            return 3600.0
+
+
+# ---------------------------------------------------------------- helpers
+
+
+def _minutes_for(audio_path: str, duration: float = 0.0) -> float:
+    """Return the audio length in MINUTES (uses ``duration`` when > 0).
+
+    Pure-ish: falls back to ``core.transcriber.get_duration`` only when the
+    caller didn't already know the length. Never raises — returns 0.0 on a
+    probe failure so usage accounting degrades silently.
+    """
+    seconds = float(duration or 0.0)
+    if seconds <= 0:
+        try:
+            from ..transcriber import get_duration
+            seconds = float(get_duration(audio_path) or 0.0)
+        except Exception:  # noqa: BLE001
+            return 0.0
+    return max(0.0, seconds / 60.0)
+
+
+def _encode_chunk_flac(
+    audio_path: str, start_seconds: float, end_seconds: float
+) -> str:
+    """Decode ``audio_path[start:end]`` to a temp 16 kHz mono FLAC file.
+
+    Uses the bundled ffmpeg (same approach as the parakeet / cloud_stt
+    backends). ``end_seconds <= start_seconds`` means "to end of file"
+    (used by batch mode, which sends the whole file). Returns the temp
+    path; the caller deletes it.
+    """
+    import tempfile
+    from ..paths import bundled_binary
+
+    fd, out_path = tempfile.mkstemp(prefix="gcloudstt-", suffix=CHUNK_EXT)
+    os.close(fd)
+
+    ffmpeg = bundled_binary("ffmpeg")
+    cmd = [ffmpeg, "-nostdin", "-loglevel", "error", "-y"]
+    if start_seconds > 0:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += ["-i", audio_path]
+    if end_seconds > start_seconds:
+        cmd += ["-t", f"{end_seconds - start_seconds:.3f}"]
+    cmd += ["-ac", "1", "-ar", "16000", "-c:a", "flac", out_path]
+
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "check": True,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    try:
+        subprocess.run(cmd, **kwargs)
+    except (FileNotFoundError, OSError) as e:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "ffmpeg is required to prepare audio for the Google Cloud "
+            "backend but was not found. Use the default engine, or install "
+            "ffmpeg."
+        ) from e
+    except subprocess.CalledProcessError as e:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+        detail = (e.stderr or b"").decode("utf-8", "replace").strip()[-400:]
+        raise RuntimeError(
+            "ffmpeg could not prepare this file for the Google Cloud backend "
+            f"(it may be corrupt or an unsupported format): "
+            f"{detail or 'no error output'}"
+        ) from e
+    return out_path

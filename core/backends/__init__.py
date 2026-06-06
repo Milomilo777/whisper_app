@@ -22,6 +22,12 @@ Currently supported:
   * ``cloud_stt`` — OPTIONAL cloud transcription via the Google Gemini
     API (uploads audio to Google; breaks the offline guarantee). Opt-in
     via the Advanced dialog with a pasted API key.
+
+  * ``google_cloud_stt`` — OPTIONAL cloud transcription via the REAL
+    Google **Cloud** Speech-to-Text v2 service (uploads audio to Google;
+    breaks the offline guarantee). Authenticates with a service-account
+    JSON file (NOT an API key); supports word timestamps + diarization
+    and a cheaper GCS batch mode. Opt-in via the Advanced dialog.
 """
 from __future__ import annotations
 
@@ -44,6 +50,9 @@ def get_backend(name: str) -> Backend:
     if name == "cloud_stt":
         from .cloud_stt import CloudSttBackend
         return CloudSttBackend()
+    if name == "google_cloud_stt":
+        from .google_cloud_stt import GoogleCloudSttBackend
+        return GoogleCloudSttBackend()
     from .faster_whisper_be import FasterWhisperBackend
     return FasterWhisperBackend()
 

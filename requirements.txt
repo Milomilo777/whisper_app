@@ -60,6 +60,13 @@ stable-ts>=2.17
 # user pastes a free API key from aistudio.google.com in
 # Advanced > Backend. See docs/CLOUD_STT.md.
 
+# Optional REAL Google Cloud Speech-to-Text v2 backend
+# (transcribe_backend="google_cloud_stt"): the heavy google-cloud-speech
+# and google-cloud-storage client libraries are NOT pinned here — they are
+# installed ON DEMAND via core/optional_deps.py (feature key
+# "google_cloud_stt") into the user cache on first use, so the slim embed
+# tree stays small. Auth is a service-account JSON file, not an API key.
+
 # --- Notes -----------------------------------------------------------
 # * tkinter ships with the Windows Python installer. On Linux install
 #   python3-tk via the package manager. On macOS use the python.org build.

@@ -103,6 +103,52 @@ DEFAULT_CONFIG = {
     "cloud_stt_minutes_used": 0.0,
     "cloud_stt_free_minutes_cap": 60,
     "cloud_stt_chunk_seconds": 480,
+    # OPTIONAL REAL Google **Cloud** Speech-to-Text v2 backend (distinct
+    # from the Gemini-API cloud_stt above). Off unless the user selects
+    # transcribe_backend="google_cloud_stt". Unlike Gemini, it authenticates
+    # with a service-account JSON FILE (NOT a pasted key) — the user picks
+    # the .json they downloaded from the Google Cloud console; project_id is
+    # read out of that file. Using this backend UPLOADS audio to Google
+    # (breaks the offline guarantee).
+    #   gcloud_stt_credentials_json: absolute path to the service-account
+    #     JSON key file (empty = not configured; the backend reports a clear
+    #     "pick your JSON file" error).
+    #   gcloud_stt_model: v2 model name ("long" is the long-form default;
+    #     "short"/"chirp_2"/"telephony" also valid). Configurable so a
+    #     renamed/new model needs no code change.
+    #   gcloud_stt_location: API location/region ("global" works for the
+    #     common models; some newer models are region-only, e.g.
+    #     "europe-west4" — the backend then uses that regional endpoint).
+    #   gcloud_stt_batch_mode: False = STANDARD online chunked-inline recognise
+    #     (~$0.016/min, no bucket needed, the default). True = cheaper GCS
+    #     BATCH (~$0.004/min, slower) — REQUIRES gcloud_stt_bucket.
+    #   gcloud_stt_bucket: a Google Cloud Storage bucket name the service
+    #     account can write to; required only for batch mode (the decoded
+    #     audio is uploaded there, transcribed, then the blob is deleted).
+    #   gcloud_stt_diarization: enable speaker diarization (adds a per-segment
+    #     "speaker" label). gcloud_stt_min/max_speakers bound the count
+    #     (0 = let Google decide).
+    #   gcloud_stt_chunk_seconds: STANDARD-mode chunk length; kept under the
+    #     ~1-minute online-recognise inline cap.
+    #   gcloud_stt_batch_timeout_s: how long to wait on the batch
+    #     long-running operation before giving up.
+    #   gcloud_stt_minutes_used / gcloud_stt_minutes_month: LOCAL monthly
+    #     minute counter (the 60-min/month free tier is NOT readable from a
+    #     service-account key, so we track it here and reset on a new month;
+    #     the UI displays it). The marker is a "YYYY-MM" string.
+    "gcloud_stt_credentials_json": "",
+    "gcloud_stt_model": "long",
+    "gcloud_stt_location": "global",
+    "gcloud_stt_batch_mode": False,
+    "gcloud_stt_bucket": "",
+    "gcloud_stt_diarization": False,
+    "gcloud_stt_min_speakers": 0,
+    "gcloud_stt_max_speakers": 0,
+    "gcloud_stt_chunk_seconds": 55,
+    "gcloud_stt_batch_timeout_s": 3600,
+    "gcloud_stt_minutes_used": 0.0,
+    "gcloud_stt_minutes_month": "",
+    "gcloud_stt_free_minutes_cap": 60,
     # v0.8 — hallucination detector (BoH + repetition + optional VAD
     # disagreement). Flags segments in the JSON output and the viewer.
     "hallucination_detect_enabled": True,

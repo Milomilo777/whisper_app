@@ -41,6 +41,16 @@ _install_lock = threading.Lock()
 FEATURES: dict[str, tuple[str, list[str]]] = {
     "alignment": ("stable_whisper", ["stable-ts"]),      # pulls torch
     "whisper_backend": ("whisper", ["openai-whisper"]),  # pulls torch
+    # REAL Google Cloud Speech-to-Text v2 backend. Pulls the google-cloud
+    # client stack (grpc/protobuf/google-auth) — large enough to keep out
+    # of the slim embed tree, so it installs on first use. The probe
+    # import is the speech client package; google-cloud-storage is bundled
+    # in the same install so the cheaper GCS batch mode works without a
+    # second on-demand install.
+    "google_cloud_stt": (
+        "google.cloud.speech_v2",
+        ["google-cloud-speech", "google-cloud-storage"],
+    ),
 }
 
 
