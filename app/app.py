@@ -764,6 +764,8 @@ class App(tk.Tk):
         self._recent_menu = tk.Menu(f, tearoff=0, postcommand=self._populate_recent_menu)
         f.add_cascade(label="Recent files", menu=self._recent_menu)
         f.add_separator()
+        f.add_command(label="Convert transcript...", command=self.convert_transcript)
+        f.add_separator()
         f.add_command(label="Statistics...", command=self.show_statistics)
         f.add_separator()
         # File→Exit bypasses the minimise-to-tray redirect. When the
@@ -1125,6 +1127,115 @@ class App(tk.Tk):
 
     def show_statistics(self) -> None:
         _show_stats(self)
+
+    def convert_transcript(self) -> None:
+        """File → Convert transcript: parse a transcript file and re-emit it
+        in another text format, written beside the input.
+
+        Keeps the UI minimal: an open dialog for the source, a small themed
+        format chooser, then a synchronous write (parsing a subtitle file is
+        instant — no worker thread needed). All errors surface in a messagebox;
+        nothing here can raise out of the Tk event loop.
+        """
+        from core import convert as _convert
+
+        in_path = filedialog.askopenfilename(
+            parent=self,
+            title="Convert transcript — pick the source file",
+            filetypes=[
+                ("Transcripts", "*.json *.srt *.vtt *.tsv *.otr"),
+                ("SubRip", "*.srt"),
+                ("WebVTT", "*.vtt"),
+                ("TSV", "*.tsv"),
+                ("Whisper JSON", "*.json"),
+                ("oTranscribe", "*.otr"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not in_path:
+            return
+
+        fmt = self._ask_convert_format(in_path)
+        if not fmt:
+            return
+
+        try:
+            out_path = _convert.convert_file(in_path, fmt)
+        except _convert.ConvertError as e:
+            messagebox.showerror("Convert transcript", str(e), parent=self)
+            return
+        except OSError as e:
+            messagebox.showerror(
+                "Convert transcript",
+                f"Could not write the output file: {e}",
+                parent=self,
+            )
+            return
+
+        self.log(f"Converted {os.path.basename(in_path)} -> {out_path}")
+        if messagebox.askyesno(
+            "Convert transcript",
+            f"Wrote:\n{out_path}\n\nOpen its folder?",
+            parent=self,
+        ):
+            try:
+                _open_folder_helper(os.path.dirname(out_path) or ".")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Could not open output folder: {e}")
+
+    def _ask_convert_format(self, in_path: str) -> str | None:
+        """Small themed modal: pick the target format. Returns it or None.
+
+        Defaults to ``srt`` unless the source already is ``.srt`` (then
+        ``json``), so the common one-click case never re-emits the same format.
+        """
+        from core import convert as _convert
+
+        src_ext = os.path.splitext(in_path)[1].lower().lstrip(".")
+        choices = list(_convert.OUTPUT_FORMATS)
+        default = "json" if src_ext == "srt" else "srt"
+        if default not in choices:
+            default = choices[0]
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Convert transcript")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        result: dict[str, str | None] = {"fmt": None}
+
+        body = ttk.Frame(dlg, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body, text=f"Source: {os.path.basename(in_path)}",
+            foreground="#888",
+        ).pack(anchor="w", pady=(0, 8))
+        ttk.Label(body, text="Convert to format:").pack(anchor="w")
+        fmt_var = tk.StringVar(value=default)
+        ttk.Combobox(
+            body, textvariable=fmt_var, state="readonly",
+            values=choices, width=12,
+        ).pack(anchor="w", pady=(4, 12))
+
+        def _ok() -> None:
+            result["fmt"] = fmt_var.get()
+            dlg.destroy()
+
+        def _cancel() -> None:
+            result["fmt"] = None
+            dlg.destroy()
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Convert", command=_ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(
+            side="right", padx=(0, 8)
+        )
+        dlg.protocol("WM_DELETE_WINDOW", _cancel)
+        dlg.bind("<Return>", lambda _e: _ok())
+        dlg.bind("<Escape>", lambda _e: _cancel())
+        dlg.grab_set()
+        self.wait_window(dlg)
+        return result["fmt"]
 
     def open_log_folder(self) -> None:
         path = open_log_folder()
