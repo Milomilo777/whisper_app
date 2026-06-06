@@ -2250,6 +2250,11 @@ class App(tk.Tk):
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
+            # Preserve the time-range slice across re-run (mirrors the Download
+            # tab's _rerun_download fix) — without this a clipped row re-runs
+            # the WHOLE file instead of the slice the user picked.
+            nt.clip_start = getattr(t, "clip_start", None)
+            nt.clip_end = getattr(t, "clip_end", None)
             self.queue.append(nt)
         self.refresh()
 
@@ -2261,6 +2266,8 @@ class App(tk.Tk):
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
+            nt.clip_start = getattr(t, "clip_start", None)
+            nt.clip_end = getattr(t, "clip_end", None)
             nt.resume = True
             nt.cancelled = False
             self.queue.append(nt)
@@ -2314,6 +2321,8 @@ class App(tk.Tk):
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
+        new_task.clip_start = getattr(task, "clip_start", None)
+        new_task.clip_end = getattr(task, "clip_end", None)
         self.queue.append(new_task)
         self.refresh()
 
@@ -2337,6 +2346,8 @@ class App(tk.Tk):
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
+        new_task.clip_start = getattr(task, "clip_start", None)
+        new_task.clip_end = getattr(task, "clip_end", None)
         new_task.resume = True
         new_task.cancelled = False
         self.queue.append(new_task)
@@ -2600,6 +2611,11 @@ class App(tk.Tk):
         self.refresh()
 
     def cancel(self, t: TranscriptionTask) -> None:
+        # Terminal-status guard (mirrors pause()/resume()): a right-click menu
+        # left open while the task finished could otherwise flip a just-
+        # completed task back to "cancelled".
+        if getattr(t, "status", "") in ("finished", "cancelled", "error"):
+            return
         t.cancelled = True
         t.status = "cancelled"
         # Freeze the Elapsed column at the cancel moment so the user

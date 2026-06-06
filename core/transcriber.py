@@ -1422,6 +1422,14 @@ def transcribe(
         _ts_offset = 0.0
         _clip_slice_path = ""
         if clip is not None:
+            # Guard: a start at/after the media duration would slice nothing —
+            # surface a clear error instead of silently writing an empty output.
+            if duration and _clip_start_s >= float(duration):
+                raise RuntimeError(
+                    f"Time range start ({_clip_start_s:.0f}s) is at or beyond "
+                    f"the media length ({float(duration):.0f}s) — nothing to "
+                    "transcribe. Pick an earlier start."
+                )
             _clip_end_arg = (
                 float(_clip_end_v)
                 if (_clip_end_v and float(_clip_end_v) > _clip_start_s)
@@ -1434,12 +1442,16 @@ def transcribe(
             audio_path = _clip_slice_path
             _ts_offset = _clip_start_s
 
-        segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
-        if _clip_slice_path:
-            try:
-                os.remove(_clip_slice_path)
-            except OSError:
-                pass
+        try:
+            segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
+        finally:
+            # The slice is only read during transcribe(); remove it whether the
+            # call succeeded or raised, so an error mid-transcribe never leaks it.
+            if _clip_slice_path:
+                try:
+                    os.remove(_clip_slice_path)
+                except OSError:
+                    pass
         if _ts_offset:
             segments = _shift_segments(segments, _ts_offset)
 

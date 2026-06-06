@@ -663,7 +663,7 @@ class TranscriptionService:
             elif event_type == "worker_exit":
                 worker["ready"] = False
                 worker["process"] = None
-                if worker["task"] and worker["task"].status == "running":
+                if worker["task"] and worker["task"].status in ("running", "paused"):
                     worker["task"].status = "error"
                     app.log(f"Transcription worker exited with code {event.get('return_code')}")
                     self.finish_task(worker, keep_status=True)
