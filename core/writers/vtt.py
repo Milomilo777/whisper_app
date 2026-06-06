@@ -23,11 +23,21 @@ def _karaoke_payload(seg: dict) -> str:
         # w.get("start", default) only returns the default when the key
         # is ABSENT; an explicit start=None (hand-edited / externally
         # produced JSON re-fed for re-export) would make float(None)
-        # raise and abort the whole VTT write. Coerce defensively.
+        # raise and abort the whole VTT write. A non-numeric string such
+        # as "abc" (also from a converted / hand-edited JSON) would make
+        # float("abc") raise ValueError and abort just the same. Coerce
+        # defensively: fall back to the segment start, then to 0.0.
         ts_val = w.get("start")
         if ts_val is None:
             ts_val = seg.get("start", 0.0)
-        ts = fmt_vtt_time(float(ts_val))
+        try:
+            ts_seconds = float(ts_val)
+        except (TypeError, ValueError):
+            try:
+                ts_seconds = float(seg.get("start", 0.0))
+            except (TypeError, ValueError):
+                ts_seconds = 0.0
+        ts = fmt_vtt_time(ts_seconds)
         token = escape_cue_separator((w.get("word") or "").strip())
         if not token:
             continue
