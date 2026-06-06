@@ -111,4 +111,26 @@ details also in `docs/SESSION_HANDOFF_NEXT.md` + `docs/CHANGELOG.md [Unreleased]
 - P4-4 core/history.py word_count column (idempotent) + core/stats.py opt-in POST (gated on telemetry_opt_in) + stats/transcription_stats.php (deploy to host).
 - P4-5 core/tiling.py download_ffplay + "Download ffplay" button; ffplay_downloads default URLs (BtbN win zip / evermeet mac) — OWNER MUST VERIFY/host real URLs via the online config.
 - OWNER ACTIONS: host the online config JSON at config_url; set the real stats_url + deploy the PHP; upload faster-whisper-medium to smch.ir; verify ffplay URLs.
+
+## UPDATE — P5 + P6 DONE, ARTIFACTS REBUILT (2026-06-06 19:30; pyright app core 0/0/0; 102 local commits)
+- **P5 (frontend bug-hunt):** all surfaced bugs fixed — incl. the deferred LOW ffplay
+  guard (`core/tiling.py download_ffplay` now rejects a 0-byte/truncated extract:
+  size must be > 100 KB, else the stub is unlinked so a retry re-downloads) + the
+  gcloud-stt / stats / smtv-docx / config-merge fixes (commits 03a2375 … f9cd426).
+- **P6 (macOS):** PyInstaller `.app` spec (`platform/macos/pyinstaller/whisper_project_mac.spec`,
+  tracked via gitignore negation, synced with onedir); tiling spawns players with
+  `start_new_session` so Stop's `killpg` never kills the whole app on macOS; macOS
+  docs + ffplay-into-bin note; cross-platform test coverage.
+- **Version: still 1.3.7 — NOT bumped** (owner 2026-06-06: "keep 1.3.7"). 4 version
+  locations all read 1.3.7 (`pyproject.toml`, `core/__init__.py`, `installer_embed.iss`,
+  `installer.iss`).
+- **Artifacts rebuilt with ALL fixes (Phases 1–6):** `dist_installer\WhisperProject-v1.3.7-Setup-Standard.exe`
+  (219,504,174 B) + `WhisperProject-v1.3.7-Portable.zip` (326,446,926 B), both 19:29–19:30.
+  Method = incremental: re-copy HEAD `app/`+`core/`+`gui.py` over the intact tested
+  `embed_build\` runtime → sanity import (full stack + all new core modules + tiling) →
+  ISCC `installer_embed.iss` → `shutil.make_archive` Portable. Launch-smoke PASSED
+  (window "Whisper Project v1.3.7", no startup crash). Rebuild helper (gitignored):
+  `.claude\rebuild_137.ps1`.
+
+## (historical) earlier note, now SUPERSEDED by the rebuild above
 - ⚠ REBUILD NEEDED to ship P4: the dist_installer\*.exe / *.zip are PHASE-3 only. To rebuild: `build_embed_installer.bat` → `ISCC.exe installer_embed.iss` → `python -c "import shutil; shutil.make_archive(...Portable,'zip','embed_build')"` → relaunch embed pythonw gui.py for a visual smoke. (A rebuild may have been kicked off in the background near the end of the session — check dist_installer timestamps.)

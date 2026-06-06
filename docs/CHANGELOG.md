@@ -4,10 +4,45 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
-> **Local only — not yet pushed or released.** These changes are committed
-> on `master` on top of the v1.3.7 baseline; no version bump or tag has been
-> cut. They ship to users only when the owner authorises the next release.
-> pyright `app/ core/` stays 0/0/0 and the hermetic suite stays green.
+## [1.3.8] — 2026-06-06
+
+> Hardening release on top of v1.3.7: the Phase 1–6 feature work (Google
+> Cloud / Gemini cloud STT, the optional LAN/web server, transcript-format
+> conversion, the SMTV team `.docx`, the multi-monitor Video Tiling rewrite,
+> three-level merged config, multi-model picker, usage stats, ffplay
+> auto-download, and macOS groundwork) **plus a 44-finding adversarial audit
+> fixpack** — every finding independently confirmed by skeptic review and
+> covered by a hermetic regression test. pyright `app/ core/` 0/0/0; hermetic
+> suite green.
+
+### Fixed — adversarial audit fixpack (44 confirmed bugs)
+
+- **Data loss:** transcript-format conversion overwrote the source file in
+  place on a case-only extension difference (Windows); cloud STT collapsed a
+  whole file into one chunk when the duration was unreadable (truncating long
+  transcripts); the SMTV `.docx` writer rendered a literal `"None"` for a null
+  segment.
+- **Crashes / launch failures:** a non-finite (`Infinity`) numeric in a
+  hand-edited config crashed startup; a non-string `model.name` crashed config
+  load; the Advanced dialog's free-text Batch-size field crashed Save; a
+  non-`dict` `words` entry crashed conversion; the TSV writer raised on
+  non-finite timestamps; a non-ASCII LAN-server auth token bricked the server.
+- **Reliability / concurrency:** the tray exit latch stayed stuck after a
+  declined quit (minimise-to-tray broke permanently); a stopped-then-restarted
+  Video Tiling run could revive the old worker; the LAN server leaked a worker
+  (and the hot model) when a paused job was stopped; download pause/resume and
+  the tiling run-token had races/TOCTOU windows; sqlite reads raced the writer
+  thread.
+- **Windows process teardown:** a graceful kill of the yt-dlp/ffmpeg tree could
+  orphan the process and hold the file handle — now escalates to a forced kill.
+- **Resource / security:** the LAN multipart upload was fully buffered in RAM
+  (now streamed); JSON bodies and the online-config fetch are now size-capped;
+  `stats_url` and URL-job hosts get scheme / SSRF validation; aborted optional
+  pip installs no longer orphan their child tree.
+- **Smaller correctness:** LRC timestamps no longer emit `:60.00`; SMTV episode
+  URLs with a query string / fragment are recognised; per-chunk cloud
+  diarization labels stay consistent; cloud RPCs have timeouts and honour
+  cancel; the multi-monitor index is now a stable total order.
 
 ### Added
 

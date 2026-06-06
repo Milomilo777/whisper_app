@@ -5,14 +5,38 @@ this repo. Read this file before anything else.
 
 ---
 
-## 0. Latest session — Phase 1 (9 changes) + Phase 2 (cloud + web/LAN) + Phase 3 (bug fixes + features) (2026-06-06) — LOCAL ONLY
+## 0. Latest session — Phases 1–6 + 44-bug audit fixpack → v1.3.8 (2026-06-06)
 
-**Current state: the v1.3.7 baseline + the Phase-1 nine changes + the
-Phase-2 additions + the Phase-3 bug-fixes/features, all committed on
-`master`, NOT pushed and NOT released.** No version bump, no tag — the
-owner will authorise the push + release later. pyright `app/ core/` is
-0/0/0 and the targeted suites stay green. Full bullets are in
-`docs/CHANGELOG.md` `[Unreleased]` (and worded user-facing there).
+**Current state: v1.3.8.** On top of the v1.3.7 baseline: Phase 1 (9
+changes) + Phase 2 (cloud + web/LAN) + Phase 3 (bug fixes + features) +
+Phase 4 (config / multi-model / convert / stats / ffplay) + Phase 5
+(frontend bug-hunt fixes) + Phase 6 (macOS support) + a **44-finding
+adversarial audit fixpack** (each finding skeptic-verified and covered by
+a hermetic regression test). Version bumped to **1.3.8** in the 4 knobs.
+pyright `app/ core/` is 0/0/0 and the FULL hermetic suite is green in
+deterministic order (the two `test_resume_from_cancellation` tests were
+fixed — they now capture the checkpoint fingerprint in-scope, so they pass
+mid-suite and no longer need deselecting).
+
+**Branch / push status (2026-06-06):**
+- All work lives on local `master`. The owner authorised publishing it to
+  the `macos-ci` branch (NOT `master`) so a sibling macOS-CI session can
+  build/test the `.app` on real Apple hardware via GitHub Actions.
+- `macos-ci` was pushed (first at 9c5f1db, then updated with the fixpack +
+  v1.3.8). Pushing `macos-ci` does NOT fire `ci.yml` (its push triggers are
+  master / release/** / feature/** / chore/**), so it does not burn the
+  Windows+Ubuntu Actions minutes. Do NOT push to `master` until the macOS
+  build is green; `macos-ci` → `master` is merged ONCE at the end.
+- Coordination: fetch + rebase onto `macos-ci`'s tip before pushing; never
+  force-push / clobber the macOS session's commits (it owns
+  `.github/workflows/macos-build.yml` and any Mac runtime fixes).
+
+**Artifacts:** rebuild the Setup-Standard + Portable as **v1.3.8** from the
+embed tree (the v1.3.7 artifacts under `dist_installer\` predate the
+fixpack). Incremental rebuild = re-copy HEAD `app/`+`core/`+`gui.py` over
+the tested `embed_build\` runtime → sanity import → ISCC `installer_embed.iss`
+→ `shutil.make_archive` Portable → launch smoke. Helper: `.claude\rebuild_137.ps1`
+(update the version strings to 1.3.8 first, or use a 1.3.8 copy).
 
 > **Reiterate (do not skip):** everything in §0 (Phases 1–3) is **local
 > only** — committed on `master`, **not pushed**, **no version bump / tag**.
