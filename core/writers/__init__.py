@@ -9,6 +9,13 @@ The ``docx`` writer is binary; it exposes ``write_bytes(segments,
 audio_path) -> bytes`` instead. ``BINARY_WRITERS`` carries the
 binary set so callers know whether to use ``"wb"`` mode.
 
+The ``smtv_docx`` writer is also binary and fills the transcription
+team's bundled template. It needs the detected language and the work
+title beyond the frozen ``(segments, audio_path)`` contract, so
+``core.transcriber._write_outputs`` special-cases it; the registry
+entry below still satisfies ``supported_formats`` / ``is_binary`` so the
+Advanced dialog auto-shows a checkbox.
+
 Use :func:`get_writer` for text writers, :func:`get_binary_writer`
 for binary writers, and :func:`is_binary` to disambiguate.
 """
@@ -16,7 +23,18 @@ from __future__ import annotations
 
 from typing import Callable
 
-from . import docx_writer, json_writer, lrc, md, pdf_writer, srt, tsv, txt, vtt
+from . import (
+    docx_writer,
+    json_writer,
+    lrc,
+    md,
+    pdf_writer,
+    smtv_docx_writer,
+    srt,
+    tsv,
+    txt,
+    vtt,
+)
 
 WriterFn = Callable[[list[dict], str], str]
 BinaryWriterFn = Callable[[list[dict], str], bytes]
@@ -34,6 +52,11 @@ WRITERS: dict[str, WriterFn] = {
 BINARY_WRITERS: dict[str, BinaryWriterFn] = {
     "docx": docx_writer.write_bytes,
     "pdf": pdf_writer.write_bytes,
+    # The SMTV writer's real entry point takes extra keyword args
+    # (language / work_title); this 2-arg adapter raises so a caller
+    # that bypasses _write_outputs' special case fails loudly rather
+    # than silently dropping the language/title.
+    "smtv_docx": smtv_docx_writer.write,  # type: ignore[dict-item]
 }
 
 
