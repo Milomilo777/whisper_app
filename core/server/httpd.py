@@ -55,6 +55,26 @@ from core import __version__
 from core.server.jobs import JobManager, QueueFull
 from core.writers import supported_formats
 
+
+def content_disposition_attachment(filename: str) -> str:
+    """Build a latin-1-safe ``Content-Disposition: attachment`` header value.
+
+    ``http.server`` encodes header values as latin-1, so a filename containing
+    any non-ASCII character — e.g. the en-dash in the SMTV ``.docx`` template
+    name ``"… –Transcription in English – Translation…"`` — raised
+    ``UnicodeEncodeError`` mid-response and dropped the connection (the client
+    saw ``RemoteDisconnected``), making that output un-downloadable over the
+    LAN server. Emit an ASCII-only ``filename="..."`` fallback PLUS the RFC 6266
+    ``filename*=UTF-8''<pct-encoded>`` form, so modern clients still receive the
+    exact Unicode name while the header bytes stay pure ASCII.
+    """
+    name = (filename or "download").replace("\r", "").replace("\n", "")
+    ascii_fallback = "".join(
+        ch if 32 <= ord(ch) < 127 and ch != '"' else "_" for ch in name
+    ) or "download"
+    quoted = urllib.parse.quote(name, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quoted}"
+
 logger = logging.getLogger(__name__)
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -647,7 +667,7 @@ class JobRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header(
             "Content-Disposition",
-            f'attachment; filename="{os.path.basename(path)}"',
+            content_disposition_attachment(os.path.basename(path)),
         )
         self.end_headers()
         self.wfile.write(body)
