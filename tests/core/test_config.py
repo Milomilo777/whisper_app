@@ -245,6 +245,11 @@ def test_user_overrides_merge_with_defaults(isolated_dirs, monkeypatch):
     assert config["model"]["url"] == cfg.DEFAULT_CONFIG["model"]["url"]
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Unmounted drive-letter fallback is a Windows-only scenario: POSIX "
+    "has no drive letters and _drive_is_mounted() is always True there.",
+)
 def test_unmounted_model_path_falls_back(isolated_dirs, monkeypatch):
     monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
     payload = dict(cfg.DEFAULT_CONFIG)

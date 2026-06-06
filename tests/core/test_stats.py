@@ -2,6 +2,7 @@
 builder, and the telemetry opt-in gate."""
 from __future__ import annotations
 
+import os
 import sqlite3
 
 import pytest
@@ -111,7 +112,7 @@ def test_audio_duration_from_segments():
 
 def test_build_stats_payload_pure():
     p = stats.build_stats_payload(
-        file_name=r"C:\videos\my clip.mp4",
+        file_name=(r"C:\videos\my clip.mp4" if os.name == "nt" else "/videos/my clip.mp4"),
         model="large-v3",
         language="en",
         audio_duration=123.456,

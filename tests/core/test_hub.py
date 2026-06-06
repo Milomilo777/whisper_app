@@ -200,8 +200,13 @@ def test_is_path_inside_false_for_unrelated_paths():
 
 def test_derive_hub_from_legacy_model_path():
     """Reverse-derive: hub = parent(model_path) when model_path looks
-    like ``hub/models--Systran--<name>``."""
-    model_path = r"C:\Users\me\AppData\Local\WhisperProject\Cache\models\models--Systran--faster-whisper-large-v3"
+    like ``hub/models--Systran--<name>``. Build the path with the native
+    separator (via Path) so the test exercises real derivation on both
+    Windows and POSIX; a hardcoded Windows string is one component on POSIX
+    and would never parse into parent parts."""
+    model_path = str(
+        Path("hub_root", "models", "models--Systran--faster-whisper-large-v3")
+    )
     out = hub.derive_hub_from_model_path(model_path)
     assert out.endswith("models")
     assert "Systran" not in out
