@@ -36,8 +36,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------- regexes --
 
 SMTV_HOST_RE = re.compile(r"^https?://(?:www\.)?suprememastertv\.com/", re.I)
+# Anchor the path with ``.html`` but allow an optional ``?query`` /
+# ``#fragment`` so real shareable links (autoplay/tracking params,
+# browser-appended fragments) are still recognised as episodes instead
+# of falling through to the yt-dlp probe, which rejects SMTV URLs.
 SMTV_EPISODE_RE = re.compile(
-    r"^https?://(?:www\.)?suprememastertv\.com/([a-z]{2,3})1/v/(\d{6,})\.html$",
+    r"^https?://(?:www\.)?suprememastertv\.com/([a-z]{2,3})1/v/(\d{6,})\.html(?:[?#].*)?$",
     re.I,
 )
 
