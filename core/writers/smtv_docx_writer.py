@@ -53,6 +53,10 @@ from .base import normalize_text, sanitize_for_xml, speaker_prefix
 # surrounding text survives.
 _WORK_TITLE_PLACEHOLDER = "(work title)"
 _FOREIGN_PLACEHOLDER = "(Foreign Language)"
+# Neutral fill for the "(Foreign Language)" placeholder when no language was
+# detected, so the row-0 "[... starts]" cue marker is still meaningful (and is
+# never clobbered) instead of leaving the literal placeholder dangling.
+_NEUTRAL_LANG_LABEL = "transcription"
 
 # First transcription row is the 3rd table row (index 2); rows 0/1 are
 # the title and header rows.
@@ -130,8 +134,12 @@ def _fmt_smtv_time(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds < 0:
         seconds = 0.0
     # Round to tenths first so 59.96 doesn't render as 60.0 in the
-    # seconds field (it should roll into the next minute).
-    total_tenths = int(round(seconds * 10))
+    # seconds field (it should roll into the next minute). Use round-HALF-UP
+    # (floor(x + 0.5)) rather than Python's built-in round(), which is
+    # banker's rounding (round-half-to-even): round(0.05*10)=0 but
+    # round(0.15*10)=2 makes equal .x5 inputs round inconsistently, so
+    # timecodes were not predictable. floor(x+0.5) always rounds .x5 up.
+    total_tenths = int(math.floor(seconds * 10 + 0.5))
     tenths = total_tenths % 10
     total_secs = total_tenths // 10
     hours, rem = divmod(total_secs, 3600)
@@ -277,10 +285,14 @@ def write_bytes(
             _replace_in_paragraph(para, _FOREIGN_PLACEHOLDER, lang_label)
 
     # --- Row 3 col3: "[(Foreign Language) starts]" marker -------------
-    if lang_label and len(table.rows) > _FIRST_DATA_ROW:
+    # Fill the cue even when no language was detected: use a neutral label so
+    # the "[... starts]" marker stays meaningful and is preserved below (the
+    # append branch keys off this same label, so the cue is never clobbered).
+    marker_label = lang_label or _NEUTRAL_LANG_LABEL
+    if len(table.rows) > _FIRST_DATA_ROW:
         marker_cell = table.rows[_FIRST_DATA_ROW].cells[2]
         for para in marker_cell.paragraphs:
-            _replace_in_paragraph(para, _FOREIGN_PLACEHOLDER, lang_label)
+            _replace_in_paragraph(para, _FOREIGN_PLACEHOLDER, marker_label)
 
     # --- Transcription rows -------------------------------------------
     nonempty = [s for s in segments if normalize_text(str(s.get("text", "")))]
@@ -303,10 +315,11 @@ def write_bytes(
         _set_cell_text(cells[0], row_number)
         # col2 = time code
         _set_cell_text(cells[1], time_code)
-        # col3 = foreign-language text. The first data row already had
-        # the "[<Lang> starts]" marker filled above; APPEND the segment
-        # text after it (in a new run) so the team's cue is preserved.
-        if idx == 0 and lang_label:
+        # col3 = foreign-language text. The first data row already had the
+        # "[<Lang> starts]" marker filled above (always, even with no detected
+        # language); APPEND the segment text after it (in a new run) so the
+        # team's cue is preserved instead of being overwritten.
+        if idx == 0:
             marker_para = cells[2].paragraphs[0]
             marker_para.add_run(" " + body)
         else:

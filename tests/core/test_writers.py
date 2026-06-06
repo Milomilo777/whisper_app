@@ -601,6 +601,44 @@ def test_smtv_time_format_clamps_and_rolls():
     assert w._fmt_smtv_time(-5.0) == "00:00:00.0"
 
 
+def test_smtv_time_format_rounds_half_up_predictably():
+    """Tenths use round-HALF-UP, not banker's rounding (round-half-to-even).
+
+    With Python's built-in round(), round(0.05*10)=0 but round(0.15*10)=2, so
+    equal ``.x5`` inputs rounded inconsistently. floor(x+0.5) always rounds
+    the half up, giving predictable timecodes.
+    """
+    from core.writers import smtv_docx_writer as w
+
+    assert w._fmt_smtv_time(0.05) == "00:00:00.1"   # banker's gave .0
+    assert w._fmt_smtv_time(0.15) == "00:00:00.2"
+    assert w._fmt_smtv_time(0.25) == "00:00:00.3"   # banker's gave .2
+    assert w._fmt_smtv_time(1.25) == "00:00:01.3"   # banker's gave .2
+
+
+def test_smtv_writer_empty_language_keeps_starts_cue():
+    """With no detected language the row-0 "[... starts]" cue must survive.
+
+    Regression: when language was '' the cue marker cell was OVERWRITTEN with
+    just the segment body (the append branch was gated on lang_label), so the
+    team lost the cue. Now a neutral label fills the placeholder and the body
+    is appended after the cue.
+    """
+    from core.writers import smtv_docx_writer
+
+    segs = [{"start": 0.0, "end": 1.0, "text": "first phrase"}]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "Mystery.mp4", language="", work_title="Mystery"
+    )
+    table = _smtv_table(payload)
+    first_marker = table.rows[2].cells[2].text
+    # The "[... starts]" cue is preserved (no dangling raw placeholder), and
+    # the first segment text is appended after it.
+    assert "starts]" in first_marker
+    assert "(Foreign Language)" not in first_marker
+    assert "first phrase" in first_marker
+
+
 def test_smtv_writer_registry_adapter_raises():
     """The 2-arg registry entry must raise so a caller that bypasses
     _write_outputs' special case fails loudly instead of dropping the
