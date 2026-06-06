@@ -107,13 +107,40 @@ def _split_dnd_paths(raw: str) -> list[str]:
         if i >= n:
             break
         if raw[i] == "{":
-            j = raw.find("}", i)
-            if j == -1:
+            # Scan for the CLOSING brace of this token. '{' and '}' are legal
+            # filename characters, so a naive raw.find('}') split a real file
+            # like 'my clip {v2}.mp4' at the inner '}', producing two bogus
+            # tokens that both fail the later os.path.isfile gate (the file
+            # is then silently not enqueued). Honour brace nesting AND only
+            # accept a '}' as the token delimiter when it is followed by
+            # end-of-string or a space (i.e. it really ends the token), so
+            # embedded literal braces inside a filename survive. Backslashes
+            # are NOT treated as escapes here: tkdnd's <<Drop>> payload keeps
+            # them literal (UNC paths like \\server\share rely on that).
+            j = i + 1
+            depth = 1
+            close = -1
+            while j < n:
+                c = raw[j]
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    if depth == 1 and (j + 1 >= n or raw[j + 1] == " "):
+                        # The real end of the brace-wrapped token.
+                        close = j
+                        break
+                    if depth > 1:
+                        depth -= 1
+                    # else: a depth-1 '}' NOT at a token boundary is a
+                    # literal brace inside the filename — leave depth alone
+                    # and keep scanning for the true close.
+                j += 1
+            if close == -1:
                 # Unbalanced brace — take the rest as one token.
                 out.append(raw[i + 1:])
                 break
-            out.append(raw[i + 1:j])
-            i = j + 1
+            out.append(raw[i + 1:close])
+            i = close + 1
         else:
             j = i
             while j < n and raw[j] != " ":
@@ -844,6 +871,10 @@ class App(tk.Tk):
                 rows = history.list_transcriptions(limit=10) or []
             except Exception:  # noqa: BLE001
                 rows = []
+        # Paths the user cleared via "Clear list" are hidden until a new
+        # transcription re-adds them. Stored in config.json (the storage
+        # this app manages) because HistoryDB has no clear method.
+        dismissed: set[str] = set(self.app_config.get("recent_files_dismissed") or [])
         if not rows:
             menu.add_command(label="(no recent files)", state="disabled")
             return
@@ -851,7 +882,7 @@ class App(tk.Tk):
         added = 0
         for row in rows:
             path = row.get("file_path") if isinstance(row, dict) else None
-            if not path or path in seen:
+            if not path or path in seen or path in dismissed:
                 continue
             seen.add(path)
             label = f"{os.path.basename(path)}  —  {os.path.dirname(path)[:48]}"
@@ -862,6 +893,12 @@ class App(tk.Tk):
             added += 1
             if added >= 10:
                 break
+        if added == 0:
+            # Every history row is currently dismissed (the user clicked
+            # "Clear list"); show the empty placeholder instead of a lone
+            # "Clear list" that has nothing to clear.
+            menu.add_command(label="(no recent files)", state="disabled")
+            return
         menu.add_separator()
         menu.add_command(label="Clear list", command=self._clear_recent)
 
@@ -988,18 +1025,37 @@ class App(tk.Tk):
         self.nb.select(self.t1)
 
     def _clear_recent(self) -> None:
-        """Best-effort clear — only present in history if the DB exposes it."""
+        """Clear the File > Recent files list.
+
+        HistoryDB has no clear method (and core/history.py is owned
+        elsewhere), so instead of deleting history rows we hide the
+        currently-listed paths via a dismissed-set persisted in config.json
+        — the storage this app already manages. _populate_recent_menu
+        filters these out, so the submenu shows "(no recent files)" until
+        new transcriptions arrive. This is a true clear of the *list* the
+        user sees, without touching the underlying history DB.
+        """
         history = getattr(self, "history", None)
-        if history is None:
-            return
-        clearer = getattr(history, "clear_recent", None) or getattr(
-            history, "delete_old_transcriptions", None
-        )
-        if callable(clearer):
+        # Snapshot whatever the menu would currently show and add it to the
+        # dismissed set. New transcriptions (paths not in the set) reappear.
+        paths: list[str] = []
+        if history is not None:
             try:
-                clearer()
+                rows = history.list_transcriptions(limit=10) or []
             except Exception:  # noqa: BLE001
-                pass
+                rows = []
+            for row in rows:
+                p = row.get("file_path") if isinstance(row, dict) else None
+                if isinstance(p, str) and p:
+                    paths.append(p)
+        dismissed = set(self.app_config.get("recent_files_dismissed") or [])
+        dismissed.update(paths)
+        self.app_config["recent_files_dismissed"] = sorted(dismissed)
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to persist cleared recent-files list")
+            self.log(f"Could not save cleared recent list: {e}")
 
     def _save_chime_pref(self) -> None:
         self.app_config["chime_on_complete"] = bool(self.chime_on_complete_var.get())
@@ -1303,6 +1359,15 @@ class App(tk.Tk):
                 # re-arm their after() callbacks; setting it before this
                 # return left it stuck True (it is only reset in __init__),
                 # permanently killing the queue pump and the drains.
+                #
+                # Also reset the one-shot exit override: _force_exit /
+                # tray Exit set _exit_from_tray=True to bypass the
+                # minimise-to-tray redirect above. If we don't clear it on
+                # the decline path, the flag stays True for the rest of the
+                # session, so the window's X button no longer honours the
+                # minimise-to-tray preference (it falls straight through to
+                # teardown). The latch is otherwise only reset in __init__.
+                self._exit_from_tray = False
                 return
 
         # Confirmation passed (or there was nothing to confirm): flip the
@@ -1324,10 +1389,17 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
         for task in self.download_queue:
-            if task.process and task.process.poll() is None:
+            # Snapshot once (see cancel_download): a worker thread may null
+            # task.process between the test and the poll(), which would raise
+            # AttributeError mid-teardown.
+            proc = task.process
+            if proc is not None and proc.poll() is None:
                 # Tree-kill so yt-dlp's ffmpeg merge child dies too (a bare
                 # terminate() orphans it, holding the .part/output handle).
-                kill_process_tree(task.process, force=False)
+                try:
+                    kill_process_tree(proc, force=False)
+                except Exception:  # noqa: BLE001
+                    pass
         try:
             self.tiling.stop()
         except Exception:  # noqa: BLE001
@@ -2343,11 +2415,19 @@ class App(tk.Tk):
         # Freeze the Elapsed column at the cancel moment.
         if task.end_time is None:
             task.end_time = time.time()
-        if task.process and task.process.poll() is None:
+        # Snapshot task.process ONCE: the download worker thread can null it
+        # (in _run_task's finally / _media_phase / _subtitle_phase) between
+        # the truthiness test and the .poll() call, which on the shared
+        # attribute would dereference None -> AttributeError on the Tk thread.
+        proc = task.process
+        if proc is not None and proc.poll() is None:
             # Tree-kill so the ffmpeg merge/extract child dies with yt-dlp;
             # otherwise it keeps the .part/output handle open and the
             # follow-up unlink/replace can fail with PermissionError.
-            kill_process_tree(task.process, force=False)
+            try:
+                kill_process_tree(proc, force=False)
+            except Exception:  # noqa: BLE001
+                pass
         # If the download had already handed off to auto-transcribe, stop
         # that too and unlink it — otherwise the transcription keeps running
         # and finish_task would later overwrite this "cancelled" status.
@@ -2392,10 +2472,17 @@ class App(tk.Tk):
         task.status = "paused"
         if task.end_time is None:
             task.end_time = time.time()
-        if task.process and task.process.poll() is None:
+        # Snapshot once (see cancel_download): the worker thread may null
+        # task.process between the test and the .poll(), which would raise
+        # AttributeError on the Tk thread and skip the tree-kill.
+        proc = task.process
+        if proc is not None and proc.poll() is None:
             # Same tree-kill as cancel so the ffmpeg child dies with yt-dlp
             # and releases the .part handle — but we do NOT delete the .part.
-            kill_process_tree(task.process, force=False)
+            try:
+                kill_process_tree(proc, force=False)
+            except Exception:  # noqa: BLE001
+                pass
         # Hold (don't cancel) any linked auto-transcribe: keep it referenced
         # so a resume can re-establish the hand-off. The download row stops
         # mirroring its progress because the status is no longer "transcribing".
@@ -2990,11 +3077,20 @@ class App(tk.Tk):
     ) -> None:
         self._server_busy = False
         # Reflect the port the server actually bound (auto-port fallback).
+        # save_config can raise OSError/PermissionError (disk full, an
+        # antivirus lock on config.json, a read-only profile); that must NOT
+        # skip the button-re-enable / status / url updates below — otherwise
+        # the server is live but its only toggle stays greyed out and the
+        # status is stuck "Starting...". So catch OSError too AND persist
+        # only after the UI is restored.
         try:
             if int(self.server_port_var.get()) != port:
                 self.server_port_var.set(port)
                 self.app_config["server_port"] = port
-                save_config(self.app_config)
+                try:
+                    save_config(self.app_config)
+                except OSError:
+                    logger.exception("Failed to persist auto-bound server port")
         except (tk.TclError, ValueError):
             pass
         self.server_toggle_btn.config(
