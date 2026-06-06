@@ -86,6 +86,17 @@ Tick **"Detect speakers (diarization)"** to have Google tag who is speaking
 (`SPEAKER_1`, `SPEAKER_2`, …). This adds a per-segment speaker label to the
 transcript.
 
+## Which model / region (defaults)
+
+The backend defaults to the **`chirp_2`** recognizer in the
+**`us-central1`** region (config keys `gcloud_stt_model` /
+`gcloud_stt_location`). `chirp_2` supports **language auto-detect and
+multilingual** audio, so you can leave the language on **Auto**; the older
+`long` model rejected `auto`. You can override either key in `config.json`
+for a different model or region — an unavailable model surfaces a clear
+error rather than crashing. Word-level time offsets are always requested, so
+subtitle segments are timed from Google's word timings (not one flat block).
+
 ## The usage / cost figure is a LOCAL estimate
 
 The box shows a line like:

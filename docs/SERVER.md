@@ -73,14 +73,28 @@ running transcriptions concurrently against it is unsafe.
 
 ## What the browser page does
 
-The page (served at `/`) lets a user:
+The page (served at `/`) is a small **3-view** UI — **Submit**, **Jobs**,
+and **Result** — that lets a user:
 
 1. pick a local file **or** paste a link (anything yt-dlp supports),
 2. choose output formats (the checkboxes are populated from what the
    server reports),
-3. optionally set a language code,
-4. start the job and watch progress,
-5. download each produced file when it finishes.
+3. optionally set a language code **and the same per-job advanced options
+   the desktop app has** (VAD, word timestamps, diarization, clip range,
+   etc.), which are applied for that one job via a `.whisperproject.json`
+   override,
+4. start the job and watch progress; the **Jobs** view lists every job and
+   offers **pause / resume / cancel**,
+5. view the transcript inline and download each produced file from the
+   **Result** view when it finishes.
+
+Uploads are **streamed to disk** as they arrive (not buffered in RAM), so a
+large file does not balloon the host's memory.
+
+**Backend is fixed to the host's setting.** A web submitter can pick formats
+and per-job options but **cannot switch the transcription backend** (e.g.
+force a cloud backend) — that is a deliberate security boundary so a remote
+request can't redirect your audio to a cloud service.
 
 ## HTTP API
 
@@ -89,10 +103,13 @@ The page (served at `/`) lets a user:
 | GET  | `/` | the browser page |
 | GET  | `/api/health` | `{status, version, formats}` |
 | GET  | `/api/formats` | `{formats}` |
-| POST | `/api/jobs` | create a job — multipart upload OR JSON `{url, formats, language}` → `{job_id}` |
+| GET  | `/api/jobs` | list all jobs |
+| POST | `/api/jobs` | create a job — multipart upload OR JSON `{url, formats, language, options}` → `{job_id}` (`options` carries the per-job advanced settings) |
 | GET  | `/api/jobs/<id>` | `{status, progress, error, outputs:[{fmt, name}]}` |
 | GET  | `/api/jobs/<id>/result?fmt=srt` | download one written output |
 | POST | `/api/jobs/<id>/cancel` | flag the job for cancellation |
+| POST | `/api/jobs/<id>/pause` | pause a running job |
+| POST | `/api/jobs/<id>/resume` | resume a paused job |
 
 `status` is one of `queued`, `downloading`, `running`, `finished`,
 `error`, `cancelled`.
@@ -103,7 +120,8 @@ The page (served at `/`) lets a user:
   no encryption (plain HTTP). Do not expose it to the open internet.
 - **Optional token.** Pass `--token SECRET`; clients must then send it via
   the `X-Auth-Token` header or a `?token=SECRET` query parameter. Without a
-  token every request is accepted.
+  token every request is accepted. The token is checked with a
+  **constant-time** comparison so it can't be guessed by timing.
 - **Audio is uploaded to the host.** Uploaded media is written to a
   per-job temp directory under the host's cache folder
   (`%LOCALAPPDATA%\WhisperProject\Cache\server_jobs\<id>\`) and the outputs

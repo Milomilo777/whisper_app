@@ -5,14 +5,21 @@ this repo. Read this file before anything else.
 
 ---
 
-## 0. Latest session — Phase 1 (9 changes) + Phase 2 (cloud + web/LAN) (2026-06-06) — LOCAL ONLY
+## 0. Latest session — Phase 1 (9 changes) + Phase 2 (cloud + web/LAN) + Phase 3 (bug fixes + features) (2026-06-06) — LOCAL ONLY
 
 **Current state: the v1.3.7 baseline + the Phase-1 nine changes + the
-Phase-2 additions, all committed on `master`, NOT pushed and NOT
-released.** No version bump, no tag — the owner will authorise the push +
-release later. pyright `app/ core/` is 0/0/0 and the targeted suites stay
-green. Full bullets are in `docs/CHANGELOG.md` `[Unreleased]` (and worded
-user-facing there).
+Phase-2 additions + the Phase-3 bug-fixes/features, all committed on
+`master`, NOT pushed and NOT released.** No version bump, no tag — the
+owner will authorise the push + release later. pyright `app/ core/` is
+0/0/0 and the targeted suites stay green. Full bullets are in
+`docs/CHANGELOG.md` `[Unreleased]` (and worded user-facing there).
+
+> **Reiterate (do not skip):** everything in §0 (Phases 1–3) is **local
+> only** — committed on `master`, **not pushed**, **no version bump / tag**.
+> A release would still need the version bump in the **4 usual places**
+> (`core/__init__.py` `__version__`, `pyproject.toml`, `installer.iss`,
+> `installer_embed.iss` `#define MyAppVersion`) — see §3 — and is only cut
+> when the owner authorises it.
 
 The Phase-1 9 changes (grouped):
 
@@ -118,6 +125,103 @@ Committed locally on top of the Phase-1 nine (see the `git log` tail:
 - **New docs** — `docs/CLOUD_STT_GOOGLE.md` (service-account setup + batch +
   honest usage note); `docs/SERVER.md` updated for the one-click toggle. All
   new `gcloud_stt_*` / `server_*` keys documented in `docs/CONFIG.md`.
+
+### Phase 3 — bug fixes + features + live-verified Google Cloud STT (same 2026-06-06 batch)
+
+Committed locally on top of Phase 2. Still LOCAL ONLY, still 1.3.7-labelled,
+NOT pushed, NO version bump. From a reported-issues list + a deep
+adversarial review. Full user-facing bullets in `docs/CHANGELOG.md`
+`[Unreleased]` (`#### Phase 3` blocks under Added / Changed / Fixed / Docs).
+
+Bug fixes:
+- **Web / LAN: every job crashed** with `'_CancelledTask' object has no
+  attribute 'paused'` — the server task object now mirrors the engine's
+  read contract (renamed `_ServerTask`); test fakes hardened.
+- **"View transcript" closed the whole app** — libvlc `set_hwnd` on an
+  unrealized Tk window (a native crash that bypassed `try`/`except`). Fixed
+  by deferring the HWND bind until the window is mapped + a graceful
+  fallback; the viewer now opens the actual transcript `.json` (no spurious
+  file-picker).
+- **"Re-detect hardware" froze the UI** — the probe ran on the Tk main
+  thread (+ an unbounded cuDNN/cuBLAS `ctypes.CDLL` probe). Fixed: runs
+  off-thread behind a generation-token guard + a timeout-bounded DLL probe.
+- **Queue per-task action bar was unusable** — the 500 ms `refresh()`
+  rebuilt the tree and wiped the selection; selection is now preserved
+  across the rebuild.
+- **Off-thread Tk writes fixed** — the Video Tiling log callback + 4
+  Advanced-dialog worker handlers now marshal through the main thread (new
+  `App.log_threadsafe`); tiling status colour now applied.
+- **Smaller** — status-cell click defers via `after_idle`; `start_tiling`
+  guards a bad grid spinbox; `pause_download` only pauses a running
+  download; theme + download-folder `save_config` guarded;
+  `minimise_to_tray` / `telemetry_opt_in` added to `DEFAULT_CONFIG`;
+  multi-file enqueue gates the model once; Advanced mouse-wheel binding
+  released on close; server handle registered before `start()`.
+
+Features:
+- **VLC transcript preview seek/scrub transport bar** — draggable position,
+  `MM:SS` readout, ±5 s / ±10 s skip, keyboard; degrades gracefully without
+  VLC.
+- **Web / LAN feature parity** — per-job advanced options (VAD, word
+  timestamps, diarization, clip range, …) via a per-job
+  `.whisperproject.json` override; `GET /api/jobs` list; pause / resume
+  routes; outputs from the engine's `task.output_paths`; a 3-view browser
+  UI (Submit / Jobs / Result with inline transcript); streaming uploads (no
+  full-RAM buffering); HTTP hardening (body-drain on early reject,
+  constant-time token compare). Cloud / alt backends are NOT per-job
+  switchable over the web (security boundary).
+- **"SMTV transcription" docx output format** (registry key `smtv_docx`, UI
+  label "SMTV transcription") — fills the bundled template
+  `core/writers/templates/smtv_template.docx`: a 4-column table (auto row #;
+  `Time Code` `HH:MM:SS.m`; `Foreign Language` = transcript; `English
+  Translation` empty for the human), title line
+  `"<work title> -Transcription in <language> – Translation in English"`,
+  filename matched; grows the table past 31 rows; forces a `.docx` extension.
+- **Google Cloud STT fixes — LIVE-VERIFIED** with the owner's
+  service-account JSON (project `crucial-context-297802`): default
+  model/location is now `chirp_2` / `us-central1` (supports auto-detect +
+  multilingual; the old `long` / `global` rejected `"auto"`); language codes
+  mapped ISO → BCP-47 (Google v2 rejects a bare `"en"`); word time offsets
+  always requested + words re-segmented into properly-timed phrases (a real
+  run produced 5 correctly-timed subtitle segments instead of one 0–30 s
+  blob). `config.py` `gcloud_stt_model` / `gcloud_stt_location` defaults
+  updated; `docs/CONFIG.md` + `docs/CLOUD_STT_GOOGLE.md` updated.
+- **Installer Video-Tiling opt-out** — a "do NOT include Video Tiling" task
+  in `installer_embed.iss` drops a `{app}\no_tiling.flag` marker; the app
+  hides the Video Tiling tab when present (`core.hub.tiling_tab_enabled()`).
+
+**SETUP NOTE — the app now DEFAULTS to Google Cloud transcription
+(uploads audio to Google):** the owner's service-account JSON at
+`C:\Users\Owner\Desktop\whisper_project_claude\crucial-context-297802-71bbe43c6f33.json`
+is set as the app default in the user config
+(`transcribe_backend = google_cloud_stt` + `gcloud_stt_credentials_json` +
+`gcloud_stt_model = chirp_2` / `gcloud_stt_location = us-central1`). This is
+the **dev machine's** config, not a shipped default — but be aware the app
+here uploads audio to Google by default. **To switch back to offline:**
+Advanced > Backend → `faster_whisper`. `google-cloud-speech` installs on
+first use (on demand); **batch mode** additionally needs a GCS bucket +
+**Storage Object Admin**.
+
+### P4 BACKLOG — planned, NOT yet implemented
+
+New requests from
+`C:\Users\Owner\Desktop\new jobs\claude_request_v1.38.txt`. Recorded as
+planned for a future session; nothing below is built yet.
+
+- **P4-1 — three-level merged configuration** (hard-coded → online-URL →
+  local-file) so model URLs / the usage-stats URL / latest-version /
+  ffplay links can change **without redistributing** the app.
+- **P4-2 — config-driven multi-model + an Advanced model selector** — add
+  `faster-whisper-medium`, `large-v3-turbo`, `distil-large-v3.5`;
+  `large-v3` stays the default.
+- **P4-3 — transcription format CONVERSION** — JSON ↔ SRT / VTT / TSV / TXT
+  (+ `.otr` import), with the faster-whisper JSON as the middle format.
+- **P4-4 — usage stats** — a "word count" column in the sqlite
+  transcription table + a PHP online stats tracker (IP / geoip via
+  `smch.ir`, filename, model, language, duration, AI time, status) + the
+  app POSTing stats.
+- **P4-5 — ffplay download links in config** for auto-fetch on Windows /
+  macOS.
 
 **Build/spec bookkeeping done:** the PyInstaller hidden-import lists in
 both `whisper_project_onefile.spec` and `whisper_project_onedir.spec` carry

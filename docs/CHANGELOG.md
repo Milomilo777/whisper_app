@@ -115,6 +115,41 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   Web / LAN access, the per-task controls, multi-monitor tiling, and the
   update check / in-place upgrade, with clickable helpful links.
 
+#### Phase 3 (added later in the same local batch)
+
+- **Seek / scrub transport bar in the VLC transcript preview.** The
+  built-in transcript player now has a draggable position bar with a
+  live `MM:SS` time readout, ±5 s / ±10 s skip buttons, and keyboard
+  control, so you can scrub to a moment instead of only play/pause. It
+  degrades gracefully when VLC is absent (the transport bar simply isn't
+  shown).
+- **Web / LAN feature parity with the desktop app.** A browser job can now
+  carry the same **per-job advanced options** as the desktop (VAD, word
+  timestamps, diarization, clip range, etc.), applied via a per-job
+  `.whisperproject.json` override; a new `GET /api/jobs` lists all jobs;
+  **pause / resume** routes were added; outputs are taken from the
+  engine's `task.output_paths`; and the page is now a small **3-view
+  browser UI** (Submit / Jobs / Result with the transcript shown inline).
+  Uploads are **streamed to disk** (no full-RAM buffering). HTTP hardening:
+  the request body is drained on an early reject (no broken-pipe noise) and
+  the access token is compared in **constant time**. *(Security boundary:
+  the cloud / alternate backends are deliberately NOT per-job switchable
+  over the web — a remote submitter can't redirect your audio to a cloud
+  backend.)*
+- **"SMTV transcription" docx output format** (registry key `smtv_docx`,
+  UI label **"SMTV transcription"**). It fills the transcription team's
+  bundled Word template (`core/writers/templates/smtv_template.docx`) — a
+  4-column table (auto row number; `Time Code` as `HH:MM:SS.m`; `Foreign
+  Language` = the transcript text; `English Translation` left empty for the
+  human translator), with a title line
+  `"<work title> -Transcription in <language> – Translation in English"`
+  and the output filename matched to it. The table grows past the template's
+  31 pre-formatted rows, and a `.docx` extension is forced.
+- **Installer opt-out for Video Tiling.** `installer_embed.iss` adds a
+  **"do NOT include Video Tiling"** task; selecting it drops a
+  `{app}\no_tiling.flag` marker and the app then hides the Video Tiling tab
+  (`core.hub.tiling_tab_enabled()`).
+
 ### Changed
 
 - **The model now downloads to a writable location by default.** The
@@ -127,6 +162,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   (`HUB_SUBFOLDER_NAME = "models"`) so an existing `Cache\models` model is
   **reused, not re-downloaded** (~3 GB saved). Verified on this machine with
   a real `load_config()` probe.
+
+#### Phase 3
+
+- **Google Cloud STT defaults are now `chirp_2` / `us-central1`** (were
+  `long` / `global`). This was **live-verified** against the owner's
+  service-account JSON (project `crucial-context-297802`): the previous
+  `long` / `global` pairing rejected language auto-detect, whereas `chirp_2`
+  supports auto-detect and multilingual input. New config defaults
+  `gcloud_stt_model = "chirp_2"` and `gcloud_stt_location = "us-central1"`
+  in `config.py`.
 
 ### Fixed
 
@@ -143,6 +188,41 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   backslash-preserving, brace-aware splitter replaces `tk.splitlist`, which
   was collapsing the leading `\\` of a `\\server\share\file` drop.
 
+#### Phase 3 (reported issues + a deep adversarial review)
+
+- **Every Web / LAN job crashed** with
+  `'_CancelledTask' object has no attribute 'paused'`. The server's task
+  object now mirrors the engine's read contract (renamed `_ServerTask`),
+  and the test fakes were hardened so the gap can't regress.
+- **"View transcript" closed the whole app.** The root cause was libvlc
+  `set_hwnd` on an *unrealized* Tk window — a native crash that bypassed
+  `try`/`except` entirely. The HWND bind is now **deferred until the window
+  is mapped**, with a graceful fallback; the viewer also now opens the
+  actual transcript `.json` instead of popping a spurious file-picker.
+- **"Re-detect hardware" froze the UI.** The probe ran on the Tk main
+  thread (plus an unbounded cuDNN/cuBLAS `ctypes.CDLL` probe). It now runs
+  **off-thread** behind a generation-token guard, with a **timeout-bounded**
+  DLL probe.
+- **The Queue per-task action bar was unusable** — the 500 ms `refresh()`
+  rebuilt the tree and wiped the row selection on every tick. Selection is
+  now **preserved across the rebuild**.
+- **Off-thread Tk writes fixed.** The Video Tiling log callback and four
+  Advanced-dialog worker handlers now marshal back through the main thread
+  via a new `App.log_threadsafe`; the tiling status colour is now applied.
+- **Smaller fixes** — a status-cell click defers via `after_idle`;
+  `start_tiling` guards a bad grid spinbox; `pause_download` only pauses a
+  *running* download; the theme + download-folder `save_config` calls are
+  guarded; `minimise_to_tray` / `telemetry_opt_in` were added to
+  `DEFAULT_CONFIG`; a multi-file enqueue gates the model **once**; the
+  Advanced mouse-wheel binding is released on close; and the server handle
+  is registered **before** `start()`.
+- **Google Cloud STT timing + language correctness** (live-verified with
+  the owner's service-account JSON). Language codes are mapped ISO → BCP-47
+  (Google v2 rejects a bare `"en"`); word time offsets are **always**
+  requested and the words are re-segmented into properly-timed phrases — a
+  real run produced **5 correctly-timed subtitle segments** instead of one
+  0–30 s blob.
+
 ### Docs
 
 - **Evaluation: skip Google's Gemma 4 12B as a transcription backend.**
@@ -155,6 +235,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   and the honest "the real $300-credit balance is not readable from the
   key" usage note. `docs/SERVER.md` updated for the one-click Web / LAN
   access toggle (alongside the existing `gui.py serve` CLI).
+
+#### Phase 3
+
+- `docs/CONFIG.md` and `docs/CLOUD_STT_GOOGLE.md` updated for the new
+  `chirp_2` / `us-central1` Google Cloud STT defaults (was `long` /
+  `global`) and the auto-detect / multilingual reason behind the change.
+- `docs/SERVER.md` updated for the Web / LAN feature parity — per-job
+  advanced options, the `GET /api/jobs` list, the pause / resume routes,
+  the 3-view browser UI, and streamed uploads — plus the note that cloud /
+  alternate backends are **not** per-job switchable over the web.
 
 ## [1.3.7] — 2026-05-29
 
