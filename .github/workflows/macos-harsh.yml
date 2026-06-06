@@ -1,0 +1,89 @@
+name: macOS harsh suite
+
+# The harshest cloud pass: randomized-order runs, repeat stress, coverage, and a
+# battery of static + security analyzers. Fires only on a push to the dedicated
+# `macos-harsh` branch (server-side on GitHub, so it survives a host reboot).
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos-harsh]
+
+jobs:
+  harsh:
+    name: harsh tests + static + security (macos-15 / py3.12)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps (slim) + harsh tooling
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pytest pytest-cov pytest-randomly pytest-repeat responses hypothesis ruff bandit pip-audit vulture pyright
+
+      - name: Randomized order x5 seeds (aggressive order-dependence hunt)
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: |
+          set +e
+          for s in 0 1 42 1337 2026; do
+            echo "::group::seed $s"
+            python -m pytest tests/ --ignore=tests/smoke --randomly-seed=$s -q
+            echo "seed $s rc=$?"
+            echo "::endgroup::"
+          done
+
+      - name: Repeat stress (each test x3, fixed order)
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: python -m pytest tests/ --ignore=tests/smoke --count=3 -p no:randomly -q
+
+      - name: Coverage (term-missing + xml) — find untested paths
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: python -m pytest tests/ --ignore=tests/smoke -p no:randomly --cov=app --cov=core --cov-report=term-missing:skip-covered --cov-report=xml -q
+
+      - name: Ruff (lint, full default ruleset)
+        continue-on-error: true
+        run: ruff check app core
+
+      - name: Bandit (security, medium+ severity)
+        continue-on-error: true
+        run: bandit -r app core -ll
+
+      - name: pip-audit (dependency CVEs)
+        continue-on-error: true
+        run: pip-audit
+
+      - name: Vulture (dead code)
+        continue-on-error: true
+        run: vulture app core --min-confidence 80
+
+      - name: Pyright (type check)
+        continue-on-error: true
+        run: python -m pyright app core
+
+      - name: CLI smoke without the model (entry points respond)
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: |
+          set +e
+          python gui.py --help;            echo "gui --help rc=$?"
+          python gui.py transcribe --help; echo "transcribe --help rc=$?"
+
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-harsh-coverage
+          path: coverage.xml
+          if-no-files-found: warn
