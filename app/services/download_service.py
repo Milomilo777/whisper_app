@@ -552,11 +552,22 @@ class DownloadService:
         # for it. The audio-format gate below must not reject such a clip in
         # video mode (smtv-research.md R3) — so we need is_smtv before the
         # validation runs, not after it (as it used to be ordered).
+        # Match the stashed episode against THIS url's page_url, not just
+        # "is it some SMTV episode". The format lookup is debounced 800ms,
+        # so a user who pastes SMTV url A, then replaces it with a DIFFERENT
+        # SMTV url B and clicks Download before B's lookup fires, would
+        # otherwise reuse episode A's CDN urls/transcript for B. A real
+        # episode (fetch_episode) always carries its already-stripped
+        # page_url, and url is stripped above, so reject the reuse only when
+        # the episode HAS a page_url that disagrees — an episode with no
+        # page_url (never produced in practice) keeps the old behaviour.
         raw_episode = getattr(app, "_smtv_episode", None)
+        episode_page_url = (getattr(raw_episode, "page_url", "") or "").strip()
         smtv_episode: smtv_mod.SmtvEpisode | None = (
             raw_episode
             if isinstance(raw_episode, smtv_mod.SmtvEpisode)
                and smtv_mod.is_smtv_url(url)
+               and (not episode_page_url or episode_page_url == url)
             else None
         )
         is_smtv = smtv_episode is not None
@@ -655,6 +666,25 @@ class DownloadService:
             section_start = None
         if not section_end:
             section_end = None
+        # Drop any bound at/beyond the probed video length. A user can TYPE a
+        # timecode past the end (the slider clamps, the entry field doesn't);
+        # an end >= duration is just "to the end" so dropping it is exactly
+        # equivalent, and a start >= duration is an empty slice that would
+        # build a "*<dur>-" arg yt-dlp can't honour (it downloads nothing /
+        # errors). Only act on a positive, known duration so a live/unknown
+        # length (0) never touches a valid range. SMTV ignores the slice
+        # entirely, so skip the guard there too.
+        probed_duration = 0.0
+        if not is_smtv:
+            try:
+                probed_duration = float(getattr(app, "_download_duration", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                probed_duration = 0.0
+        if probed_duration > 0:
+            if section_start is not None and section_start >= probed_duration:
+                section_start = None
+            if section_end is not None and section_end >= probed_duration:
+                section_end = None
         any_range = section_start is not None or section_end is not None
 
         # Decorate the visible title with the trim badge so the
@@ -1214,7 +1244,20 @@ class DownloadService:
                 break
 
             if kind == "progress":
-                task.progress = min(100, int(payload))
+                # Defensive coercion: a non-numeric / NaN / inf percent
+                # (a malformed yt-dlp progress JSON, a future event source)
+                # would make int(payload) raise ValueError/OverflowError.
+                # poll() has no surrounding try/except, so that exception
+                # would skip the after(300) re-arm at the end and WEDGE the
+                # pump — no further progress/done/error events for ANY task.
+                # Finite values behave exactly as before.
+                try:
+                    pct = float(payload)
+                except (TypeError, ValueError):
+                    pct = 0.0
+                if pct != pct or pct in (float("inf"), float("-inf")):
+                    pct = 0.0
+                task.progress = min(100, max(0, int(pct)))
             elif kind == "log":
                 app.log(payload)
             elif kind == "subtitle_status":
