@@ -35,6 +35,63 @@ _SPONSORBLOCK_CATEGORIES = [
 ]
 
 
+# Backend picker — human-readable labels mapped to the stored config value.
+# Offline engines stay first (faster_whisper is the default); the two cloud
+# options spell out their auth model so a non-technical user can tell them
+# apart (a pasted key vs. a downloaded service-account file).
+_BACKEND_CHOICES: list[tuple[str, str]] = [
+    ("Faster-Whisper — offline, default", "faster_whisper"),
+    ("whisper.cpp — offline, low-end CPUs", "whisper_cpp"),
+    ("Parakeet — offline, NVIDIA", "parakeet"),
+    ("Gemini cloud — simple API key", "cloud_stt"),
+    (
+        "Google Cloud Speech-to-Text — service account (60 min/mo free)",
+        "google_cloud_stt",
+    ),
+]
+_BACKEND_LABEL_TO_VALUE = {label: value for label, value in _BACKEND_CHOICES}
+_BACKEND_VALUE_TO_LABEL = {value: label for label, value in _BACKEND_CHOICES}
+
+# Step-by-step help for getting a Google Cloud service-account JSON. Each
+# entry is (numbered text, optional clickable URL). The URLs open the exact
+# console pages; screenshots are not embedded.
+_GCLOUD_HELP_STEPS: list[tuple[str, str]] = [
+    (
+        "1. Create or pick a Google Cloud project.",
+        "https://console.cloud.google.com/projectcreate",
+    ),
+    (
+        "2. Enable the Speech-to-Text API for that project.",
+        "https://console.cloud.google.com/apis/library/speech.googleapis.com",
+    ),
+    (
+        "3. (Optional but recommended) Make sure billing is on to unlock "
+        "the 60 free min/month + $300 credit.",
+        "https://console.cloud.google.com/billing",
+    ),
+    (
+        "4. Create a service account, then give it the role "
+        "'Cloud Speech-to-Text User' (for Batch mode also "
+        "'Storage Object Admin' on your bucket).",
+        "https://console.cloud.google.com/iam-admin/serviceaccounts",
+    ),
+    (
+        "5. On that service account: Keys > Add key > Create new key > "
+        "JSON > Download. Keep this file private.",
+        "",
+    ),
+    (
+        "6. Back here, click 'Browse...' and pick that downloaded .json "
+        "file. Then click 'Test connection'.",
+        "",
+    ),
+]
+_GCLOUD_OFFICIAL_GUIDE = (
+    "https://cloud.google.com/speech-to-text/docs/before-you-begin"
+)
+_GCLOUD_USAGE_CONSOLE = "https://console.cloud.google.com/billing"
+
+
 class AdvancedDialog(tk.Toplevel):
     def __init__(self, app: "App") -> None:
         super().__init__(app)
@@ -70,9 +127,6 @@ class AdvancedDialog(tk.Toplevel):
         self._filename_template = tk.StringVar(
             value=str(cfg.get("output_filename_template") or "{base}.{ext}")
         )
-        self._transcribe_backend = tk.StringVar(
-            value=str(cfg.get("transcribe_backend") or "faster_whisper")
-        )
         self._whisper_model = tk.StringVar(
             value=str(cfg.get("whisper_model") or DEFAULT_MODEL_SLUG)
         )
@@ -84,6 +138,29 @@ class AdvancedDialog(tk.Toplevel):
             value=str(cfg.get("cloud_stt_model") or "gemini-3.5-flash")
         )
         self._cloud_test_result = tk.StringVar(value="")
+        # Google Cloud Speech-to-Text (service-account JSON) — separate from
+        # the Gemini "paste a key" backend above. Uploads audio too.
+        self._gcloud_credentials = tk.StringVar(
+            value=str(cfg.get("gcloud_stt_credentials_json") or "")
+        )
+        self._gcloud_batch_mode = tk.BooleanVar(
+            value=bool(cfg.get("gcloud_stt_batch_mode", False))
+        )
+        self._gcloud_bucket = tk.StringVar(
+            value=str(cfg.get("gcloud_stt_bucket") or "")
+        )
+        self._gcloud_diarization = tk.BooleanVar(
+            value=bool(cfg.get("gcloud_stt_diarization", False))
+        )
+        self._gcloud_test_result = tk.StringVar(value="")
+        self._gcloud_usage_text = tk.StringVar(value="")
+        # Backend picker uses a human label internally; map back on save.
+        self._backend_display = tk.StringVar(
+            value=_BACKEND_VALUE_TO_LABEL.get(
+                str(cfg.get("transcribe_backend") or "faster_whisper"),
+                _BACKEND_CHOICES[0][0],
+            )
+        )
         self._hallucination_detect = tk.BooleanVar(
             value=bool(cfg.get("hallucination_detect_enabled", True))
         )
@@ -258,12 +335,12 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Label(extras, text="Backend").grid(row=4, column=0, sticky="w", padx=8, pady=4)
         backend_combo = ttk.Combobox(
             extras,
-            textvariable=self._transcribe_backend,
+            textvariable=self._backend_display,
             state="readonly",
-            values=("faster_whisper", "whisper_cpp", "parakeet", "cloud_stt"),
-            width=20,
+            values=[label for label, _value in _BACKEND_CHOICES],
+            width=56,
         )
-        backend_combo.grid(row=4, column=1, sticky="w", padx=8, pady=4)
+        backend_combo.grid(row=4, column=1, sticky="ew", padx=8, pady=4)
         ttk.Button(
             extras, text="Download whisper.cpp model...",
             command=self._download_whisper_cpp_model,
@@ -413,6 +490,8 @@ class AdvancedDialog(tk.Toplevel):
         link.bind("<Button-1>", lambda _e: self._open_billing_console())
         cloud.columnconfigure(1, weight=1)
 
+        self._build_gcloud_frame(body)
+
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
         watch.pack(fill="x", pady=(0, 8))
@@ -473,6 +552,141 @@ class AdvancedDialog(tk.Toplevel):
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Cancel", command=self._on_close).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save_and_close).pack(side="right")
+
+    def _build_gcloud_frame(self, body) -> None:
+        """Build the Google Cloud Speech-to-Text (service-account) frame.
+
+        Kept separate from the Gemini "paste a key" frame above because the
+        two cloud paths authenticate differently (an API key vs. a
+        downloaded service-account JSON file) and a non-technical user must
+        not confuse them.
+        """
+        gc = ttk.LabelFrame(
+            body,
+            text=(
+                "Google Cloud Speech-to-Text (service account) "
+                "— optional, uploads audio"
+            ),
+        )
+        gc.pack(fill="x", pady=(0, 8))
+
+        ttk.Label(
+            gc,
+            text=(
+                "This is the FULL Google Cloud Speech-to-Text service. It "
+                "signs in with a service-account JSON file you download from "
+                "the Google Cloud console (NOT the simple API key used by the "
+                "Gemini option above). New Google Cloud customers get 60 free "
+                "minutes every month plus a $300 / 90-day credit."
+            ),
+            wraplength=820,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
+
+        # -- service-account JSON file row --------------------------------
+        ttk.Label(gc, text="Service-account JSON file:").grid(
+            row=1, column=0, sticky="w", padx=8, pady=4
+        )
+        self._gcloud_path_label = ttk.Label(
+            gc,
+            text=self._gcloud_path_display(),
+            foreground="#666",
+            wraplength=560,
+            justify="left",
+        )
+        self._gcloud_path_label.grid(row=1, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Button(
+            gc, text="Browse...", command=self._browse_gcloud_credentials,
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
+
+        btns = ttk.Frame(gc)
+        btns.grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ttk.Button(
+            btns, text="How do I get this file?",
+            command=self._show_gcloud_help,
+        ).pack(side="left")
+        ttk.Button(
+            btns, text="Test connection",
+            command=self._test_gcloud_connection,
+        ).pack(side="left", padx=(8, 0))
+        ttk.Label(
+            gc,
+            textvariable=self._gcloud_test_result,
+            foreground="#666",
+            wraplength=820,
+            justify="left",
+        ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+
+        # -- batch mode + bucket ------------------------------------------
+        ttk.Checkbutton(
+            gc,
+            text="Batch mode (cheaper, slower)",
+            variable=self._gcloud_batch_mode,
+            command=self._refresh_gcloud_dynamic,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(
+            gc,
+            text=(
+                "Batch is ~75% cheaper (~$0.004/min vs ~$0.016/min) but can "
+                "take up to ~24 hours and needs a Google Cloud Storage bucket "
+                "you own."
+            ),
+            foreground="#666",
+            wraplength=820,
+            justify="left",
+        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(gc, text="Cloud Storage bucket:").grid(
+            row=6, column=0, sticky="w", padx=8, pady=4
+        )
+        self._gcloud_bucket_entry = ttk.Entry(
+            gc, textvariable=self._gcloud_bucket, width=42,
+        )
+        self._gcloud_bucket_entry.grid(row=6, column=1, sticky="ew", padx=8, pady=4)
+
+        # -- diarization ---------------------------------------------------
+        ttk.Checkbutton(
+            gc,
+            text="Detect speakers (diarization)",
+            variable=self._gcloud_diarization,
+        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+
+        # -- live usage / cost estimate -----------------------------------
+        ttk.Label(
+            gc,
+            textvariable=self._gcloud_usage_text,
+            wraplength=820,
+            justify="left",
+        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
+        ttk.Label(
+            gc,
+            text="(local estimate — see Google Cloud Console for the real figure)",
+            foreground="#666",
+        ).grid(row=9, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 2))
+        usage_link = ttk.Label(
+            gc,
+            text="Open billing/usage console",
+            foreground="#1a73e8",
+            cursor="hand2",
+        )
+        usage_link.grid(row=10, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+        usage_link.bind(
+            "<Button-1>", lambda _e: self._open_url(_GCLOUD_USAGE_CONSOLE)
+        )
+
+        # -- privacy note --------------------------------------------------
+        ttk.Label(
+            gc,
+            text="Cloud transcription uploads your audio to Google (it is not offline).",
+            foreground="#b00020",
+            wraplength=820,
+            justify="left",
+        ).grid(row=11, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 4))
+
+        gc.columnconfigure(1, weight=1)
+
+        # Initialise the dynamic bits (bucket enable/disable + usage label).
+        self._refresh_gcloud_dynamic()
+        self._refresh_gcloud_usage()
 
     def _slider_row(self, parent, label: str, var, lo, hi, _step, row: int, *, is_float: bool = False):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=4)
@@ -549,11 +763,20 @@ class AdvancedDialog(tk.Toplevel):
         cfg["cookies_from_browser"] = "" if _cb in ("", "(off)") else _cb
         tpl = (self._filename_template.get() or "").strip() or "{base}.{ext}"
         cfg["output_filename_template"] = tpl
-        cfg["transcribe_backend"] = self._transcribe_backend.get() or "faster_whisper"
+        cfg["transcribe_backend"] = _BACKEND_LABEL_TO_VALUE.get(
+            self._backend_display.get() or "", "faster_whisper"
+        )
         cfg["cloud_stt_api_key"] = self._cloud_api_key.get().strip()
         cfg["cloud_stt_model"] = (
             self._cloud_model.get().strip() or "gemini-3.5-flash"
         )
+        # Google Cloud Speech-to-Text (service-account) settings.
+        cfg["gcloud_stt_credentials_json"] = (
+            self._gcloud_credentials.get() or ""
+        ).strip()
+        cfg["gcloud_stt_batch_mode"] = bool(self._gcloud_batch_mode.get())
+        cfg["gcloud_stt_bucket"] = (self._gcloud_bucket.get() or "").strip()
+        cfg["gcloud_stt_diarization"] = bool(self._gcloud_diarization.get())
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
         cfg["demucs_enabled"] = bool(self._demucs_enabled.get())
@@ -731,8 +954,202 @@ class AdvancedDialog(tk.Toplevel):
 
     def _open_billing_console(self) -> None:
         """Open Google's billing console in the default browser."""
+        self._open_url("https://console.cloud.google.com/billing")
+
+    def _open_url(self, url: str) -> None:
+        """Open ``url`` in the default browser; never raises."""
         import webbrowser
         try:
-            webbrowser.open("https://console.cloud.google.com/billing")
+            webbrowser.open(url)
         except Exception as e:  # noqa: BLE001
-            self.app.log(f"Could not open billing console: {e}")
+            self.app.log(f"Could not open link: {e}")
+
+    # -- Google Cloud Speech-to-Text (service-account) handlers -----------
+
+    def _gcloud_path_display(self) -> str:
+        """The path text shown next to 'Browse...' ('(none selected)' empty)."""
+        path = (self._gcloud_credentials.get() or "").strip()
+        return path or "(none selected)"
+
+    def _browse_gcloud_credentials(self) -> None:
+        """Pick the downloaded service-account JSON file."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Pick your Google Cloud service-account JSON key file",
+            filetypes=[("JSON key file", "*.json"), ("All files", "*.*")],
+        )
+        if path:
+            self._gcloud_credentials.set(path)
+            self._gcloud_path_label.config(text=self._gcloud_path_display())
+
+    def _refresh_gcloud_dynamic(self) -> None:
+        """Enable/disable the bucket entry based on the batch-mode checkbox."""
+        try:
+            state = "normal" if self._gcloud_batch_mode.get() else "disabled"
+            self._gcloud_bucket_entry.config(state=state)
+        except tk.TclError:
+            pass
+
+    def _refresh_gcloud_usage(self) -> None:
+        """Recompute the live 'minutes used / estimated cost' label.
+
+        Reads the LOCAL monthly counter from config and asks the pure
+        formatter (in the backend module) for the display string. The
+        formatter resets the shown minutes to 0 when the stored month is
+        not the current month (the free tier resets monthly).
+        """
+        try:
+            from core.backends import google_cloud_stt as _g
+        except Exception as e:  # noqa: BLE001
+            self._gcloud_usage_text.set(f"Usage unavailable: {e}")
+            return
+        cfg = self.app.app_config
+        used = float(cfg.get("gcloud_stt_minutes_used") or 0.0)
+        month_stored = str(cfg.get("gcloud_stt_minutes_month") or "")
+        cap = int(cfg.get("gcloud_stt_free_minutes_cap") or 60)
+        batch = bool(self._gcloud_batch_mode.get())
+        text = _g.format_usage(
+            used, month_stored, _g.month_marker(), cap, batch
+        )
+        self._gcloud_usage_text.set(text)
+
+    def _show_gcloud_help(self) -> None:
+        """Open a step-by-step help dialog with clickable console links."""
+        top = tk.Toplevel(self)
+        top.title("How to get a Google Cloud service-account JSON file")
+        top.transient(self)
+        top.resizable(True, True)
+        frame = ttk.Frame(top, padding=14)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text=(
+                "Follow these steps once. The links open the exact Google "
+                "Cloud console pages (screenshots are not embedded)."
+            ),
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+
+        for text, url in _GCLOUD_HELP_STEPS:
+            row = ttk.Frame(frame)
+            row.pack(fill="x", anchor="w", pady=2)
+            ttk.Label(
+                row, text=text, wraplength=620, justify="left",
+            ).pack(anchor="w")
+            if url:
+                link = ttk.Label(
+                    row, text=url, foreground="#1a73e8", cursor="hand2",
+                    wraplength=620, justify="left",
+                )
+                link.pack(anchor="w", padx=(16, 0))
+                link.bind("<Button-1>", lambda _e, u=url: self._open_url(u))
+
+        guide = ttk.Label(
+            frame,
+            text=f"Official guide: {_GCLOUD_OFFICIAL_GUIDE}",
+            foreground="#1a73e8",
+            cursor="hand2",
+            wraplength=620,
+            justify="left",
+        )
+        guide.pack(anchor="w", pady=(12, 0))
+        guide.bind(
+            "<Button-1>", lambda _e: self._open_url(_GCLOUD_OFFICIAL_GUIDE)
+        )
+
+        ttk.Button(frame, text="Close", command=top.destroy).pack(
+            anchor="e", pady=(14, 0)
+        )
+        top.update_idletasks()
+        try:
+            top.grab_set()
+        except tk.TclError:
+            pass
+
+    def _test_gcloud_connection(self) -> None:
+        """Validate the service account on a DAEMON thread (never blocks UI).
+
+        Steps, all off the Tk thread:
+          1. Ensure the google libraries are installed (install on demand
+             via core.optional_deps if missing, surfacing an "installing..."
+             status).
+          2. Build the backend, call load() (validates the JSON + project),
+             then build the v2 SpeechClient (proves auth + the credentials
+             parse). A clean client build is enough to confirm the account
+             without spending a recognise call.
+
+        The result is marshalled back to the Tk main thread via
+        ``app.post_to_main`` before touching the result StringVar — never
+        touch Tk from the worker thread.
+        """
+        path = (self._gcloud_credentials.get() or "").strip()
+        batch = bool(self._gcloud_batch_mode.get())
+        bucket = (self._gcloud_bucket.get() or "").strip()
+        if not path:
+            self._gcloud_test_result.set(
+                "Pick your service-account JSON file first (Browse...)."
+            )
+            return
+        self._gcloud_test_result.set("Testing connection...")
+
+        def _set_result(msg: str) -> None:
+            try:
+                self._gcloud_test_result.set(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+        def _status(msg: str) -> None:
+            self.app.post_to_main(lambda: _set_result(msg))
+
+        def _worker() -> None:
+            try:
+                from core import optional_deps
+                from core.backends import google_cloud_stt as _g
+                if not _g.runtime_available():
+                    _status("Installing Google Cloud libraries (one-time)...")
+                    ok_install = optional_deps.install(
+                        "google_cloud_stt", log_cb=self.app.log
+                    )
+                    if not ok_install or not _g.runtime_available():
+                        _status(
+                            "FAILED — could not install the Google Cloud "
+                            "libraries. Check your internet connection and "
+                            "retry."
+                        )
+                        return
+                config = {
+                    "gcloud_stt_credentials_json": path,
+                    "gcloud_stt_batch_mode": batch,
+                    "gcloud_stt_bucket": bucket,
+                    "gcloud_stt_model": (
+                        self.app.app_config.get("gcloud_stt_model") or "long"
+                    ),
+                    "gcloud_stt_location": (
+                        self.app.app_config.get("gcloud_stt_location")
+                        or "global"
+                    ),
+                }
+                backend = _g.GoogleCloudSttBackend(config=config)
+                if not backend.load():
+                    _status("FAILED — " + (backend.get_error() or "unknown error"))
+                    return
+                # Building the client proves the JSON authenticates and the
+                # Speech-to-Text client can initialise (no audio spent).
+                try:
+                    backend._build_client()  # noqa: SLF001 — intentional probe
+                except Exception as e:  # noqa: BLE001
+                    _status("FAILED — " + str(e))
+                    return
+                _status(
+                    "OK — service account accepted and the Speech-to-Text "
+                    "client initialised. You can transcribe with this backend."
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Google Cloud STT connection test failed")
+                _status(f"FAILED — connection test error: {e}")
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="gcloud-stt-connection-test")

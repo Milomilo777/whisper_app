@@ -105,7 +105,7 @@ Key fields:
 | `hub_folder` | Where Whisper model files are stored (set by first-run dialog) |
 | `model_path` | Per-model override; derived from `hub_folder + model.name` when unset |
 | `whisper_model` | One of `large-v3` (default), `large-v3-turbo`, `distil-large-v3.5` |
-| `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt` |
+| `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt`, `google_cloud_stt` |
 | `auto_chapters_enabled`, `hallucination_detect_enabled` | Post-process toggles |
 | `update_check_enabled` | Opt-in GitHub "update available" check (on by default; notify-only, never auto-downloads) |
 | `last_update_check` | ISO date of the last quiet update check (once-per-day throttle) |
@@ -114,12 +114,18 @@ Full reference: [docs/CONFIG.md](docs/CONFIG.md).
 
 ### Optional cloud backend (uploads your audio)
 
-There is one **opt-in, non-offline** backend: `cloud_stt`, which sends
-audio to the Google Gemini API for transcription using a free API key you
-paste in **Advanced > Backend**. It **breaks the offline guarantee** — use
-it only for content you may send to a cloud service. Setup, privacy, and
-quota details are in [docs/CLOUD_STT.md](docs/CLOUD_STT.md). All default
-backends remain fully offline.
+There are two **opt-in, non-offline** backends, both set in
+**Advanced > Backend**. Each **breaks the offline guarantee** — use them
+only for content you may send to a cloud service. All default backends
+remain fully offline.
+
+- `cloud_stt` — Google **Gemini API**, authenticated with a free API key
+  you paste. Quickest setup. Details:
+  [docs/CLOUD_STT.md](docs/CLOUD_STT.md).
+- `google_cloud_stt` — the full **Google Cloud Speech-to-Text** service,
+  authenticated with a service-account JSON file you download. Gives 60
+  free minutes/month, speaker labels, and a cheaper batch mode. Details:
+  [docs/CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md).
 
 ---
 
@@ -185,6 +191,8 @@ optional `--token`, and the trusted-network security caveats.
 | [BUILD.md](docs/BUILD.md) | Build the three deliverables yourself |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Process model + threading + protocols |
 | [CONFIG.md](docs/CONFIG.md) | Every config key with defaults |
+| [CLOUD_STT.md](docs/CLOUD_STT.md) | Optional Gemini-API cloud backend (paste a key) |
+| [CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md) | Optional Google Cloud Speech-to-Text backend (service-account JSON, batch mode) |
 | [RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | How to ship a new version |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [DECISIONS.md](docs/DECISIONS.md) | Non-obvious design choices + why |
