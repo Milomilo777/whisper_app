@@ -443,6 +443,10 @@ class App(tk.Tk):
     tiling_monitors_info_var: tk.StringVar
     # Spatial monitor indices (core.monitors) ticked for multi-monitor.
     tiling_selected_monitors: list[int]
+    # ffplay auto-download notice + button (only when ffplay is absent and a
+    # download URL is configured; see tabs.build_tiling_tab).
+    tiling_ffplay_notice: "ttk.Frame"
+    tiling_download_ffplay_btn: "ttk.Button"
     # Web / LAN access tab (created by tabs.build_server_tab).
     server_port_var: tk.IntVar
     server_share_lan_var: tk.BooleanVar
@@ -2797,6 +2801,66 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         self.tiling_status_var.set("Stopped.")
+
+    def download_ffplay(self) -> None:
+        """Download ffplay for Video Tiling on a daemon thread (P4-5).
+
+        ffplay isn't bundled; when a download URL is configured for this
+        platform (``config['ffplay_downloads']``) this fetches it into the
+        app's bin/ dir. The blocking download runs off-thread; progress + the
+        success/failure result are marshalled back to the Tk main thread via
+        post_to_main — this method NEVER touches Tk from the worker thread.
+        """
+        from core.tiling import download_ffplay as _download_ffplay
+
+        btn = getattr(self, "tiling_download_ffplay_btn", None)
+        try:
+            if btn is not None:
+                btn.config(state="disabled", text="Downloading ffplay…")
+        except Exception:  # noqa: BLE001
+            pass
+        self.tiling_status_var.set("Downloading ffplay…")
+
+        def _progress(msg: str) -> None:
+            self.post_to_main(lambda m=msg: self._on_ffplay_progress(m))
+
+        def _worker() -> None:
+            ok = _download_ffplay(progress_cb=_progress, config=self.app_config)
+            self.post_to_main(lambda: self._on_ffplay_done(ok))
+
+        import threading as _threading
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_ffplay_progress(self, msg: str) -> None:
+        self.tiling_status_var.set(msg)
+        self.log(msg)
+
+    def _on_ffplay_done(self, ok: bool) -> None:
+        from core.tiling import ffplay_available
+
+        btn = getattr(self, "tiling_download_ffplay_btn", None)
+        if ok and ffplay_available():
+            # Hide the whole notice (label + button) — ffplay is here now.
+            notice = getattr(self, "tiling_ffplay_notice", None)
+            if notice is not None:
+                try:
+                    notice.pack_forget()
+                except Exception:  # noqa: BLE001
+                    pass
+            self.tiling_status_var.set("ffplay is ready — you can start tiling.")
+        else:
+            if btn is not None:
+                try:
+                    btn.config(state="normal", text="Download ffplay")
+                except Exception:  # noqa: BLE001
+                    pass
+            messagebox.showwarning(
+                "Download ffplay",
+                "Could not download ffplay automatically. You can put "
+                "ffplay in the app's bin folder manually (it ships with the "
+                "full ffmpeg build).",
+                parent=self,
+            )
 
     # Web / LAN access server -------------------------------------------------
     def _save_server_prefs(self) -> None:

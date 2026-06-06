@@ -264,7 +264,32 @@ DEFAULT_CONFIG = {
     # to control.
     "stats_url": "",
     "latest_version": "",
-    "ffplay_downloads": {},
+    # ffplay (Video Tiling) is NOT bundled. When it's missing, the app can
+    # auto-download it from the platform's URL here (see
+    # core.tiling.download_ffplay). The value maps a platform key
+    # ("windows"/"macos"/"linux") to either a DIRECT ffplay[.exe] URL or a
+    # .zip of a full ffmpeg build that CONTAINS ffplay[.exe] (the helper
+    # extracts just ffplay).
+    #
+    # OWNER ACTION — VERIFY / OVERRIDE THESE VIA THE ONLINE CONFIG. The
+    # defaults below point at well-known public static-ffmpeg builds, but
+    # third-party URLs rot and their archive layout can change. Confirm they
+    # still resolve to an ffmpeg build that includes ffplay, then host the
+    # canonical values in the online app config (config_url) so they can be
+    # corrected without an app update.
+    #
+    # The download helper only handles a direct ffplay[.exe] URL or a .ZIP
+    # that contains it (stdlib zipfile) — NOT .7z / .tar.xz. The Windows
+    # default below is a BtbN full build shipped as a .zip (contains
+    # bin/ffplay.exe); macOS evermeet.cx serves a per-binary ffplay .zip.
+    "ffplay_downloads": {
+        "windows": (
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+            "ffmpeg-master-latest-win64-gpl.zip"
+        ),
+        "macos": "https://evermeet.cx/ffmpeg/getrelease/ffplay/zip",
+        "linux": "",
+    },
 }
 
 

@@ -22,9 +22,9 @@ The merge itself is pure and testable: `core.config.merge_config_sources(hardcod
 |---|---|---|---|
 | `config_url` | string | `https://smch.ir/whisper/app_config.json` (placeholder — owner sets the real URL) | URL of the online app-level config JSON. Fetched best-effort on startup; cached for offline fallback. Empty disables the online layer. A local `config.json` may override this (e.g. a staging URL). |
 | `model_catalog` | object | `{}` | Online/local-supplied catalog of selectable models, same shape as `core.model_manager.MODEL_REGISTRY` (`slug → {label, name, url, md5, approx_size_gb}`). Overlaid on the built-in catalog so new models can ship without an app update. **Allowlisted** for the online layer. |
-| `stats_url` | string | `""` | Usage-stats POST endpoint (the app POSTs anonymous stats here when telemetry is opted in). **Allowlisted** for the online layer so it can be set/changed remotely. |
+| `stats_url` | string | `""` | Usage-stats POST endpoint. The app POSTs per-transcription usage here (file name, model, language, audio duration, AI time, word count, status) **only when `telemetry_opt_in` is true** (default OFF) — see **Usage stats (P4-4)** below. Empty = no POST. **Allowlisted** for the online layer so it can be set/changed remotely. |
 | `latest_version` | string | `""` | Newest published version string (informational; complements the GitHub update check). **Allowlisted** for the online layer. |
-| `ffplay_downloads` | object | `{}` | Platform → ffplay download URL map (e.g. `{"windows": "...", "macos": "..."}`) for the Video-Tiling ffplay binary (not bundled). **Allowlisted** for the online layer. |
+| `ffplay_downloads` | object | `{"windows": "<BtbN win64-gpl .zip>", "macos": "<evermeet ffplay .zip>", "linux": ""}` | Platform → ffplay download URL map for the Video-Tiling ffplay binary (not bundled). Each value is a DIRECT `ffplay[.exe]` URL **or** a `.zip` of a full ffmpeg build that contains it (the downloader extracts just ffplay; `.7z`/`.tar.*` are NOT supported). See **ffplay auto-download (P4-5)** below. **OWNER ACTION: verify/override these URLs via the online config** — third-party static-build URLs and their archive layouts rot. **Allowlisted** for the online layer. |
 
 ## Where things live (Phase 1.2)
 
@@ -108,6 +108,15 @@ video-wall engine). All are remembered between launches.
 | `tiling_selected_monitors` | array of int | `[]` | Spatial monitor indices (from `core.monitors`, `0` = left-most) ticked in the **Monitors…** chooser. Empty = all monitors when multi-monitor is on, or the primary when off. Stale indices (a monitor that has been unplugged) are ignored at start. |
 | `tiling_auto_restart` | bool | `true` | Reconnect automatically with exponential backoff (3s→30s) when the stream drops; after repeated quick failures the engine self-heals by updating yt-dlp. Off = a drop just stops. |
 
+#### ffplay auto-download (P4-5)
+
+ffplay is **not bundled** (only ffmpeg / ffprobe / yt-dlp are). When ffplay is missing, the Video Tiling tab behaves as follows:
+
+- If `ffplay_downloads[<platform>]` is set, it shows a **Download ffplay** button. Clicking it runs `core.tiling.download_ffplay()` on a daemon thread, fetching the URL into the app's `bin/` dir. The URL may be a direct `ffplay[.exe]` binary, or a `.zip` of a full ffmpeg build — in which case `core.tiling.extract_ffplay_from_zip()` pulls out just `ffplay[.exe]`. `.7z` / `.tar.*` are rejected (stdlib `zipfile` only).
+- If no URL is configured, it keeps the original "put ffplay in the bin folder / install ffmpeg on PATH" guidance.
+
+The pure seams are `select_ffplay_url(downloads, platform_key)` and `extract_ffplay_from_zip(zip_path, dest_dir)`. **Owner: verify the default `ffplay_downloads` URLs (Windows BtbN, macOS evermeet) and override them via the online config — those third-party builds and their archive layouts change over time.**
+
 ### Cloud Speech-to-Text (optional, Google Gemini API)
 
 Off by default. These keys only take effect when `transcribe_backend` is
@@ -168,6 +177,30 @@ It binds **loopback (`127.0.0.1`) by default** — no Windows firewall prompt
 | `server_max_upload_mb` | int | `512` | Caps a single browser upload (MB). The worker's ~1 MB command guard does NOT cover browser uploads, so this is the upload size limit for the web path. |
 | `server_share_lan` | bool | `false` | When `true`, the tab's Start binds `0.0.0.0` (all interfaces — other devices on the network can reach it) instead of `127.0.0.1` (this machine only). Persisted from the **Share on local network** checkbox; this is the path that triggers the Windows firewall prompt. The CLI uses `--lan` instead of this key. |
 | `server_token` | string | `""` | Optional shared-secret password. When non-empty, every request must present it (`X-Auth-Token` header or `?token=` query). Stored in **cleartext** here, consistent with cookies / API keys (the file is per-user under `%LOCALAPPDATA%\WhisperProject` and is not encrypted). |
+
+### Usage stats (P4-4) — opt-in, privacy
+
+After each transcription finishes (any terminal status), the app can POST a small usage record to `stats_url`. **This is OFF by default and gated strictly on `telemetry_opt_in`** (the same flag the launch-ping telemetry uses; toggled in **Advanced → telemetry opt-in**). Nothing is sent unless BOTH `telemetry_opt_in` is true AND `stats_url` is non-empty.
+
+What is sent (form-encoded, by `core.stats.post_stats_async` on a daemon thread, short timeout, all errors swallowed — it never blocks or crashes a transcription):
+
+| Field | Source |
+|---|---|
+| `file_name` | basename of the source file (no path) |
+| `model` | the model name / slug used |
+| `language` | detected language |
+| `audio_duration` | best-effort, the last segment's end time (s) |
+| `transcription_time` | wall-clock AI compute time (s) |
+| `word_count` | total words in the transcript |
+| `status` | finished / error / cancelled / … |
+
+The server (`stats/transcription_stats.php`, a deliverable in this repo) ADDITIONALLY records the request's **client IP** and a **geoip lookup** (country + the full geoip JSON, fetched server-side from `https://smch.ir/stats/geoip/index.php?ip={ip}`). Because IP + filename are involved, the opt-in gate is mandatory. The same `word_count` is also stored locally in `history.db` (`transcriptions.word_count`, added by an idempotent migration) regardless of opt-in.
+
+The payload builder `core.stats.build_stats_payload(...)` is a pure function (no I/O), and `post_stats_async` re-checks the opt-in itself so a mistaken direct call can never leak data.
+
+### Transcript conversion (P4-3)
+
+Not a config key — a **File → Convert transcript…** menu action backed by the Tk-free `core.convert`. It parses an existing transcript (`.srt` / `.vtt` / `.tsv` / `.json`, plus `.otr` import) into the faster-whisper JSON segment list (the universal middle format) and re-emits any text format from the writers registry (`srt` / `vtt` / `tsv` / `txt` / `json` / `lrc` / `md`). `.txt` is **output-only** (no timestamps to parse back). Pure seams: `parse_to_segments(path)` (auto-detects by extension then content) and `convert_file(in, out_format, out_path=None)` (writes beside the input; never clobbers the source on an in-place re-emit).
 
 ## Coming in later phases
 

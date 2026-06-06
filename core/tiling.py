@@ -32,13 +32,16 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from typing import Any, Callable, Optional
 
 from . import monitors as _monitors
 from ._proc import kill_process_tree
-from .paths import bundled_binary
+from .paths import bin_dir, bundled_binary
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,162 @@ def ffplay_available() -> bool:
     """True if an ffplay binary can be found (bundled or on PATH)."""
     p = ffplay_path()
     return os.path.isfile(p) or shutil.which(p) is not None
+
+
+# --------------------------------------------------------------------------- #
+#  ffplay auto-download (P4-5) — pure helpers + the download driver
+# --------------------------------------------------------------------------- #
+ProgressCb = Callable[[str], None]
+
+
+def ffplay_platform_key() -> str:
+    """Map the running OS to the ``config['ffplay_downloads']`` key."""
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def select_ffplay_url(downloads: Any, platform_key: str | None = None) -> str:
+    """Pick the ffplay download URL for *platform_key* from *downloads*.
+
+    *downloads* is the ``ffplay_downloads`` dict (platform → URL). Returns the
+    matching URL, or "" when the dict is missing/wrong-shaped, the key is
+    absent, or its value is empty. Pure — no I/O.
+    """
+    if not isinstance(downloads, dict):
+        return ""
+    key = platform_key or ffplay_platform_key()
+    val = downloads.get(key)
+    return val.strip() if isinstance(val, str) else ""
+
+
+def _ffplay_exe_name() -> str:
+    return "ffplay.exe" if os.name == "nt" else "ffplay"
+
+
+def extract_ffplay_from_zip(zip_path: str, dest_dir: str) -> str:
+    """Extract just ``ffplay[.exe]`` from the zip at *zip_path* into *dest_dir*.
+
+    Scans the archive for an entry whose basename is ``ffplay`` /
+    ``ffplay.exe`` (case-insensitive; a member may live under e.g.
+    ``ffmpeg-.../bin/ffplay.exe``) and writes ONLY that one file, flattened to
+    ``dest_dir/ffplay[.exe]``. Returns the written path. Raises
+    ``FileNotFoundError`` when the archive has no ffplay member, and lets
+    ``zipfile.BadZipFile`` surface on a corrupt archive.
+
+    Pure-ish: only touches *zip_path* (read) and *dest_dir* (write); no
+    network. Unit-tested with a tiny in-memory zip.
+    """
+    import zipfile
+
+    want = _ffplay_exe_name().lower()
+    os.makedirs(dest_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as zf:
+        member = None
+        for name in zf.namelist():
+            base = os.path.basename(name.replace("\\", "/")).lower()
+            # Accept ffplay or ffplay.exe regardless of the host OS naming, so
+            # a Windows zip extracted on a test host (or vice-versa) still
+            # finds it; prefer the exact platform name when both appear.
+            if base in ("ffplay", "ffplay.exe"):
+                member = name
+                if base == want:
+                    break
+        if member is None:
+            raise FileNotFoundError(
+                "The downloaded archive does not contain an ffplay binary."
+            )
+        target = os.path.join(dest_dir, _ffplay_exe_name())
+        with zf.open(member) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    # Best-effort exec bit on POSIX (no effect on Windows).
+    if os.name != "nt":
+        try:
+            os.chmod(target, 0o755)
+        except OSError:
+            pass
+    return target
+
+
+def download_ffplay(
+    progress_cb: Optional[ProgressCb] = None,
+    config: Optional[dict] = None,
+) -> bool:
+    """Download ffplay for this platform into the app's ``bin/`` dir.
+
+    Resolves the URL from ``config['ffplay_downloads'][<platform>]`` (loading
+    the merged config when *config* is None). The URL may be a DIRECT
+    ``ffplay[.exe]`` or a ``.zip`` of a full ffmpeg build that contains it —
+    in the latter case only ffplay is extracted. ``.7z`` / ``.tar.*`` are NOT
+    supported (stdlib only); they return False with a clear progress message.
+
+    Returns True on success (ffplay is now in ``bin/``), False otherwise.
+    Blocking — call on a daemon thread. Never raises: every failure is reported
+    via *progress_cb* and returns False.
+    """
+    say = progress_cb or (lambda _m: None)
+    try:
+        if config is None:
+            from .config import load_config
+            config = load_config()
+        url = select_ffplay_url(config.get("ffplay_downloads"))
+        if not url:
+            say("No ffplay download URL is configured for this platform.")
+            return False
+
+        bdir = bin_dir()
+        os.makedirs(bdir, exist_ok=True)
+        target = os.path.join(bdir, _ffplay_exe_name())
+
+        lower = url.lower().split("?", 1)[0]
+        if lower.endswith((".7z", ".tar.xz", ".tar.gz", ".tar.bz2", ".xz")):
+            say(
+                "The configured ffplay URL is a .7z/.tar archive, which this "
+                "downloader can't open. Use a direct ffplay binary or a .zip."
+            )
+            return False
+
+        is_zip = lower.endswith(".zip") or "/zip" in lower
+        say("Downloading ffplay…")
+        fd, tmp = tempfile.mkstemp(prefix="ffplay-dl-", suffix=".zip" if is_zip else "")
+        os.close(fd)
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "WhisperProject"}
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp, open(tmp, "wb") as out:
+                shutil.copyfileobj(resp, out)
+
+            if is_zip:
+                say("Extracting ffplay…")
+                extract_ffplay_from_zip(tmp, bdir)
+            else:
+                # Direct binary — move it into place.
+                shutil.move(tmp, target)
+                tmp = ""  # consumed
+                if os.name != "nt":
+                    try:
+                        os.chmod(target, 0o755)
+                    except OSError:
+                        pass
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+
+        ok = os.path.isfile(target)
+        say("ffplay is ready." if ok else "ffplay download did not produce a binary.")
+        return ok
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        say(f"ffplay download failed: {e}")
+        return False
+    except Exception as e:  # noqa: BLE001
+        say(f"ffplay download failed: {e}")
+        return False
 
 
 def is_valid_stream_url(url: Any) -> bool:

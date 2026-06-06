@@ -863,17 +863,41 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     )
     app.tiling_status_label.pack(anchor="w", pady=(6, 0))
 
+    # ffplay presence: keep a handle on the notice frame so the Download
+    # button can hide it once ffplay lands. When a download URL is configured
+    # we offer a one-click "Download ffplay"; otherwise we keep the existing
+    # "drop ffplay in bin" guidance.
+    from core.tiling import select_ffplay_url
+
+    app.tiling_ffplay_notice = ttk.Frame(frame)
+    app.tiling_ffplay_notice.pack(anchor="w", pady=(10, 0), fill="x")
     if not ffplay_available():
         ffplay_name = "ffplay.exe" if os.name == "nt" else "ffplay"
-        ttk.Label(
-            frame,
-            text=(
-                f"Note: Video Tiling needs ffplay, which isn't bundled. Put "
-                f"{ffplay_name} in the app's bin folder (it comes with the "
-                f"full ffmpeg build) or install ffmpeg so ffplay is on PATH."
-            ),
-            wraplength=620, justify="left", foreground="#b5651a",
-        ).pack(anchor="w", pady=(10, 0))
+        has_url = bool(select_ffplay_url(cfg.get("ffplay_downloads")))
+        if has_url:
+            ttk.Label(
+                app.tiling_ffplay_notice,
+                text=(
+                    "Video Tiling needs ffplay, which isn't bundled. "
+                    "Click below to download it automatically."
+                ),
+                wraplength=620, justify="left", foreground="#b5651a",
+            ).pack(anchor="w")
+            app.tiling_download_ffplay_btn = ttk.Button(
+                app.tiling_ffplay_notice, text="Download ffplay",
+                command=app.download_ffplay,
+            )
+            app.tiling_download_ffplay_btn.pack(anchor="w", pady=(6, 0))
+        else:
+            ttk.Label(
+                app.tiling_ffplay_notice,
+                text=(
+                    f"Note: Video Tiling needs ffplay, which isn't bundled. Put "
+                    f"{ffplay_name} in the app's bin folder (it comes with the "
+                    f"full ffmpeg build) or install ffmpeg so ffplay is on PATH."
+                ),
+                wraplength=620, justify="left", foreground="#b5651a",
+            ).pack(anchor="w")
 
 
 def build_server_tab(app: "App", parent: ttk.Frame) -> None:
