@@ -1133,7 +1133,14 @@ class App(tk.Tk):
         name = self.theme_var.get()
         sv_ttk.set_theme(_resolve_theme(name))
         self.app_config["theme"] = name
-        save_config(self.app_config)
+        # Guard the save like every other pref handler (Audit B1 / FB-01): a
+        # disk/permissions failure inside this Tk callback must not raise out
+        # of the event loop — log it and tell the user, don't crash silently.
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to save theme preference")
+            self.log(f"Could not save theme setting: {e}")
 
     def _force_exit(self) -> None:
         """Bypass the minimise-to-tray redirect and exit immediately.
@@ -1341,7 +1348,13 @@ class App(tk.Tk):
         if folder:
             self.download_folder_var.set(folder)
             self.app_config["download_folder"] = folder
-            save_config(self.app_config)
+            # Guard the save like every other pref handler (Audit B1 / FB-01):
+            # a disk/permissions failure must not raise out of the Tk callback.
+            try:
+                save_config(self.app_config)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Failed to save download folder preference")
+                self.log(f"Could not save download folder setting: {e}")
 
     def update_download_mode(self) -> None:
         audio_only = self.download_mode_var.get() == "Audio"
