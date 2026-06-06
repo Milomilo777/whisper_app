@@ -19,6 +19,10 @@ import re
 import sys
 import tempfile
 
+# Make the repo root importable: running `python tools/e2e_tiny_macos.py` puts
+# tools/ (not the repo root) on sys.path[0], so `import core` would fail.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def main(wav: str) -> int:
     print(f"[e2e] platform={sys.platform} wav={wav} ({os.path.getsize(wav)} bytes)")
