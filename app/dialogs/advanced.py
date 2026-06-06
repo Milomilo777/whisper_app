@@ -1160,11 +1160,11 @@ class AdvancedDialog(tk.Toplevel):
                     "gcloud_stt_batch_mode": batch,
                     "gcloud_stt_bucket": bucket,
                     "gcloud_stt_model": (
-                        self.app.app_config.get("gcloud_stt_model") or "long"
+                        self.app.app_config.get("gcloud_stt_model") or "chirp_2"
                     ),
                     "gcloud_stt_location": (
                         self.app.app_config.get("gcloud_stt_location")
-                        or "global"
+                        or "us-central1"
                     ),
                 }
                 backend = _g.GoogleCloudSttBackend(config=config)
