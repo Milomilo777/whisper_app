@@ -144,6 +144,7 @@ a = Analysis(
         'core.model_manager',
         'core.monitors',
         'core.paths',
+        'core.stats',
         'core.task',
         'core.transcriber',
         'core.updates',

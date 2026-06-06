@@ -906,6 +906,9 @@ class TranscriptionService:
         # Phase 3a — finalise the history row.
         app = self.app
         history = getattr(app, "history", None)
+        # Best-effort word count + audio duration from the produced JSON
+        # sidecar (computed once; reused by history + the usage-stats POST).
+        word_count, audio_duration = self._derive_transcript_stats(task)
         if history is not None and getattr(task, "history_id", 0):
             import time as _time
             try:
@@ -933,9 +936,13 @@ class TranscriptionService:
                     output_paths=paths,
                     duration_seconds=float(duration),
                     language=getattr(task, "detected_language", "") or "",
+                    word_count=word_count,
                 )
             except Exception as e:  # noqa: BLE001
                 app.log(f"history record update failed: {e}")
+        # P4-4 — opt-in usage stats POST (best-effort, daemon thread, swallows
+        # all errors). post_stats_async re-checks telemetry_opt_in + stats_url.
+        self._post_usage_stats(task, word_count, audio_duration)
         # If this task was auto-spawned from a download, the Download row
         # mirrored "transcribing" + live progress while it ran. It's
         # terminal now (finished / error / cancelled) — restore that row to
@@ -956,3 +963,64 @@ class TranscriptionService:
         app.update_overall_progress()
         if worker.get("temporary") and not any(t.status == "waiting" for t in app.queue):
             self.retire_worker(worker)
+
+    def _derive_transcript_stats(self, task: Any) -> tuple[int, float]:
+        """Best-effort ``(word_count, audio_duration)`` from a produced JSON
+        sidecar. Returns ``(0, 0.0)`` when no JSON output is found or it can't
+        be parsed — never raises (stats are best-effort)."""
+        from core import stats as _stats
+        try:
+            paths = list(getattr(task, "output_paths", None) or [])
+            json_path = next(
+                (p for p in paths if str(p).lower().endswith(".json")), ""
+            )
+            if not json_path and getattr(task, "file_path", ""):
+                cand = os.path.splitext(task.file_path)[0] + ".json"
+                if os.path.isfile(cand):
+                    json_path = cand
+            if not json_path or not os.path.isfile(json_path):
+                return 0, 0.0
+            with open(json_path, "r", encoding="utf-8") as f:
+                segments = json.load(f)
+            if not isinstance(segments, list):
+                return 0, 0.0
+            return (
+                _stats.count_words_in_segments(segments),
+                _stats.audio_duration_from_segments(segments),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("could not derive transcript stats: %s", e)
+            return 0, 0.0
+
+    def _post_usage_stats(
+        self, task: Any, word_count: int, audio_duration: float
+    ) -> None:
+        """Fire the opt-in usage-stats POST (best-effort, off-thread).
+
+        Gated inside ``core.stats.post_stats_async`` on
+        ``telemetry_opt_in`` + a non-empty ``stats_url`` — a no-op otherwise.
+        """
+        from core import stats as _stats
+        app = self.app
+        try:
+            import time as _time
+            ai_time = (
+                (_time.time() - task.start_time) if task.start_time else 0.0
+            )
+            model = str(
+                (app.app_config.get("model") or {}).get("name")
+                or app.app_config.get("whisper_model")
+                or ""
+            )
+            payload = _stats.build_stats_payload(
+                file_name=getattr(task, "file_path", "") or "",
+                model=model,
+                language=getattr(task, "detected_language", "") or "",
+                audio_duration=audio_duration,
+                transcription_time=ai_time,
+                status=getattr(task, "status", "") or "",
+                word_count=word_count,
+            )
+            _stats.post_stats_async(app.app_config, payload)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("usage stats wiring skipped: %s", e)

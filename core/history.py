@@ -96,6 +96,32 @@ class HistoryDB:
         self._check_integrity_or_recover()
         with self._conn:
             self._conn.executescript(SCHEMA)
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Idempotent ADD COLUMN migrations guarded by a PRAGMA table_info
+        check (SQLite has no ``ADD COLUMN IF NOT EXISTS``). Safe to run on
+        every open: a column already present is skipped.
+
+        P4-4: ``transcriptions.word_count`` — total words in the produced
+        transcript text (INTEGER, default 0), populated by
+        ``finish_transcription``.
+        """
+        try:
+            cols = {
+                row[1]
+                for row in self._conn.execute(
+                    "PRAGMA table_info(transcriptions)"
+                ).fetchall()
+            }
+            if "word_count" not in cols:
+                with self._conn:
+                    self._conn.execute(
+                        "ALTER TABLE transcriptions "
+                        "ADD COLUMN word_count INTEGER DEFAULT 0"
+                    )
+        except sqlite3.Error as e:
+            logger.exception("history.db word_count migration failed: %s", e)
 
     def _check_integrity_or_recover(self) -> None:
         """Run ``PRAGMA integrity_check``. On a non-``ok`` result,
@@ -214,13 +240,16 @@ class HistoryDB:
                              output_paths: Iterable[str] = (),
                              duration_seconds: float = 0.0,
                              language: str = "",
-                             error: str = "") -> None:
+                             error: str = "",
+                             word_count: int = 0) -> None:
         paths_json = json.dumps(list(output_paths))
         with self._txn() as conn:
             conn.execute(
                 "UPDATE transcriptions SET status=?, finished_at=?,"
-                " output_paths=?, duration_seconds=?, language=?, error=? WHERE id=?",
-                (status, int(time.time()), paths_json, duration_seconds, language, error, row_id),
+                " output_paths=?, duration_seconds=?, language=?, error=?,"
+                " word_count=? WHERE id=?",
+                (status, int(time.time()), paths_json, duration_seconds,
+                 language, error, int(word_count or 0), row_id),
             )
 
     def list_transcriptions(self, limit: int = 200) -> list[dict[str, Any]]:
