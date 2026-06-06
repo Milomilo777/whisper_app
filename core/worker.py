@@ -39,7 +39,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable, Iterator, cast
 
 from .config import load_config
 from .logging_setup import setup_logging, worker_log_filename
@@ -71,6 +71,16 @@ _SESSION_TOKEN: str = os.environ.get("WHISPER_WORKER_TOKEN", "") or ""
 # between-segment poll needs.
 _state_lock = threading.Lock()
 _current_task: "TranscriptionTask | None" = None
+
+
+# emit() is called from the main thread (transcribe loop), the stdin-reader
+# thread (control acks / errors) and the heartbeat thread, all writing to the
+# same stdout. print()'s write+flush is two operations on the underlying
+# buffer; concurrent calls can interleave and corrupt a JSON line, which
+# breaks the FROZEN one-JSON-object-per-line worker protocol. Serialise every
+# emit under this module-level lock so each event is written + flushed
+# atomically with respect to the others.
+_emit_lock = threading.Lock()
 
 
 def _set_current_task(task: "TranscriptionTask | None") -> None:
@@ -129,7 +139,80 @@ def emit(event: str, **payload: Any) -> None:
             "coerced via repr()"
         )
         line = json.dumps(safe)
-    print(line, flush=True)
+    # Atomic write+flush against other threads' emits (see _emit_lock).
+    with _emit_lock:
+        print(line, flush=True)
+
+
+# Chunk size for the bounded stdin reader. Small enough that an overlong,
+# newline-less line is never accumulated past the cap by more than one chunk.
+_READ_CHUNK_CHARS = 65536
+
+
+def read_capped_lines(stream: Any, max_chars: int) -> Iterator[tuple[str, bool]]:
+    """Yield ``(line, oversize)`` per newline-delimited record from *stream*.
+
+    Unlike iterating the stream directly (which buffers a whole line into
+    memory *before* any length check — defeating the OOM guard), this reads
+    in bounded chunks and enforces *max_chars* WHILE reading. Once a record
+    exceeds the cap, accumulation stops immediately; the rest of that record
+    (up to the next newline) is drained and discarded in bounded chunks, then
+    the truncated text is yielded with ``oversize=True`` so the caller can
+    reject it without ever holding the full oversized payload in memory.
+
+    *line* keeps the trailing newline when present (matching file-iteration
+    semantics) so existing ``.strip()`` handling is unchanged.
+
+    The chunked path needs a ``read(n)`` method (the real ``sys.stdin``
+    TextIOWrapper has one). Streams that expose only iteration (some test
+    stubs / pipes) fall back to line iteration, where the cap is still
+    enforced — best effort — after each line is read. This keeps the
+    production OOM guard active without breaking the frozen control-channel
+    behaviour that other callers rely on.
+    """
+    read_attr = getattr(stream, "read", None)
+    if not callable(read_attr):
+        for raw in stream:
+            yield raw, len(raw) > max_chars
+        return
+    read = cast("Callable[[int], str]", read_attr)
+    buf = ""
+    dropping = False  # inside the tail of an oversized record we discard
+    while True:
+        chunk = read(_READ_CHUNK_CHARS)
+        if not chunk:  # EOF
+            if dropping:
+                # Oversized record that never terminated before EOF.
+                yield "", True
+            elif buf:
+                yield buf, False
+            return
+        while chunk:
+            nl = chunk.find("\n")
+            if nl == -1:
+                segment, rest = chunk, ""
+            else:
+                segment, rest = chunk[: nl + 1], chunk[nl + 1 :]
+            if dropping:
+                # Discarding the remainder of an oversized record.
+                if nl != -1:
+                    yield "", True
+                    dropping = False
+                chunk = rest
+                continue
+            buf += segment
+            if len(buf) > max_chars:
+                # Cap exceeded. If this segment completed the record (had a
+                # newline) the whole record is over the limit; flag it and
+                # move on. Otherwise stop buffering and drain the unterminated
+                # tail in bounded chunks so memory never grows past the cap.
+                yield buf, True
+                buf = ""
+                dropping = nl == -1
+            elif nl != -1:
+                yield buf, False
+                buf = ""
+            chunk = rest
 
 
 def main() -> int:
@@ -221,12 +304,15 @@ def main() -> int:
         sentinel on stdin-close tells the main loop to exit.
         """
         try:
-            for raw in sys.stdin:
-                if len(raw) > MAX_COMMAND_BYTES:
+            for raw, oversize in read_capped_lines(sys.stdin, MAX_COMMAND_BYTES):
+                if oversize:
+                    # The cap was enforced WHILE reading: ``raw`` here is the
+                    # truncated prefix (<= cap + one chunk), not the full
+                    # oversized payload, so the OOM guard holds.
                     emit(
                         "error",
                         message=(
-                            f"command exceeds max length ({len(raw)} > "
+                            f"command exceeds max length (> "
                             f"{MAX_COMMAND_BYTES} bytes); dropped"
                         ),
                     )
