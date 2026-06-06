@@ -665,9 +665,21 @@ def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
     # e.g. parallel_workers="many" survives the merge and downstream
     # int() crashes later. Drop the bad value (restore default).
     for k, default in DEFAULT_CONFIG.items():
-        if k in merged and merged[k] is not None and not isinstance(
-            merged[k], type(default)
-        ):
+        if k not in merged:
+            continue
+        # A null (JSON ``null`` / Python None) from the online or local layer
+        # used to slip past the type check below (it was gated on
+        # ``merged[k] is not None``), leaving None where a typed value is
+        # expected — a later int()/strip()/iteration then crashes. When the
+        # key ships a non-None default, drop the null and restore the default.
+        if merged[k] is None:
+            if default is not None:
+                logger.warning(
+                    "config key %r is null; reverting to default %r", k, default
+                )
+                merged[k] = json.loads(json.dumps(default))
+            continue
+        if not isinstance(merged[k], type(default)):
             # Special-case: bool defaults accept int (Python's bool is int).
             if isinstance(default, bool) and isinstance(merged[k], int):
                 merged[k] = bool(merged[k])
