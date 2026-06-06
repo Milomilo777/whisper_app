@@ -343,6 +343,92 @@ def test_month_marker_format():
     assert g.month_marker(dt.datetime(2026, 12, 31)) == "2026-12"
 
 
+# -------------------------------------------------- usage/cost display helpers
+
+
+def test_effective_minutes_same_month_returns_stored():
+    assert g.effective_minutes_this_month(12.5, "2026-06", "2026-06") == 12.5
+
+
+def test_effective_minutes_stale_month_resets_to_zero():
+    # Stored month is older than now -> the local counter has rolled over.
+    assert g.effective_minutes_this_month(58.0, "2026-05", "2026-06") == 0.0
+
+
+def test_effective_minutes_empty_marker_is_zero():
+    assert g.effective_minutes_this_month(9.0, "", "2026-06") == 0.0
+
+
+def test_effective_minutes_clamps_negative():
+    assert g.effective_minutes_this_month(-3.0, "2026-06", "2026-06") == 0.0
+
+
+def test_estimate_cost_standard_rate():
+    # 100 minutes * $0.016/min = $1.60.
+    assert g.estimate_cost(100.0, batch=False) == pytest.approx(1.60)
+
+
+def test_estimate_cost_batch_rate_is_cheaper():
+    # 100 minutes * $0.004/min = $0.40 (~75% cheaper than standard).
+    assert g.estimate_cost(100.0, batch=True) == pytest.approx(0.40)
+
+
+def test_estimate_cost_clamps_negative():
+    assert g.estimate_cost(-10.0, batch=False) == 0.0
+
+
+def test_format_usage_current_month_shows_minutes_and_cost():
+    s = g.format_usage(
+        minutes_used=12.5,
+        month_stored="2026-06",
+        month_now="2026-06",
+        cap=60,
+        batch=False,
+    )
+    assert "12.5 / 60 free minutes" in s
+    # 12.5 min * $0.016 = $0.20.
+    assert "$0.20" in s
+    assert "$300 credit" in s
+    assert "standard rate" in s
+
+
+def test_format_usage_stale_month_shows_zero():
+    s = g.format_usage(
+        minutes_used=58.0,
+        month_stored="2026-05",
+        month_now="2026-06",
+        cap=60,
+        batch=False,
+    )
+    # Monthly reset — effective minutes are 0 and cost is $0.00.
+    assert "0.0 / 60 free minutes" in s
+    assert "$0.00" in s
+
+
+def test_format_usage_batch_rate_label_and_cheaper_cost():
+    s = g.format_usage(
+        minutes_used=100.0,
+        month_stored="2026-06",
+        month_now="2026-06",
+        cap=60,
+        batch=True,
+    )
+    assert "batch rate" in s
+    # 100 min * $0.004 = $0.40 (vs $1.60 standard).
+    assert "$0.40" in s
+
+
+def test_format_usage_invalid_cap_falls_back_to_60():
+    s = g.format_usage(
+        minutes_used=0.0,
+        month_stored="2026-06",
+        month_now="2026-06",
+        cap=0,
+        batch=False,
+    )
+    assert "/ 60 free minutes" in s
+
+
 # ---------------------------------------------------------------- error classifier
 
 

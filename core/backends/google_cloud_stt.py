@@ -97,6 +97,16 @@ DEFAULT_CHUNK_SECONDS = 55.0
 CHUNK_MIME = "audio/flac"
 CHUNK_EXT = ".flac"
 
+#: Approximate published Google Cloud Speech-to-Text v2 prices (USD per
+#: minute), used ONLY for the LOCAL cost estimate shown in the UI. The real
+#: bill is on Google's side and is NOT readable from a service-account key,
+#: so these are deliberately treated as round, honest estimates.
+RATE_STANDARD_USD_PER_MIN = 0.016
+RATE_BATCH_USD_PER_MIN = 0.004
+#: The one-time new-customer credit Google grants ($300 / 90 days). Shown in
+#: the UI as the denominator of the local cost estimate.
+NEW_CUSTOMER_CREDIT_USD = 300.0
+
 
 # ---------------------------------------------------------------- availability
 
@@ -496,6 +506,65 @@ def accumulate_minutes(
     if (prev_month or "") != current:
         return added, current
     return max(0.0, float(prev_minutes or 0.0)) + added, current
+
+
+def effective_minutes_this_month(
+    minutes_used: float,
+    month_stored: str,
+    month_now: str,
+) -> float:
+    """Minutes counted toward the CURRENT month's free tier.
+
+    When the stored month marker is empty or from a past month, the local
+    counter has rolled over, so the effective figure is 0.0 (a new month
+    starts fresh). Otherwise it is the stored value, clamped to >= 0. Pure.
+    """
+    if not month_stored or month_stored != month_now:
+        return 0.0
+    return max(0.0, float(minutes_used or 0.0))
+
+
+def estimate_cost(minutes: float, batch: bool) -> float:
+    """Estimate the USD cost for ``minutes`` of audio at the current rate.
+
+    Standard mode bills ~$0.016/min; batch mode ~$0.004/min (~75% cheaper).
+    This is a LOCAL estimate from a published rate — NOT the real bill,
+    which lives on Google's side and is not readable from a service-account
+    key. Pure; clamps negative input to 0.
+    """
+    rate = RATE_BATCH_USD_PER_MIN if batch else RATE_STANDARD_USD_PER_MIN
+    return max(0.0, float(minutes or 0.0)) * rate
+
+
+def format_usage(
+    minutes_used: float,
+    month_stored: str,
+    month_now: str,
+    cap: int,
+    batch: bool,
+) -> str:
+    """Build the one-line usage/cost string shown in the Advanced dialog.
+
+    Shows minutes used THIS month against the free-tier cap and a local
+    dollar estimate against the new-customer credit. Resets the displayed
+    minutes to 0 when the stored month is empty/stale (the monthly free
+    tier reset). Pure — no clock, no I/O — so it is trivially unit-tested;
+    the caller supplies ``month_now`` (usually ``month_marker()``).
+
+    Example::
+
+        This month: 12.5 / 60 free minutes  -  estimated cost
+        ~ $0.20 of your $300 credit
+    """
+    effective = effective_minutes_this_month(minutes_used, month_stored, month_now)
+    cap_int = int(cap) if cap and int(cap) > 0 else 60
+    cost = estimate_cost(effective, batch)
+    return (
+        f"This month: {effective:.1f} / {cap_int} free minutes  -  "
+        f"estimated cost ~ ${cost:.2f} of your "
+        f"${int(NEW_CUSTOMER_CREDIT_USD)} credit "
+        f"({'batch' if batch else 'standard'} rate)"
+    )
 
 
 # ---------------------------------------------------------------- backend
