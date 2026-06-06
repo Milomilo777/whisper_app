@@ -178,6 +178,14 @@ def model_folder_for(
         hub = user_cache_dir() / "models"
     else:
         hub = Path(str(hub_folder))
+    # ``model_name`` is typed ``str``, but a None / non-string can still
+    # reach here from a hand-edited or externally-produced config (e.g.
+    # ``{"model": {"name": null}}`` on macOS). ``None.strip()`` would raise
+    # an uncaught AttributeError and crash launch; callers only guard
+    # against ValueError. Coerce the bad-input case into the same clean
+    # ValueError the empty-string check already raises.
+    if not isinstance(model_name, str):
+        raise ValueError("model_name must be a non-empty string")
     name = model_name.strip()
     if not name:
         raise ValueError("model_name must be non-empty")
