@@ -631,6 +631,21 @@ class DownloadService:
             "output": output,
         }
 
+        # When the stashed episode was rejected (stale page_url != url, so
+        # is_smtv is False) the format maps were NOT necessarily rebuilt yet —
+        # the 800ms lookup for the new url may not have fired. The maps can
+        # still hold the rejected episode's kind=='smtv' selector dicts (with
+        # episode A's CDN url). Routing keys off _is_smtv_task, which trips on
+        # ANY kind=='smtv' sub-dict, so leaving one in format_info would stream
+        # the stale CDN file while writing this url's transcript. The 'episode'
+        # key was already guarded above; scrub the audio/video selectors too so
+        # no kind=='smtv' sub-dict survives into a non-SMTV task.
+        if not is_smtv:
+            for key in ("audio", "video"):
+                sub = format_info.get(key)
+                if isinstance(sub, dict) and sub.get("kind") == "smtv":
+                    format_info[key] = None
+
         if smtv_episode is not None:
             format_info["episode"] = smtv_episode
             format_label = f"SMTV {audio_label if mode == 'Audio' else video_label}"
