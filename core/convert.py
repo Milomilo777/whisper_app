@@ -282,12 +282,23 @@ def _default_out_path(in_path: str, out_format: str) -> str:
 def _same_file(a: str, b: str) -> bool:
     """True if *a* and *b* name the same file.
 
-    Uses ``os.path.realpath`` (collapses symlinks / short names) plus
-    ``os.path.normcase`` so a case-only difference — e.g. ``Movie.SRT``
-    vs ``Movie.srt`` on Windows' case-insensitive filesystem — is treated
-    as the same file. A plain ``abspath`` string compare misses that and
-    would let the converter overwrite the source in place.
+    Prefers ``os.path.samefile`` (st_dev/st_ino), which reflects the real
+    filesystem semantics on every platform — including case-insensitive macOS
+    (APFS) and Windows volumes where ``Movie.SRT`` and ``Movie.srt`` are the
+    SAME file. ``os.path.normcase`` only folds case on Windows; on POSIX
+    (incl. macOS) it is the identity function, so the old normcase compare
+    silently missed case-only collisions on macOS and let the converter
+    overwrite the source in place. ``samefile`` needs both paths to exist; when
+    one does not (the usual case for a not-yet-written output target) we fall
+    back to the normalized-string compare — and on a case-insensitive FS the
+    target's case variant already resolves to the existing source, so
+    ``os.path.exists`` is True and ``samefile`` still catches the collision.
     """
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
     return (
         os.path.normcase(os.path.realpath(a))
         == os.path.normcase(os.path.realpath(b))
