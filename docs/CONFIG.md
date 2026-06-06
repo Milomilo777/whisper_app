@@ -4,6 +4,28 @@
 
 The file is read once at startup and written when the user changes a persisted setting (download folder, subtitle preferences, theme, etc.). Manual edits take effect on next launch.
 
+## Three-level merged configuration (P4-1)
+
+The effective config is merged from **three layers**, in priority order:
+
+1. **Local `config.json`** — the user's file (described above). **Highest priority.** A local override file is the place for expert / per-machine overrides; it may set ANY key, including the local-only ones the online layer is forbidden from touching (paths, API keys, credentials, the model hub folder, user preferences).
+2. **Online app config** — a JSON the maintainer hosts at `config_url`, fetched on startup. It lets **app-level** settings change **without redistributing the program** (the model catalog, the usage-stats endpoint, the latest version, the ffplay download links). It is restricted to a **safe allowlist** (`stats_url`, `latest_version`, `ffplay_downloads`, `model_catalog`) — it can **never** override user-private / local-only keys.
+3. **Hard-coded `DEFAULT_CONFIG`** — the in-code baseline. **Lowest priority.**
+
+A key missing from a higher-priority layer falls through to the next. Dict-valued keys (e.g. `model`, `model_catalog`) are deep-merged, so a partial override keeps the sibling keys from the lower layer.
+
+The online fetch is **fail-safe**: a short timeout, the last good response cached under `user_cache_dir()/app_config_cache.json`, and a fall-through to the cache (then to nothing) when offline. It **never blocks or crashes startup**. The hot worker-subprocess code paths (`core.transcriber` import, `core.worker.main`, the faster-whisper model load) skip the fetch entirely (`load_config(fetch_online=False)`), so a worker spawn is never delayed by the network.
+
+The merge itself is pure and testable: `core.config.merge_config_sources(hardcoded, online, local)`. The fetch is the separate `core.config.fetch_online_config(url, cache_path=...)` helper. `core.config.load_config()` wires the two together; `load_config(fetch_online=False)` uses only the local + hard-coded layers.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `config_url` | string | `https://smch.ir/whisper/app_config.json` (placeholder — owner sets the real URL) | URL of the online app-level config JSON. Fetched best-effort on startup; cached for offline fallback. Empty disables the online layer. A local `config.json` may override this (e.g. a staging URL). |
+| `model_catalog` | object | `{}` | Online/local-supplied catalog of selectable models, same shape as `core.model_manager.MODEL_REGISTRY` (`slug → {label, name, url, md5, approx_size_gb}`). Overlaid on the built-in catalog so new models can ship without an app update. **Allowlisted** for the online layer. |
+| `stats_url` | string | `""` | Usage-stats POST endpoint (the app POSTs anonymous stats here when telemetry is opted in). **Allowlisted** for the online layer so it can be set/changed remotely. |
+| `latest_version` | string | `""` | Newest published version string (informational; complements the GitHub update check). **Allowlisted** for the online layer. |
+| `ffplay_downloads` | object | `{}` | Platform → ffplay download URL map (e.g. `{"windows": "...", "macos": "..."}`) for the Video-Tiling ffplay binary (not bundled). **Allowlisted** for the online layer. |
+
 ## Where things live (Phase 1.2)
 
 | Purpose | Path (Windows) | Helper |
@@ -23,6 +45,7 @@ The file is read once at startup and written when the user changes a persisted s
 | `model.name` | string | `"faster-whisper-large-v3"` | Display name in logs |
 | `model.url` | string | `https://smch.ir/models/...zip` | ZIP archive of the model |
 | `model.md5` | string | `<url>.md5` | URL of the per-file MD5 manifest |
+| `whisper_model` | string | `"large-v3"` | Slug of the selected model in the merged catalog (built-in `MODEL_REGISTRY` + online `model_catalog`). Set by the **Advanced > Whisper model** combo, which also rewrites `model` + `model_path` so the new model downloads on the next transcription. See the Models section below. |
 | `hub_folder` | string | `""` (first-run dialog) | Parent folder that holds the `models--Vendor--name` model directories. Empty triggers the first-run picker, which pre-fills `%LOCALAPPDATA%\WhisperProject\Cache\models` — a per-user, always-writable location (never the Program Files install dir). |
 | `model_path` | string | (derived from `hub_folder`) | Absolute path where the model is extracted. When empty it is derived at startup from `hub_folder + model.name`; with no hub set it falls back to `%LOCALAPPDATA%\WhisperProject\Cache\models\<name>`. A non-empty value is a per-model override. |
 | `device` | string | `"auto"` | `"auto"` / `"cuda"` / `"cpu"`. With `"auto"`, the autodetect only selects CUDA when ctranslate2 reports a GPU **and** the cuDNN/cuBLAS runtime libraries actually load; otherwise it falls back to CPU. At model-load time a CUDA load that still fails self-heals to CPU `int8` instead of crashing the worker — the active tab shows a GPU/CPU badge and (once) a "running on CPU (slower)" warning. |
@@ -38,6 +61,39 @@ The file is read once at startup and written when the user changes a persisted s
 | `last_yt_dlp_update_check` | string (ISO date) | `""` | Timestamp of the last update attempt (used by the once-per-day guard inside `maybe_update_yt_dlp`) |
 | `update_check_enabled` | bool | `true` | Opt-in GitHub "update available" check (`core.updates`). When on, a quiet launch check runs at most once per day (throttled by `last_update_check`) and stays SILENT unless a newer release exists — never nagging when up to date, offline, or when the repo is private (a 404 is swallowed). When a newer release is found it offers to open the download page. It is **notify-only**: it never auto-downloads or auto-installs. Set to `false` to disable the quiet launch check; the **Help → Check for updates...** menu item still runs on demand. |
 | `last_update_check` | string (ISO date) | `""` | Date (`YYYY-MM-DD`) of the last *quiet* update check, used only for the once-per-day throttle. The manual **Help → Check for updates...** menu item ignores it. |
+
+### Models (config-driven catalog, P4-2)
+
+The selectable model list shown in **Advanced > Whisper model** comes from the **merged catalog**: the built-in `core.model_manager.MODEL_REGISTRY` overlaid with the `model_catalog` key from the merged config (so the online config can add or re-point models without an app update). Read it via `core.model_manager.catalog_models(config)` and `catalog_resolve_entry(config, slug)`.
+
+`large-v3` is the **default** (best accuracy, slower). Built-in entries:
+
+| Slug | `model.name` | Notes |
+|---|---|---|
+| `large-v3` | `faster-whisper-large-v3` | **Default.** Best accuracy, ~3 GB. |
+| `large-v3-turbo` | `faster-whisper-large-v3-turbo` | ~5× faster, similar accuracy, ~1.6 GB. |
+| `distil-large-v3.5` | `faster-distil-whisper-large-v3.5` | Fastest English-only, ~1.5 GB. |
+| `medium` | `faster-whisper-medium` | Faster, lower accuracy, ~1.5 GB. **Owner action: confirm/upload the `models--Systran--faster-whisper-medium.zip` (+ `.md5`) artifact on `smch.ir`** (or point the online `model_catalog` at the real location) before this entry can download. |
+
+A bigger/denser model is slower — `large-v3` stays the default; the combo just lets the user pick. Switching the model triggers `ensure_model` for the new slug on the next load.
+
+To add a model from the **online** config (no app update), put it under `model_catalog` in the hosted JSON:
+
+```json
+{
+  "model_catalog": {
+    "my-new-model": {
+      "label": "My New Model (~2 GB)",
+      "name": "faster-whisper-my-new-model",
+      "url": "https://host/models--Systran--faster-whisper-my-new-model.zip",
+      "md5": "https://host/models--Systran--faster-whisper-my-new-model.zip.md5",
+      "approx_size_gb": 2.0
+    }
+  }
+}
+```
+
+A malformed catalog entry (missing `name`/`url`/`md5`, or not a dict) is skipped so a bad online payload never breaks the picker — the built-ins always survive.
 
 ### Video Tiling
 
@@ -192,6 +248,9 @@ When a new field is introduced, `load_config` will populate it with the default 
 }
 ```
 
-## Manual override files
+## Manual / expert override files
 
-Phase 1.2 introduces `config.local.json` — a file with the same shape as `config.json` whose fields override the defaults. Useful for keeping a clean baseline in source control while letting each machine customize paths.
+Two override mechanisms exist, both higher-priority than the hard-coded defaults:
+
+- The user's **`config.json`** itself is the highest-priority layer in the three-level merge (see *Three-level merged configuration* above) — edit it for per-machine expert overrides, including the local-only keys the online layer cannot touch.
+- A per-folder **`.whisperproject.json`** (nearest one walking up from the input file) deep-merges on top for that job only — see `core.config.merge_project_overrides`. Wrong-typed keys are dropped + logged.

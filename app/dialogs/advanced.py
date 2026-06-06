@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING
 from core.config import save_config
 from core.model_manager import (
     DEFAULT_MODEL_SLUG,
-    list_models,
-    resolve_model_entry,
+    catalog_models,
+    catalog_resolve_entry,
 )
 from core.writers import supported_formats
 
@@ -303,10 +303,12 @@ class AdvancedDialog(tk.Toplevel):
         extras = ttk.LabelFrame(body, text="Whisper extras")
         extras.pack(fill="x", pady=(0, 8))
 
-        # Model picker (v0.8) — slug → MODEL_REGISTRY entry. Changing
-        # the picker rewrites cfg["model"] + cfg["model_path"] in
-        # _save_and_close so ensure_model downloads the new variant on
-        # the next transcription.
+        # Model picker (v0.8) — slug → catalog entry. The catalog is the
+        # MERGED config catalog (built-in MODEL_REGISTRY + any models the
+        # online/local config adds under ``model_catalog``), so a new model
+        # can ship without an app update. Changing the picker rewrites
+        # cfg["model"] + cfg["model_path"] in _save_and_close so ensure_model
+        # downloads the new variant on the next transcription.
         ttk.Label(extras, text="Whisper model").grid(
             row=0, column=0, sticky="w", padx=8, pady=4
         )
@@ -316,7 +318,7 @@ class AdvancedDialog(tk.Toplevel):
         labeled = [
             (slug, f"{base}   "
                    f"[{'OK - downloaded' if self._model_downloaded(slug) else 'needs download'}]")
-            for slug, base in list_models()
+            for slug, base in catalog_models(self.app.app_config)
         ]
         self._model_slug_to_label = {slug: lbl for slug, lbl in labeled}
         self._model_label_to_slug = {lbl: slug for slug, lbl in labeled}
@@ -719,7 +721,7 @@ class AdvancedDialog(tk.Toplevel):
     def _model_downloaded(self, slug: str) -> bool:
         """True when the model's weights are already on disk under the
         configured hub folder, so the dropdown can mark it downloaded."""
-        entry = resolve_model_entry(slug)
+        entry = catalog_resolve_entry(self.app.app_config, slug)
         if not entry:
             return False
         try:
@@ -739,7 +741,7 @@ class AdvancedDialog(tk.Toplevel):
         slug = self._model_label_to_slug.get(
             self._model_display.get() or "", DEFAULT_MODEL_SLUG
         )
-        entry = resolve_model_entry(slug)
+        entry = catalog_resolve_entry(self.app.app_config, slug)
         if entry is None:
             return
         if self._model_downloaded(slug):
@@ -806,7 +808,7 @@ class AdvancedDialog(tk.Toplevel):
         chosen_label = self._model_display.get() or ""
         new_slug = self._model_label_to_slug.get(chosen_label, DEFAULT_MODEL_SLUG)
         if new_slug and new_slug != cfg.get("whisper_model"):
-            entry = resolve_model_entry(new_slug)
+            entry = catalog_resolve_entry(cfg, new_slug)
             if entry is not None:
                 cfg["whisper_model"] = new_slug
                 cfg["model"] = entry

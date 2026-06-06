@@ -6,11 +6,12 @@ import pytest
 from core import model_manager as mm
 
 
-def test_registry_contains_three_models():
+def test_registry_contains_expected_models():
     assert set(mm.MODEL_REGISTRY.keys()) == {
         "large-v3",
         "large-v3-turbo",
         "distil-large-v3.5",
+        "medium",
     }
 
 
@@ -81,3 +82,82 @@ def test_default_config_carries_new_keys():
 
     assert DEFAULT_CONFIG.get("whisper_model") == "large-v3"
     assert DEFAULT_CONFIG.get("hallucination_detect_enabled") is True
+
+
+# ---------- P4-2: config-driven merged model catalog ------------------------
+
+
+def test_catalog_models_includes_builtins_with_empty_config():
+    """With no online catalog, the merged catalog is just the built-ins."""
+    items = mm.catalog_models({})
+    slugs = {slug for slug, _label in items}
+    assert slugs == set(mm.MODEL_REGISTRY.keys())
+
+
+def test_catalog_models_adds_online_model():
+    """An online-added model (not in MODEL_REGISTRY) appears in the catalog
+    so a new model can ship without an app update."""
+    config = {
+        "model_catalog": {
+            "online-new": {
+                "label": "Online New (~2 GB)",
+                "name": "faster-whisper-online-new",
+                "url": "https://host/online-new.zip",
+                "md5": "https://host/online-new.zip.md5",
+                "approx_size_gb": 2.0,
+            }
+        }
+    }
+    slugs = {slug for slug, _label in mm.catalog_models(config)}
+    assert "online-new" in slugs
+    assert set(mm.MODEL_REGISTRY.keys()).issubset(slugs)  # built-ins still there
+    entry = mm.catalog_resolve_entry(config, "online-new")
+    assert entry == {
+        "name": "faster-whisper-online-new",
+        "url": "https://host/online-new.zip",
+        "md5": "https://host/online-new.zip.md5",
+    }
+
+
+def test_catalog_online_can_override_builtin_url():
+    """The online catalog may re-point a built-in slug's URL/MD5 (e.g. a new
+    mirror) without an app update."""
+    config = {
+        "model_catalog": {
+            "large-v3": {
+                "url": "https://newmirror/large-v3.zip",
+                "md5": "https://newmirror/large-v3.zip.md5",
+                "name": "faster-whisper-large-v3",
+            }
+        }
+    }
+    entry = mm.catalog_resolve_entry(config, "large-v3")
+    assert entry is not None
+    assert entry["url"] == "https://newmirror/large-v3.zip"
+
+
+def test_catalog_ignores_malformed_online_entries():
+    """A malformed online entry (missing url/md5, or not a dict) is skipped;
+    the built-ins always survive a bad payload."""
+    config = {
+        "model_catalog": {
+            "broken": {"label": "no urls"},      # missing name/url/md5
+            "alsobad": "not-a-dict",              # not a dict
+        }
+    }
+    slugs = {slug for slug, _label in mm.catalog_models(config)}
+    assert "broken" not in slugs
+    assert "alsobad" not in slugs
+    assert set(mm.MODEL_REGISTRY.keys()).issubset(slugs)
+
+
+def test_catalog_resolve_unknown_slug_returns_none():
+    assert mm.catalog_resolve_entry({}, "does-not-exist") is None
+
+
+def test_medium_is_a_builtin_model():
+    """faster-whisper-medium ships as a built-in catalog entry."""
+    entry = mm.resolve_model_entry("medium")
+    assert entry is not None
+    assert entry["name"] == "faster-whisper-medium"
+    assert entry["url"].endswith(".zip")

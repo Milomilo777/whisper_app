@@ -76,6 +76,13 @@ _MD5_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 # entry is a one-line change. ``approx_size_gb`` is shown in the
 # Advanced dropdown so the user knows the install cost up front.
 
+# This is the BUILT-IN default catalog. It is the lowest-priority source —
+# the online config (see core.config) may ADD or OVERRIDE entries under its
+# ``model_catalog`` key, so new models can ship without an app update. Use
+# ``catalog_models(config)`` / ``catalog_resolve_entry(config, slug)`` to read
+# the merged effective catalog; the bare ``MODEL_REGISTRY`` / ``list_models``
+# / ``resolve_model_entry`` helpers keep returning the built-ins only (still
+# used as the offline fallback and by existing tests).
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
     "large-v3": {
         "label": "Large v3 — best accuracy (default, ~3 GB)",
@@ -98,6 +105,20 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "md5": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip.md5",
         "approx_size_gb": 1.5,
     },
+    # NOTE — OWNER ACTION REQUIRED: this artifact is NOT yet confirmed to
+    # exist on smch.ir. The URL/MD5 below follow the same naming
+    # convention as the entries above (Systran's faster-whisper-medium),
+    # but the owner must build/upload the .zip + .zip.md5 to that path
+    # (or point the online ``model_catalog`` at the real location) before
+    # this entry will download. Until then, selecting it will fail at
+    # download with a clear network error. ~1.5 GB.
+    "medium": {
+        "label": "Medium — faster, lower accuracy (~1.5 GB)",
+        "name": "faster-whisper-medium",
+        "url": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip.md5",
+        "approx_size_gb": 1.5,
+    },
 }
 
 
@@ -105,12 +126,12 @@ DEFAULT_MODEL_SLUG = "large-v3"
 
 
 def list_models() -> list[tuple[str, str]]:
-    """Return ``[(slug, label), ...]`` for the UI dropdown."""
+    """Return ``[(slug, label), ...]`` for the UI dropdown (built-ins only)."""
     return [(slug, entry["label"]) for slug, entry in MODEL_REGISTRY.items()]
 
 
 def resolve_model_entry(slug: str) -> dict[str, Any] | None:
-    """Return ``{name, url, md5}`` for a registry slug, or ``None`` when unknown.
+    """Return ``{name, url, md5}`` for a built-in registry slug, or ``None``.
 
     The returned dict shape matches ``DEFAULT_CONFIG["model"]`` so the
     caller can assign it directly to ``config["model"]`` and the rest
@@ -118,6 +139,57 @@ def resolve_model_entry(slug: str) -> dict[str, Any] | None:
     working without changes.
     """
     entry = MODEL_REGISTRY.get(slug)
+    if entry is None:
+        return None
+    return {"name": entry["name"], "url": entry["url"], "md5": entry["md5"]}
+
+
+def _merged_catalog(config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Built-in MODEL_REGISTRY overlaid with ``config['model_catalog']``.
+
+    The online/local config may carry a ``model_catalog`` dict in the SAME
+    shape as MODEL_REGISTRY (slug → {label, name, url, md5, approx_size_gb}).
+    Each online slug is overlaid onto the built-in entry (or added new), so
+    the catalog can grow / be re-pointed without an app update. A malformed
+    catalog (not a dict, or non-dict entries) is ignored entry-by-entry so a
+    bad online payload never breaks the picker — the built-ins still show.
+    """
+    merged: dict[str, dict[str, Any]] = {
+        slug: dict(entry) for slug, entry in MODEL_REGISTRY.items()
+    }
+    extra = (config or {}).get("model_catalog")
+    if not isinstance(extra, dict):
+        return merged
+    for slug, entry in extra.items():
+        if not isinstance(slug, str) or not isinstance(entry, dict):
+            continue
+        # Require the fields ensure_model needs; skip anything incomplete.
+        if not all(isinstance(entry.get(k), str) and entry.get(k)
+                   for k in ("name", "url", "md5")):
+            continue
+        base = dict(merged.get(slug) or {})
+        base.update(entry)
+        base.setdefault("label", slug)
+        base.setdefault("approx_size_gb", 0.0)
+        merged[slug] = base
+    return merged
+
+
+def catalog_models(config: dict[str, Any] | None) -> list[tuple[str, str]]:
+    """``[(slug, label), ...]`` from the MERGED catalog (built-ins + online).
+
+    This is what the Advanced model picker should call so an online-added
+    model appears without an app update.
+    """
+    return [(slug, entry.get("label") or slug)
+            for slug, entry in _merged_catalog(config).items()]
+
+
+def catalog_resolve_entry(
+    config: dict[str, Any] | None, slug: str
+) -> dict[str, Any] | None:
+    """``{name, url, md5}`` for ``slug`` from the merged catalog, or ``None``."""
+    entry = _merged_catalog(config).get(slug)
     if entry is None:
         return None
     return {"name": entry["name"], "url": entry["url"], "md5": entry["md5"]}
