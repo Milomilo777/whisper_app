@@ -71,29 +71,36 @@ for _name in ('stable_whisper', 'whisper', 'tiktoken'):
     except Exception:
         pass
 
+# This spec lives in platform/macos/pyinstaller/. PyInstaller resolves a bare
+# relative script path (e.g. 'gui.py') against the SPEC's own directory, not the
+# CWD — which made the build fail with "gui.py not found". Resolve every
+# repo-relative input against the repo root computed from SPECPATH so the build
+# works regardless of the working directory.
+_REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir, os.pardir, os.pardir))
+
 # Dock icon — bundle assets/whisper.icns when present (see the README for how
 # to generate it from whisper.png). None is fine; PyInstaller uses a default.
-_icns = os.path.join('assets', 'whisper.icns')
+_icns = os.path.join(_REPO_ROOT, 'assets', 'whisper.icns')
 _icon = _icns if os.path.isfile(_icns) else None
 
 a = Analysis(
-    ['gui.py'],
-    pathex=[],
+    [os.path.join(_REPO_ROOT, 'gui.py')],
+    pathex=[_REPO_ROOT],
     binaries=[
         *whisper_cpp_binaries,
         *alignment_binaries,
     ],
     datas=[
-        ('bin', 'bin'),
-        ('assets', 'assets'),
+        (os.path.join(_REPO_ROOT, 'bin'), 'bin'),
+        (os.path.join(_REPO_ROOT, 'assets'), 'assets'),
         # Static page served by the optional LAN/web HTTP job server
         # (gui.py serve -> core.server). Ship it so the frozen build can
         # serve the browser UI.
-        ('core/server/static', 'core/server/static'),
+        (os.path.join(_REPO_ROOT, 'core', 'server', 'static'), 'core/server/static'),
         # SMTV transcription writer's bundled Word template (the team's
         # exact table styling). Resolved at runtime via
         # core.paths.resource_base -> core/writers/templates/.
-        ('core/writers/templates', 'core/writers/templates'),
+        (os.path.join(_REPO_ROOT, 'core', 'writers', 'templates'), 'core/writers/templates'),
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,

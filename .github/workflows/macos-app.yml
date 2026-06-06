@@ -71,6 +71,7 @@ jobs:
 
       # ---- Method 2: source-venv install.command ----
       - name: "Method 2 - run install.command (source venv -> .app)"
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           chmod +x platform/macos/install.command
@@ -80,6 +81,7 @@ jobs:
 
       # ---- Method 3: Homebrew formula ----
       - name: "Method 3 - lint the Homebrew formula"
+        if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           brew audit --formula --strict platform/macos/homebrew/whisper-project.rb || true
