@@ -2,9 +2,16 @@
 
 Public surface:
 
-  * :func:`run_server` — bind a :class:`~core.server.httpd.JobHTTPServer`,
-    load the Whisper model once (so it stays HOT), start the single-worker
-    :class:`~core.server.jobs.JobManager`, and serve forever.
+  * :class:`ServerHandle` — a start/stop-able, non-blocking wrapper around
+    :class:`~core.server.httpd.JobHTTPServer`. ``start()`` binds the socket
+    and runs ``serve_forever`` on a daemon thread; ``stop()`` tears it down
+    cleanly; ``is_running()`` reports state; ``urls()`` lists the reachable
+    addresses. This is what the GUI drives so the server runs IN-PROCESS
+    without blocking the Tk loop.
+  * :func:`run_server` — the blocking ``gui.py serve`` entry point, built on
+    top of :class:`ServerHandle`.
+  * :func:`find_available_port` — pick a free TCP port, preferring a given
+    one and falling back to an OS-assigned ephemeral port if it is taken.
   * :func:`reachable_urls` — the loopback / LAN URLs to print on startup.
 
 Tk-free; imports nothing from ``app/``. Stdlib only (plus the bundled
@@ -16,14 +23,27 @@ import logging
 import os
 import socket
 import subprocess
-from typing import Any
+import threading
+from typing import Any, Callable
 
 from core.server.httpd import JobHTTPServer
 from core.server.jobs import JobManager
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["run_server", "reachable_urls", "JobHTTPServer", "JobManager"]
+__all__ = [
+    "run_server",
+    "reachable_urls",
+    "find_available_port",
+    "ServerHandle",
+    "JobHTTPServer",
+    "JobManager",
+]
+
+# A loopback bind reaches only this machine and never trips the Windows
+# firewall prompt; the all-interfaces bind is the LAN-share case.
+HOST_LOOPBACK = "127.0.0.1"
+HOST_LAN = "0.0.0.0"
 
 
 def _real_transcribe(
@@ -132,37 +152,198 @@ def _primary_lan_ip() -> str:
         s.close()
 
 
+def _port_is_free(host: str, port: int) -> bool:
+    """True iff no listener currently holds ``host:port``.
+
+    Deliberately does NOT set ``SO_REUSEADDR``. On Windows that flag lets
+    two sockets bind the same address at once, so a reuse-address probe
+    would call a port held by another listener "free" — defeating the
+    point. A plain bind fails cleanly when something is already listening,
+    which is exactly the "port already in use" case we want to detect.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def find_available_port(preferred: int = 8765, host: str = HOST_LOOPBACK) -> int:
+    """Return a bindable TCP port, preferring ``preferred``.
+
+    Behaviour (documented so callers can rely on it):
+
+      * If ``preferred`` is free on ``host``, return it unchanged.
+      * Otherwise ask the OS for any free ephemeral port (bind to port 0)
+        and return that — so "port already in use" never blocks startup;
+        the GUI reports the port it actually got.
+
+    Probing ``host`` (not always loopback) matters because a port can be
+    free on ``127.0.0.1`` yet taken on ``0.0.0.0`` (or vice-versa); the
+    caller passes whichever host it is about to bind.
+    """
+    if 1 <= int(preferred) <= 65535 and _port_is_free(host, int(preferred)):
+        return int(preferred)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind((host, 0))
+        return int(s.getsockname()[1])
+    finally:
+        s.close()
+
+
+# Type aliases for the injected callables (the JobManager's Protocol +
+# DownloadFn), so a typed caller can annotate against them.
+TranscribeFnT = Callable[..., None]
+DownloadFnT = Callable[[str, str], str]
+
+
+class ServerHandle:
+    """Start/stop-able, NON-BLOCKING handle around the job HTTP server.
+
+    Designed for the GUI: it owns a :class:`JobManager` and a
+    :class:`JobHTTPServer`, runs ``serve_forever`` on a daemon thread, and
+    exposes a tiny lifecycle (``start`` / ``stop`` / ``is_running``) plus
+    the bound ``host`` / ``port`` and reachable :meth:`urls`.
+
+    Tk-free. The desktop app constructs one, calls :meth:`start` from a
+    background thread (so the bind + optional model load don't freeze the
+    UI), and marshals the result back onto the Tk thread itself.
+
+    Idempotent: :meth:`start` while already running is a no-op; :meth:`stop`
+    while stopped is a no-op. A handle is single-shot per ``start`` — after
+    ``stop`` it can be started again (a fresh server/manager are built).
+    """
+
+    def __init__(
+        self,
+        *,
+        transcribe_fn: TranscribeFnT | None = None,
+        download_fn: DownloadFnT | None = None,
+        load_model: bool = True,
+    ) -> None:
+        # The real engine by default; tests inject a fake that just writes
+        # dummy output files so no model ever loads.
+        self._transcribe_fn = transcribe_fn or _real_transcribe
+        self._download_fn = download_fn if download_fn is not None else _download_url
+        self._load_model = load_model
+        self._lock = threading.Lock()
+        self._manager: JobManager | None = None
+        self._server: JobHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+        self.host = ""
+        self.port = 0
+        self.token = ""
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._server is not None and self._thread is not None \
+                and self._thread.is_alive()
+
+    def start(
+        self,
+        host: str = HOST_LOOPBACK,
+        port: int = 8765,
+        token: str = "",
+        *,
+        max_upload_mb: int = 512,
+        auto_port: bool = True,
+    ) -> None:
+        """Bind + start serving on a daemon thread (idempotent).
+
+        Raises :class:`OSError` if the socket can't be bound (and
+        ``auto_port`` didn't already fall back to a free port). The GUI
+        catches that and shows a plain message.
+        """
+        with self._lock:
+            if self._server is not None and self._thread is not None \
+                    and self._thread.is_alive():
+                return  # already running — idempotent double-start guard
+            if auto_port:
+                port = find_available_port(port, host)
+            if self._load_model:
+                _ensure_model_loaded()
+            manager = JobManager(self._transcribe_fn, download_fn=self._download_fn)
+            manager.start()
+            try:
+                server = JobHTTPServer(
+                    (host, port), manager,
+                    token=token, max_upload_mb=max_upload_mb,
+                )
+            except OSError:
+                manager.stop()
+                raise
+            self._manager = manager
+            self._server = server
+            self.host = host
+            # Reflect the port actually bound (matters for the port-0 case).
+            self.port = int(server.server_address[1])
+            self.token = token
+            self._thread = threading.Thread(
+                target=server.serve_forever,
+                name="server-http", daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        """Stop serving, close the socket, stop the worker (idempotent)."""
+        with self._lock:
+            server = self._server
+            manager = self._manager
+            thread = self._thread
+            self._server = None
+            self._manager = None
+            self._thread = None
+        if server is not None:
+            try:
+                server.shutdown()
+                server.server_close()
+            except Exception:  # noqa: BLE001
+                logger.exception("server: error during shutdown")
+        if thread is not None:
+            thread.join(timeout=timeout)
+        if manager is not None:
+            manager.stop(timeout=timeout)
+
+    def urls(self) -> list[str]:
+        """Reachable URLs for the current bind (empty when not running)."""
+        if not self.is_running():
+            return []
+        return reachable_urls(self.host, self.port)
+
+
 def run_server(
-    host: str = "127.0.0.1",
+    host: str = HOST_LOOPBACK,
     port: int = 8765,
     token: str = "",
     *,
     max_upload_mb: int = 512,
     load_model: bool = True,
 ) -> int:
-    """Run the HTTP job server forever. Returns a process exit code.
+    """Run the HTTP job server forever (blocking). Returns an exit code.
 
-    Binds ``host:port``, loads the model once (unless ``load_model`` is
-    False), starts the single-worker JobManager, prints the reachable
-    URL(s), and serves until interrupted.
+    The ``gui.py serve`` entry point. Binds ``host:port`` (loading the
+    model once unless ``load_model`` is False), prints the reachable
+    URL(s), and serves until Ctrl+C. Built on :class:`ServerHandle` so the
+    blocking CLI and the non-blocking GUI share one start/stop path.
     """
-    if load_model:
-        _ensure_model_loaded()
-
-    manager = JobManager(_real_transcribe, download_fn=_download_url)
-    manager.start()
+    handle = ServerHandle(load_model=load_model)
     try:
-        server = JobHTTPServer(
-            (host, port), manager, token=token, max_upload_mb=max_upload_mb,
-        )
+        # The CLI honours an explicit --port verbatim (auto_port off) so a
+        # scripted caller binds exactly what it asked for, or sees the error.
+        handle.start(host, port, token,
+                     max_upload_mb=max_upload_mb, auto_port=False)
     except OSError as e:
         logger.error("server: could not bind %s:%s — %s", host, port, e)
-        manager.stop()
         return 1
 
-    is_lan = host in ("0.0.0.0", "::", "")
+    is_lan = host in (HOST_LAN, "::", "")
     print("Whisper Project server listening on:")
-    for url in reachable_urls(host, port):
+    for url in handle.urls():
         print(f"  {url}")
     if is_lan:
         print("LAN mode: bound to all interfaces. Windows Defender may prompt "
@@ -174,11 +355,13 @@ def run_server(
     print("Press Ctrl+C to stop.")
 
     try:
-        server.serve_forever()
+        # Block the main thread until interrupted; the handle's daemon
+        # thread is doing the actual serving.
+        t = handle._thread
+        while t is not None and t.is_alive():
+            t.join(timeout=0.5)
     except KeyboardInterrupt:
         print("\nStopping...")
     finally:
-        server.shutdown()
-        server.server_close()
-        manager.stop()
+        handle.stop()
     return 0

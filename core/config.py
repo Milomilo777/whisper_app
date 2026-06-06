@@ -202,15 +202,26 @@ DEFAULT_CONFIG = {
     "tiling_multi_monitor": False,
     "tiling_selected_monitors": [],
     "tiling_auto_restart": True,
-    # Optional local-network / web HTTP job server (``gui.py serve``).
+    # Optional local-network / web HTTP job server (``gui.py serve`` and the
+    # one-click toggle on the Web / LAN access tab).
     # Defaulted here so reads never KeyError and pyright sees the type.
     # ``server_port`` is the default listen port; ``server_max_upload_mb``
     # caps a single upload (the worker's 1 MB command guard does NOT cover
     # browser uploads). The server binds loopback by default — LAN access
-    # is an explicit ``--lan`` opt-in (the only path that triggers the
-    # Windows firewall prompt).
+    # is an explicit opt-in (the only path that triggers the Windows firewall
+    # prompt):
+    #   server_share_lan  — when True the GUI toggle binds 0.0.0.0 (all
+    #     interfaces, so other devices on the network can reach it) instead
+    #     of 127.0.0.1 (this machine only). Persisted from the
+    #     "Share on local network" checkbox. The CLI uses --lan instead.
+    #   server_token  — optional shared secret. When non-empty, every request
+    #     must present it (X-Auth-Token header or ?token= query). Stored in
+    #     CLEARTEXT here, consistent with cookies / API keys — config.json is
+    #     per-user under %LOCALAPPDATA%\WhisperProject and is not encrypted.
     "server_port": 8765,
     "server_max_upload_mb": 512,
+    "server_share_lan": False,
+    "server_token": "",
 }
 
 
