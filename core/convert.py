@@ -116,8 +116,14 @@ def _parse_json(text: str, path: str) -> list[dict]:
         if speaker not in (None, ""):
             seg["speaker"] = str(speaker)
         words = entry.get("words")
-        if isinstance(words, list) and words:
-            seg["words"] = words
+        if isinstance(words, list):
+            # Carry through only dict word entries. A non-dict element
+            # (a bare string / number from hand-edited or externally
+            # produced JSON) would make the downstream writers' w.get(...)
+            # raise AttributeError and abort the whole conversion.
+            valid_words = [w for w in words if isinstance(w, dict)]
+            if valid_words:
+                seg["words"] = valid_words
         segments.append(seg)
     return segments
 
@@ -273,6 +279,21 @@ def _default_out_path(in_path: str, out_format: str) -> str:
     return f"{base}.{out_format.lower()}"
 
 
+def _same_file(a: str, b: str) -> bool:
+    """True if *a* and *b* name the same file.
+
+    Uses ``os.path.realpath`` (collapses symlinks / short names) plus
+    ``os.path.normcase`` so a case-only difference — e.g. ``Movie.SRT``
+    vs ``Movie.srt`` on Windows' case-insensitive filesystem — is treated
+    as the same file. A plain ``abspath`` string compare misses that and
+    would let the converter overwrite the source in place.
+    """
+    return (
+        os.path.normcase(os.path.realpath(a))
+        == os.path.normcase(os.path.realpath(b))
+    )
+
+
 def convert_file(
     in_path: str, out_format: str, out_path: str | None = None
 ) -> str:
@@ -298,7 +319,7 @@ def convert_file(
     segments = parse_to_segments(in_path)
 
     target = out_path or _default_out_path(in_path, fmt)
-    if os.path.abspath(target) == os.path.abspath(in_path):
+    if _same_file(target, in_path):
         base, ext = os.path.splitext(target)
         target = f"{base}.converted{ext}"
 
