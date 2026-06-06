@@ -704,12 +704,29 @@ class QueueFull(Exception):
 
 # --- pure helpers (unit-testable) --------------------------------------------
 
+# Windows reserved DEVICE names. A file named after one of these (with or
+# without an extension) is not a real file: opening it talks to the device,
+# so e.g. ``NUL.wav`` discards every byte written and the job later dies with
+# a misleading "no media file" error. Compared case-insensitively against the
+# extension-stripped stem.
+_WIN_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
 def _safe_filename(name: str) -> str:
     """Reduce an uploaded filename to a safe basename.
 
     Strips any directory components and rejects traversal so the media
     can only ever land inside the per-job dir. Falls back to a generic
     name when the input is empty or all-suspect.
+
+    Also renames a Windows reserved DEVICE name (CON, PRN, AUX, NUL,
+    COM1-9, LPT1-9 — with or without an extension) by prefixing an
+    underscore, so the upload becomes an ordinary file instead of being
+    routed to the device (which would silently discard the bytes).
     """
     base = os.path.basename(name or "").strip()
     # Drop anything that isn't a tame filename character; keep dots,
@@ -719,7 +736,14 @@ def _safe_filename(name: str) -> str:
         if c.isalnum() or c in (".", "-", "_", " ")
     ).strip()
     cleaned = cleaned.lstrip(".") or ""
-    return cleaned or f"upload-{uuid.uuid4().hex[:8]}.bin"
+    if not cleaned:
+        return f"upload-{uuid.uuid4().hex[:8]}.bin"
+    # Reserved-name guard: split off the extension and, if the stem is a
+    # reserved device name, prefix an underscore so it becomes a real file.
+    stem, ext = os.path.splitext(cleaned)
+    if stem.upper() in _WIN_RESERVED_NAMES:
+        cleaned = "_" + cleaned
+    return cleaned
 
 
 def is_safe_url(url: str) -> bool:
