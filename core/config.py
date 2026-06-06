@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -592,6 +593,14 @@ def fetch_online_config(
     if cache_path is None:
         cache_path = online_cache_path()
 
+    # Refuse non-http(s) config URLs: a file:// / ftp:// / custom scheme would let
+    # urlopen read a local file (or reach an internal host — SSRF) and cache it.
+    if url and urllib.parse.urlparse(url).scheme.lower() not in ("http", "https"):
+        logger.warning(
+            "online config_url %r uses a non-http(s) scheme; refusing it", url
+        )
+        url = ""
+
     if url:
         try:
             req = urllib.request.Request(
@@ -828,15 +837,27 @@ def _persistable_model_path(config: dict[str, Any]) -> str:
     def _norm(p: str) -> str:
         return os.path.normcase(os.path.normpath(os.path.abspath(p)))
 
-    derived: set[str] = set()
+    def _same_path(a: str, b: str) -> bool:
+        # os.path.samefile (st_dev/st_ino) is authoritative on case-insensitive
+        # macOS (APFS) / Windows volumes when both paths exist; os.path.normcase
+        # only folds case on Windows (identity on POSIX), so use it only as the
+        # fallback for a path that is not yet on disk.
+        try:
+            if os.path.exists(a) and os.path.exists(b):
+                return os.path.samefile(a, b)
+        except OSError:
+            pass
+        return _norm(a) == _norm(b)
+
     for h in (hub_folder, str(_hub.default_hub_folder())):
         if not h:
             continue
         try:
-            derived.add(_norm(str(_hub.model_folder_for(h, model_name))))
+            if _same_path(raw, str(_hub.model_folder_for(h, model_name))):
+                return ""
         except ValueError:
             continue
-    return "" if _norm(raw) in derived else raw
+    return raw
 
 
 def _persistable_download_folder(config: dict[str, Any]) -> str:

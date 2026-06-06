@@ -338,6 +338,10 @@ def convert_file(
     parent = os.path.dirname(os.path.abspath(target))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
+    # newline="\n" disables universal-newline translation so the writers' own
+    # '\n' line endings are written byte-for-byte (matching transcriber.py and
+    # _checkpoint.py). Without it, text mode rewrites '\n' to '\r\n' on Windows,
+    # diverging the output bytes of documented-stable formats (SRT, TSV) by OS.
+    with open(target, "w", encoding="utf-8", newline="\n") as f:
         f.write(body)
     return target
