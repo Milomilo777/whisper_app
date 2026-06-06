@@ -757,7 +757,13 @@ class AdvancedDialog(tk.Toplevel):
             self.app.log(f"Could not save model choice: {e}")
             return
         # Close Advanced first, then open the download modal on the app so
-        # two modal grabs don't stack.
+        # two modal grabs don't stack. Tear down the global mousewheel binds
+        # before destroy() — same as _save_and_close / _on_close. Without
+        # this, closing via "Download now" while the pointer is over the
+        # canvas leaves a bind_all pointing at the destroyed widget (the
+        # <Leave> unbind never fires), leaking a stray callback on every
+        # later scroll.
+        self._teardown_mousewheel()
         try:
             self.grab_release()
         except tk.TclError:
