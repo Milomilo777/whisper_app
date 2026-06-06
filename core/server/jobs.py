@@ -28,13 +28,16 @@ never the real model.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import queue
 import shutil
+import socket
 import threading
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -248,8 +251,23 @@ class JobManager:
             self._worker.start()
 
     def stop(self, *, timeout: float = 5.0) -> None:
-        """Signal the worker to exit and wait briefly for it."""
+        """Signal the worker to exit and wait briefly for it.
+
+        Before joining, flip every non-terminal job to ``cancelled=True`` /
+        ``paused=False`` (exactly what :meth:`cancel` does). A PAUSED in-flight
+        job otherwise leaves the worker parked forever inside the engine's
+        ``while task.paused and not task.cancelled`` spin: that loop never
+        inspects ``self._stop``, so without un-pausing + cancelling it the
+        worker would not exit, ``join`` would time out, and the worker thread
+        (pinning the open media handle + the ~3 GB model) would leak — blocking
+        a clean in-process restart and the per-job work_dir deletion on Windows.
+        """
         self._stop.set()
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status not in _TERMINAL:
+                    job.cancelled = True
+                    job.paused = False
         # Unblock a waiting get().
         self._queue.put("")
         w = self._worker
@@ -705,31 +723,78 @@ def _safe_filename(name: str) -> str:
 
 
 def is_safe_url(url: str) -> bool:
-    """True iff ``url`` is an http(s) URL with a host.
+    """True iff ``url`` is an http(s) URL with a host that is not an obvious
+    internal / cloud-metadata target.
 
     Rejects ``file://``, ``ftp://``, bare paths, and anything without a
-    network location. yt-dlp performs its own resolution beyond this, but
-    the scheme gate stops the obvious local-file / SSRF-scheme attempts.
+    network location (the scheme gate). On top of that it applies a MINIMAL
+    SSRF guard: a host that is — or resolves to — a loopback, link-local
+    (including the ``169.254.169.254`` cloud-metadata address), unspecified,
+    or otherwise reserved / multicast address is rejected, so a client who can
+    reach ``POST /api/jobs`` cannot make the server fetch its own loopback
+    services or the cloud instance-metadata endpoint.
 
-    SECURITY NOTE (SSRF surface): this is only a SCHEME gate. It does NOT
-    block http(s) URLs whose host resolves to a private/loopback/link-local
-    address (e.g. ``http://169.254.169.254/`` cloud metadata,
-    ``http://127.0.0.1:.../`` or RFC-1918 hosts). A URL job is therefore a
-    request-forgery surface: only enable URL jobs on a trusted LAN, and
-    prefer NOT exposing the server to untrusted clients. Hardening this
-    fully (resolve the host, reject private ranges, re-check on redirect)
-    is intentionally deferred — yt-dlp also follows its own redirects, so a
-    complete fix has to live at the fetch layer, not this gate. The static
-    page carries the same warning for operators.
+    Deliberately NOT blocked: ordinary RFC-1918 private ranges (10.x,
+    172.16-31.x, 192.168.x). This server is documented to run on a trusted
+    LAN where fetching from a private media server is a legitimate use, so
+    blocking those would break the normal case. DNS resolution is best-effort:
+    a name that fails to resolve is allowed through (yt-dlp will surface the
+    real fetch error) rather than rejected, but a name that DOES resolve to a
+    dangerous address is rejected. yt-dlp still follows its own redirects, so
+    this gate is a first line of defence, not a complete fix — keep URL jobs
+    on a trusted network. The static page carries the same warning.
     """
-    import urllib.parse as _up
     try:
-        parsed = _up.urlparse((url or "").strip())
+        parsed = urllib.parse.urlparse((url or "").strip())
     except (ValueError, AttributeError):
         return False
     if parsed.scheme not in ("http", "https"):
         return False
-    return bool(parsed.netloc)
+    if not parsed.netloc:
+        return False
+    try:
+        host = parsed.hostname or ""
+    except ValueError:
+        return False
+    if not host:
+        return False
+
+    def _addr_blocked(
+        ip: "ipaddress.IPv4Address | ipaddress.IPv6Address",
+    ) -> bool:
+        # Block loopback (127.0.0.0/8, ::1), link-local (169.254/16 incl. the
+        # cloud-metadata IP, fe80::/10), unspecified (0.0.0.0, ::), multicast,
+        # and reserved. Private RFC-1918 ranges are intentionally allowed.
+        return bool(
+            ip.is_loopback or ip.is_link_local or ip.is_unspecified
+            or ip.is_multicast or ip.is_reserved
+        )
+
+    # A literal-IP host: decide directly, no DNS.
+    literal = host.strip("[]")
+    try:
+        ip = ipaddress.ip_address(literal)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        return not _addr_blocked(ip)
+
+    # A name: resolve best-effort and reject only on a confirmed dangerous
+    # address. A resolution failure is allowed through (the fetch layer will
+    # report the real error) so transient DNS issues don't block normal URLs.
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return True
+    for info in infos:
+        sockaddr = info[4]
+        try:
+            resolved = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _addr_blocked(resolved):
+            return False
+    return True
 
 
 def _rmtree_quiet(path: str) -> None:

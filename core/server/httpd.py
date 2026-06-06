@@ -63,6 +63,24 @@ _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # door to an unbounded upload. The configured cap is min()'d against this.
 _ABSOLUTE_MAX_UPLOAD_MB = 4096
 
+# The leading window of a multipart body we read into RAM to locate the file
+# part's header + the small text fields. A real form's headers + text fields
+# are a few hundred bytes; 1 MiB is a generous ceiling that still keeps RAM
+# bounded regardless of the (possibly multi-GB) file payload that follows.
+_MULTIPART_HEADER_WINDOW = 1024 * 1024
+
+# A bounded window read from the END of the temp file to find the closing
+# boundary, so the file part's end offset is located without buffering the
+# payload. The trailing boundary + any text parts after the file are small.
+_MULTIPART_TAIL_WINDOW = 64 * 1024
+
+# A dedicated, small cap for the JSON / URL control POST body, applied
+# independently of the (large) multipart upload cap. A control request is a
+# few hundred bytes; 1 MiB stops a tiny intended JSON call from being inflated
+# to the multimedia upload cap (a memory-amplification DoS distinct from the
+# upload path).
+_MAX_JSON_BODY_BYTES = 1024 * 1024
+
 
 # --- pure parsing helpers (unit-testable, no socket needed) ------------------
 
@@ -122,8 +140,20 @@ def token_ok(expected: str, header_token: str | None,
     """
     if not expected:
         return True
+    # Compare as BYTES, not str: hmac.compare_digest raises TypeError on any
+    # str operand carrying a non-ASCII code point. The candidate token is
+    # fully attacker-controlled (?token= is percent-decoded by parse_qs, and
+    # the X-Auth-Token header is latin-1-decoded by http.client), so a str
+    # compare would let a remote client crash the handler with a non-ASCII
+    # ?token=, and would lock out an operator who chose a non-Latin token.
+    # Encoding both sides with the same codec preserves the constant-time
+    # property for the realistic (matching) case.
+    exp_b = expected.encode("utf-8")
     for candidate in (header_token, query_token):
-        if candidate is not None and hmac.compare_digest(candidate, expected):
+        if candidate is None:
+            continue
+        cand_b = candidate.encode("utf-8", "ignore")
+        if hmac.compare_digest(cand_b, exp_b):
             return True
     return False
 
@@ -184,6 +214,84 @@ def extract_upload(body: bytes, boundary: str) -> tuple[str, bytes,
         elif name:
             fields[name] = value.decode("utf-8", "replace")
     return filename, file_bytes, fields
+
+
+class _UploadParts(NamedTuple):
+    """Result of locating the parts in a multipart temp file (no payload copy).
+
+    ``filename`` / ``file_start`` / ``file_end`` describe the byte range of the
+    single ``file`` part's body inside the temp file (``file_start == -1`` when
+    there is no file part). ``fields`` holds the small plain text parts.
+    """
+
+    filename: str
+    file_start: int
+    file_end: int
+    fields: dict[str, str]
+
+
+def scan_multipart_file(data: bytes, boundary: str) -> _UploadParts:
+    """Locate the ``file`` part's byte RANGE + text fields without copying it.
+
+    A streaming-friendly companion to :func:`extract_upload`: instead of
+    returning the file bytes (a second large allocation), it returns the
+    ``[file_start, file_end)`` offsets of the file part's body within ``data``
+    so the caller can copy that slice straight from the temp file to disk in
+    fixed-size chunks. Text fields (small) are still decoded eagerly. Pure (no
+    I/O) so it is unit-testable; the live path feeds it only the leading window
+    of the temp file (large file payloads are never materialised in RAM).
+    """
+    if not boundary:
+        return _UploadParts("", -1, -1, {})
+    delim = b"--" + boundary.encode("latin-1")
+    fields: dict[str, str] = {}
+    filename = ""
+    file_start = -1
+    file_end = -1
+    pos = 0
+    n = len(data)
+    while pos < n:
+        nxt = data.find(delim, pos)
+        if nxt == -1:
+            break
+        # The body of the part that ended at ``nxt`` ran from the previous
+        # header block; we only need each part's own header + body, so walk
+        # forward from just after this delimiter.
+        seg_start = nxt + len(delim)
+        # A trailing "--" marks the final boundary.
+        if data[seg_start:seg_start + 2] == b"--":
+            break
+        # Skip the CRLF after the boundary line.
+        if data[seg_start:seg_start + 2] == b"\r\n":
+            seg_start += 2
+        head_end = data.find(b"\r\n\r\n", seg_start)
+        if head_end == -1:
+            break
+        raw_headers = data[seg_start:head_end].decode("latin-1", "replace")
+        body_start = head_end + 4
+        # The body ends just before the next delimiter (with its leading CRLF).
+        body_delim = data.find(delim, body_start)
+        if body_delim == -1:
+            # Header parsed but the closing boundary is past the window we were
+            # given; treat the body as open-ended to the window's end.
+            body_end = n
+            next_pos = n
+        else:
+            body_end = body_delim
+            next_pos = body_delim
+        # Strip the trailing CRLF that precedes the next boundary line.
+        if data[body_end - 2:body_end] == b"\r\n":
+            body_end -= 2
+        name = _header_param(raw_headers, "name")
+        fname = _header_param(raw_headers, "filename")
+        if fname:
+            filename = fname
+            file_start = body_start
+            file_end = body_end
+        elif name:
+            fields[name] = data[body_start:body_end].decode("utf-8", "replace")
+        pos = next_pos
+    return _UploadParts(filename, file_start, file_end, fields)
 
 
 def _header_param(raw_headers: str, key: str) -> str:
@@ -646,6 +754,27 @@ class JobRequestHandler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length) if length else b""
 
+    def _read_json_body(self) -> bytes | None:
+        """Read a small JSON / control body, capped well below the upload cap.
+
+        The JSON control path (``POST /api/jobs`` with a ``{"url": ...}`` body)
+        is a few hundred bytes; without a dedicated cap it would buffer a body
+        as large as the multimedia upload cap (default 512 MB, up to 4096 MB)
+        — a memory-amplification DoS with no media file even involved. Reject
+        anything over :data:`_MAX_JSON_BODY_BYTES` with a 413, draining the
+        declared body first so HTTP/1.1 keep-alive stays in sync.
+        """
+        length = self._declared_length()
+        if length > _MAX_JSON_BODY_BYTES:
+            self._drain_body(length)
+            self._send_error_json_close(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                f"request body exceeds "
+                f"{_MAX_JSON_BODY_BYTES // (1024 * 1024)} MB cap",
+            )
+            return None
+        return self.rfile.read(length) if length else b""
+
     def _drain_body(self, length: int) -> None:
         """Read + discard ``length`` bytes from the request body in chunks.
 
@@ -691,10 +820,13 @@ class JobRequestHandler(BaseHTTPRequestHandler):
         """Stream a multipart upload to disk (never fully buffered in RAM).
 
         Reads the raw body to a per-job temp file in 64 KB chunks, enforcing
-        the upload cap against Content-Length, then extracts the single
-        ``file`` part's bytes into the per-job media path and parses the small
-        text fields. The dead in-RAM ``extract_upload`` whole-body parser is
-        retained only as the PURE unit-test seam — the live path streams.
+        the upload cap against Content-Length, then locates the single ``file``
+        part's byte RANGE (from a bounded leading + trailing window — never the
+        whole body) and copies just that range from the temp file straight to
+        the per-job media path in fixed-size chunks. The payload is therefore
+        never materialised in RAM (the old whole-body ``read()`` +
+        ``extract_upload`` copy buffered it ~twice). ``extract_upload`` itself
+        is retained only as the PURE unit-test seam.
         """
         import tempfile
 
@@ -727,53 +859,118 @@ class JobRequestHandler(BaseHTTPRequestHandler):
                 self._send_error_json_close(
                     HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "upload too large")
                 return
-            with open(tmp_path, "rb") as f:
-                body = f.read()
+            parsed = self._extract_upload_from_file(
+                tmp_path, written, boundary)
         except OSError as e:
-            self._send_error_json(HTTPStatus.BAD_REQUEST,
-                                  f"could not read upload: {e}")
-            return
-        finally:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-
-        filename, file_bytes, fields = extract_upload(body, boundary)
-        if not filename or not file_bytes:
-            self._send_error_json(
-                HTTPStatus.BAD_REQUEST, "no file part in upload")
+            self._send_error_json(HTTPStatus.BAD_REQUEST,
+                                  f"could not read upload: {e}")
             return
-        formats = normalize_formats(fields.get("formats"))
-        language = normalize_language(fields.get("language", ""))
-        options, clip_start, clip_end = self._options_from(fields.get)
+
         try:
-            # Stream the extracted file part to its final per-job location so
-            # it is never held in RAM a second time alongside the response.
-            job_id, media_path = manager.submit_upload_stream(
-                filename, formats, language, options=options,
-                clip_start=clip_start, clip_end=clip_end)
+            filename, file_start, file_end, fields = parsed
+            if not filename or file_start < 0 or file_end <= file_start:
+                self._send_error_json(
+                    HTTPStatus.BAD_REQUEST, "no file part in upload")
+                return
+            formats = normalize_formats(fields.get("formats"))
+            language = normalize_language(fields.get("language", ""))
+            options, clip_start, clip_end = self._options_from(fields.get)
             try:
-                with open(media_path, "wb") as f:
-                    f.write(file_bytes)
+                job_id, media_path = manager.submit_upload_stream(
+                    filename, formats, language, options=options,
+                    clip_start=clip_start, clip_end=clip_end)
+            except QueueFull as e:
+                self._send_error_json(HTTPStatus.SERVICE_UNAVAILABLE, str(e))
+                return
+            except ValueError as e:
+                self._send_error_json(HTTPStatus.BAD_REQUEST, str(e))
+                return
+            try:
+                # Copy just the file part's byte range from the temp file to
+                # its final per-job location, in fixed-size chunks — the
+                # payload never sits whole in RAM.
+                self._copy_range(tmp_path, media_path, file_start, file_end)
             except OSError as e:
                 manager.discard(job_id)
                 self._send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR,
                                       f"could not save upload: {e}")
                 return
             manager.enqueue_upload(job_id)
-        except QueueFull as e:
-            self._send_error_json(HTTPStatus.SERVICE_UNAVAILABLE, str(e))
-            return
-        except ValueError as e:
-            self._send_error_json(HTTPStatus.BAD_REQUEST, str(e))
-            return
-        self._send_json(HTTPStatus.ACCEPTED, {"job_id": job_id})
+            self._send_json(HTTPStatus.ACCEPTED, {"job_id": job_id})
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _extract_upload_from_file(
+        tmp_path: str, size: int, boundary: str,
+    ) -> tuple[str, int, int, dict[str, str]]:
+        """Locate the file part's ``[start, end)`` range + text fields on disk.
+
+        Reads only a bounded leading window (headers + small text fields + the
+        file part's header) and a bounded trailing window (the closing
+        boundary) of the temp file — never the payload. Returns
+        ``(filename, file_start, file_end, fields)`` with ``file_start == -1``
+        when no file part is present.
+        """
+        delim = b"--" + boundary.encode("latin-1")
+        with open(tmp_path, "rb") as f:
+            head = f.read(min(size, _MULTIPART_HEADER_WINDOW))
+            parts = scan_multipart_file(head, boundary)
+            file_start = parts.file_start
+            file_end = parts.file_end
+            if file_start < 0:
+                return "", -1, -1, dict(parts.fields)
+            # If the closing boundary lay beyond the leading window, the scan
+            # reported file_end at the window edge. Find the TRUE end from a
+            # bounded tail window so the payload is never read into RAM.
+            if file_end >= len(head) and len(head) < size:
+                tail_len = min(size, _MULTIPART_TAIL_WINDOW)
+                # Never read back past the file part's start, so we don't
+                # buffer the payload; otherwise overlap a delimiter that may
+                # straddle the window boundary by reading the trailing window.
+                tail_start = max(file_start, size - tail_len)
+                f.seek(tail_start)
+                tail = f.read(size - tail_start)
+                idx = tail.rfind(delim)
+                if idx == -1:
+                    file_end = size
+                else:
+                    end = tail_start + idx
+                    # Strip the CRLF that precedes the boundary line.
+                    if tail[idx - 2:idx] == b"\r\n":
+                        end -= 2
+                    file_end = end
+            return parts.filename, file_start, file_end, dict(parts.fields)
+
+    @staticmethod
+    def _copy_range(src_path: str, dst_path: str, start: int, end: int) -> None:
+        """Copy bytes ``[start, end)`` from ``src_path`` to ``dst_path``.
+
+        Fixed-size chunks via ``shutil.copyfileobj``-style loop, so a multi-GB
+        file part is streamed disk-to-disk without a large RAM allocation.
+        """
+        remaining = max(0, end - start)
+        chunk = 1024 * 1024
+        with open(src_path, "rb") as src, open(dst_path, "wb") as dst:
+            src.seek(start)
+            while remaining > 0:
+                buf = src.read(min(chunk, remaining))
+                if not buf:
+                    break
+                dst.write(buf)
+                remaining -= len(buf)
 
     def _create_url_job(self) -> None:
-        body = self._read_body()
+        body = self._read_json_body()
         if body is None:
-            return  # error already sent (cap exceeded / bad length)
+            return  # error already sent (JSON cap exceeded)
         manager = self._srv.manager
         try:
             data = json.loads(body.decode("utf-8") or "{}")
