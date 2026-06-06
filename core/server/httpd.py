@@ -958,11 +958,16 @@ class JobRequestHandler(BaseHTTPRequestHandler):
             fields = dict(parts.fields)
             if file_start < 0:
                 return "", -1, -1, fields
-            # If the closing boundary lay beyond the leading window, the scan
-            # reported file_end at the window edge. Find the TRUE end + recover
-            # any after-file text fields from a bounded tail window so the
-            # payload is never read into RAM.
-            if file_end >= len(head) and len(head) < size:
+            # Whenever the whole body did NOT fit the leading window, the small
+            # after-file text fields (formats / language / options the server's
+            # page appends AFTER the file part) may lie beyond it — and so may
+            # the file part's true end. Read a bounded tail window to recover
+            # BOTH without buffering the payload. The field recovery must run
+            # even when file_end was located inside the head window: the file's
+            # closing boundary can fit the window while the trailing fields
+            # spill past it, and gating the recovery on file_end-past-the-window
+            # would silently drop those fields (-> [srt] + auto fallback).
+            if len(head) < size:
                 tail_len = min(size, _MULTIPART_TAIL_WINDOW)
                 # Never read back past the file part's start, so we don't
                 # buffer the payload; otherwise overlap a delimiter that may
@@ -976,13 +981,22 @@ class JobRequestHandler(BaseHTTPRequestHandler):
                 # copied into the media file.
                 idx = tail.find(delim)
                 if idx == -1:
-                    file_end = size
+                    # No delimiter in the tail: only re-resolve the end if it
+                    # was still pinned at the window edge (the closing boundary
+                    # lay past both windows). An end already found inside the
+                    # head window is correct and stays put.
+                    if file_end >= len(head):
+                        file_end = size
                 else:
                     end = tail_start + idx
                     # Strip the CRLF that precedes the boundary line.
                     if tail[idx - 2:idx] == b"\r\n":
                         end -= 2
-                    file_end = end
+                    # Only adopt the tail's end when the head scan left file_end
+                    # pinned at the window edge; an end already resolved inside
+                    # the head window is authoritative and must not move.
+                    if file_end >= len(head):
+                        file_end = end
                     # Re-scan the tail from the file part's closing delimiter so
                     # the after-file text fields (formats/language/options) are
                     # recovered. Leading-window fields, if any, take precedence.
