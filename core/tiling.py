@@ -228,8 +228,17 @@ def download_ffplay(
                 except OSError:
                     pass
 
-        ok = os.path.isfile(target)
-        say("ffplay is ready." if ok else "ffplay download did not produce a binary.")
+        # A real ffplay binary is several MB; a 0-byte / truncated extract
+        # (e.g. an empty zip member) must NOT be reported as ready — remove it
+        # so bin/ffplay stays "missing" rather than a broken stub a retry skips.
+        ok = os.path.isfile(target) and os.path.getsize(target) > 100 * 1024
+        if os.path.isfile(target) and not ok:
+            try:
+                os.unlink(target)
+            except OSError:
+                pass
+        say("ffplay is ready." if ok
+            else "ffplay download did not produce a usable binary.")
         return ok
     except (urllib.error.URLError, OSError, ValueError) as e:
         say(f"ffplay download failed: {e}")
