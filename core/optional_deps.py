@@ -230,6 +230,13 @@ def install(
         # ANY failure, remove from final_target every top-level entry
         # that staging contributes, so no partial package is left behind.
         staged_names = os.listdir(staging)
+        # Snapshot the top-level names already present BEFORE this merge so
+        # rollback can tell apart entries THIS install creates from dirs a
+        # sibling feature already installed. 'alignment' and
+        # 'whisper_backend' both pull torch/numpy; if a later install's
+        # torch/ merge fails (e.g. a locked .pyd), the rollback must NOT
+        # delete the torch/numpy the already-installed feature still needs.
+        pre_existing = set(os.listdir(final_target))
         merged_ok = True
         merge_err: Exception | None = None
         for name in staged_names:
@@ -262,9 +269,14 @@ def install(
         if not merged_ok:
             if log_cb:
                 log_cb(f"Could not finalise install: {merge_err}")
-            # Roll back: delete every top-level entry staging would have
-            # contributed so is_available() cannot observe a partial tree.
+            # Roll back: delete only the top-level entries THIS install
+            # newly created, so is_available() cannot observe a partial
+            # tree — but leave pre-existing shared dirs (e.g. torch/numpy a
+            # sibling feature already installed) untouched, or rolling back
+            # one feature's failed merge would silently break another.
             for name in staged_names:
+                if name in pre_existing:
+                    continue
                 _rm(os.path.join(final_target, name))
             shutil.rmtree(staging, ignore_errors=True)
             return False
