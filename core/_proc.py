@@ -57,12 +57,36 @@ def kill_process_tree(
         return
 
     if os.name == "nt":
+        # A graceful taskkill (no /F) posts WM_CLOSE to top-level windows.
+        # yt-dlp.exe and its ffmpeg merge child are WINDOWLESS console
+        # processes, so they ignore WM_CLOSE; taskkill then returns a
+        # non-zero exit code ("This process can only be terminated forcefully
+        # (with /F option)") and the tree keeps running. subprocess.run is
+        # not check=True, so that failure was previously swallowed and the
+        # Cancel/Pause/close paths orphaned yt-dlp/ffmpeg (holding the
+        # .part/output handle). When the graceful pass reports failure, fall
+        # through to a forced /F tree-kill so the tree actually dies.
         args = ["taskkill", "/PID", str(pid), "/T"]
         if force:
             args.append("/F")
         try:
-            subprocess.run(
+            result = subprocess.run(
                 args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                timeout=timeout,
+            )
+            rc = getattr(result, "returncode", 0)
+            if force or not isinstance(rc, int) or rc == 0:
+                return
+            # Graceful taskkill could not terminate the tree — escalate to /F.
+            logger.debug(
+                "graceful taskkill for pid %s returned %s; escalating to /F",
+                pid, rc,
+            )
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

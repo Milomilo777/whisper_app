@@ -142,6 +142,13 @@ def post_stats_async(
         url = str(config.get("stats_url") or "").strip()
         if not url:
             return False
+        # stats_url is in ONLINE_ALLOWED_KEYS, so a compromised / MITM'd online
+        # config could point telemetry at an arbitrary scheme (file://, ftp://,
+        # an attacker collector). urlopen honours whatever scheme it is given,
+        # so reject anything that is not plain web traffic before the request.
+        if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+            logger.debug("stats post skipped: non-http(s) stats_url scheme")
+            return False
         if not isinstance(payload, dict) or not payload:
             return False
         t = threading.Thread(
