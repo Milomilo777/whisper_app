@@ -872,7 +872,15 @@ def _persistable_download_folder(config: dict[str, Any]) -> str:
     until the drive returns. (Same spirit as _persistable_model_path:
     don't let a session-only repair leak into a permanent loss.)
     """
-    current = (config.get("download_folder") or "").strip()
+    # A non-string download_folder (e.g. a hand-edited config.json with
+    # an int or list) must not reach .strip(), which would raise an
+    # uncaught AttributeError and crash save_config. Mirror the
+    # model.name guard in _persistable_model_path: treat anything that
+    # is not a str as empty, so a corrupt value normalises to "".
+    def _as_str(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    current = _as_str(config.get("download_folder"))
     if current:
         return current
     try:
@@ -891,7 +899,7 @@ def _persistable_download_folder(config: dict[str, Any]) -> str:
         return current
     if not isinstance(on_disk, dict):
         return current
-    prev = (on_disk.get("download_folder") or "").strip()
+    prev = _as_str(on_disk.get("download_folder"))
     if prev and not _drive_is_mounted(prev):
         return prev
     return current
