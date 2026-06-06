@@ -806,28 +806,64 @@ class TilingController:
         # "any") means a single dead monitor in a multi-screen wall triggers a
         # clean relaunch instead of leaving that screen black. A consumer the
         # fan-out RETIRED is also treated as not-alive immediately.
-        if not self._ytdlp or self._ytdlp.poll() is not None:
+        #
+        # Snapshot the shared fields under the lock: a UI-thread Stop runs
+        # _terminate concurrently and nulls self._ytdlp / rebinds the lists, so
+        # reading self._ytdlp truthy and THEN calling .poll() on it unlocked
+        # could hit None.poll() (AttributeError). The snapshot is consistent;
+        # the (cheap) poll() calls then run outside the lock.
+        with self._lock:
+            ytdlp = self._ytdlp
+            consumers = list(self._consumers)
+            ffplay = list(self._ffplay)
+        if not ytdlp or ytdlp.poll() is not None:
             return False
-        if any(c.get("dead") for c in self._consumers):
+        if any(c.get("dead") for c in consumers):
             return False
-        if not self._ffplay:
+        if not ffplay:
             return False
-        return all(p.poll() is None for p in self._ffplay)
+        return all(p.poll() is None for p in ffplay)
 
     def _death_reason(self) -> str:
         """Short human note for the log; call BEFORE _terminate."""
-        if not self._ytdlp or self._ytdlp.poll() is not None:
-            tail = list(self._stderr_tail or [])[-3:]
+        # Same race as _alive(): snapshot under the lock so a concurrent Stop
+        # nulling self._ytdlp can't turn the truthy-then-.poll() into a crash.
+        with self._lock:
+            ytdlp = self._ytdlp
+            ffplay = list(self._ffplay)
+            stderr_tail = list(self._stderr_tail or [])
+        if not ytdlp or ytdlp.poll() is not None:
+            tail = stderr_tail[-3:]
             extra = " [yt-dlp: {}]".format(" | ".join(tail)) if tail else ""
             return "the download ended" + extra
         dead = [
-            i + 1 for i, p in enumerate(self._ffplay) if p.poll() is not None
+            i + 1 for i, p in enumerate(ffplay) if p.poll() is not None
         ]
         if dead:
             return "player window(s) #{} exited".format(
                 ",".join(map(str, dead))
             )
         return "an unknown reason"
+
+    @staticmethod
+    def _reap(procs: list[Optional[subprocess.Popen]]) -> None:
+        """Best-effort wait() on already-killed children so they don't linger
+        as POSIX zombies (<defunct>).
+
+        ``kill_process_tree`` only SIGNALS the tree; on POSIX the killed child
+        stays a zombie until its parent (this app process) reaps it via wait().
+        The reconnect loop tears a pipeline down on every dropped session, so
+        over a long outage those un-reaped yt-dlp/ffplay processes would pile
+        up. A short, never-raising wait() here collects each one. No-op /
+        harmless on Windows (no zombies; the handle is just closed cleanly).
+        """
+        for p in procs:
+            if p is None:
+                continue
+            try:
+                p.wait(timeout=2)
+            except Exception:  # noqa: BLE001 — TimeoutExpired or already reaped
+                pass
 
     def _terminate(self, join: bool = True) -> None:
         """Tear down the pipeline. Fast steps (signal + kill + close) under the
@@ -836,16 +872,19 @@ class TilingController:
         KILLED BEFORE its stdin is closed (killing makes the next write fail at
         once; closing the write end alone would not unblock a wedged reader).
         """
+        reap: list[Optional[subprocess.Popen]] = []
         with self._lock:
             if self._fanout_stop:
                 self._fanout_stop.set()
             # Kill the download first (the fan-out reader then sees EOF).
             if self._ytdlp:
                 kill_process_tree(self._ytdlp, force=True)
+                reap.append(self._ytdlp)
                 self._ytdlp = None
             # Kill each player, THEN close its stdin and wake any idle writer.
             for c in self._consumers:
                 kill_process_tree(c["proc"], force=True)
+                reap.append(c["proc"])
                 try:
                     if c["proc"].stdin:
                         c["proc"].stdin.close()
@@ -857,6 +896,7 @@ class TilingController:
                     pass
             for p in self._ffplay:
                 kill_process_tree(p, force=True)
+                reap.append(p)
                 if p.stdin:
                     try:
                         p.stdin.close()
@@ -871,6 +911,10 @@ class TilingController:
             self._fanout_thread = None
             self._fanout_stop = None
             self._stderr_thread = None
+
+        # Reap the killed children OUTSIDE the lock (wait() can block briefly)
+        # so each dropped session's processes don't linger as POSIX zombies.
+        self._reap(reap)
 
         if join:
             cur = threading.current_thread()

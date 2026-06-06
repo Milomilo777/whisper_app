@@ -275,11 +275,16 @@ def list_monitors() -> list[Monitor]:
 
 
 def primary_index(monitors: list[Monitor]) -> int:
-    """Index of the primary monitor (falls back to the left-most one)."""
+    """Index of the primary monitor (falls back to the left-most one).
+
+    Returns 0 for an empty list rather than raising IndexError, so a direct
+    caller that somehow passes no monitors degrades gracefully. (The normal
+    path feeds :func:`list_monitors` output, which is guaranteed non-empty.)
+    """
     for m in monitors:
         if m["is_primary"]:
             return m["index"]
-    return monitors[0]["index"]
+    return monitors[0]["index"] if monitors else 0
 
 
 def select_monitors(
@@ -294,6 +299,12 @@ def select_monitors(
     - ``multi_monitor`` on  → every ticked monitor (or all monitors if none
       ticked).
     """
+    if not monitors:
+        # Defensive: with no monitors there is nothing to pick. The normal
+        # path feeds list_monitors() output (guaranteed non-empty); this only
+        # guards a direct caller that passes an empty list, where the primary
+        # pick below would otherwise IndexError/KeyError.
+        return []
     selected = list(selected_indices or [])
     by_index = {m["index"]: m for m in monitors}
     if not multi_monitor:
