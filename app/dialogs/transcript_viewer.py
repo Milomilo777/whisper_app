@@ -165,10 +165,22 @@ def _seg_float(seg: dict[str, Any], key: str, default: float = 0.0) -> float:
 
 
 def _segment_min_probability(seg: dict[str, Any]) -> float | None:
-    """Min word-confidence in a segment, or None when not available."""
+    """Min word-confidence in a segment, or None when not available.
+
+    A segment's ``words`` is normally a list of dicts, but a hand-edited
+    / unrelated JSON may carry a list of NON-dict elements (e.g.
+    ``words: [1, 2]`` or ``["a"]``). Calling ``.get(...)`` on a non-dict
+    raises ``AttributeError`` — which the ``(TypeError, ValueError)``
+    handler does NOT catch — crashing the viewer at construction and
+    bypassing the friendly "pick the .json" guard in
+    :meth:`_load_segments`. Skip non-dict entries defensively, mirroring
+    the :func:`_seg_float` coercion style.
+    """
     words = seg.get("words") or []
     probs: list[float] = []
     for w in words:
+        if not isinstance(w, dict):
+            continue
         try:
             probs.append(float(w.get("probability", 0.0)))
         except (TypeError, ValueError):
