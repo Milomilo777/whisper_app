@@ -38,6 +38,28 @@ def new_session_kwargs() -> dict[str, Any]:
     return {"start_new_session": True}
 
 
+def _wait_for_exit(process: Any, timeout: float) -> bool:
+    """Poll ``process`` until it exits or ``timeout`` elapses. Never raises.
+
+    Returns True once the process has exited, False on timeout. Used by the
+    POSIX graceful path to decide whether a SIGTERM took effect before
+    escalating to SIGKILL.
+    """
+    import time as _time
+
+    deadline = _time.monotonic() + max(0.0, timeout)
+    while True:
+        try:
+            if process.poll() is not None:
+                return True
+        except Exception:  # noqa: BLE001
+            # Can't tell — treat as not-yet-exited so we still escalate.
+            return False
+        if _time.monotonic() >= deadline:
+            return False
+        _time.sleep(0.05)
+
+
 def kill_process_tree(
     process: Any, *, force: bool = False, timeout: float = 5.0
 ) -> None:
@@ -97,9 +119,27 @@ def kill_process_tree(
             logger.debug("taskkill tree failed for pid %s; signalling parent",
                          pid, exc_info=True)
     else:
-        sig = getattr(signal, "SIGKILL", signal.SIGTERM) if force else signal.SIGTERM
+        sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
+        sig = sigkill if force else signal.SIGTERM
         try:
-            os.killpg(os.getpgid(pid), sig)
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, sig)
+            if force or sigkill == signal.SIGTERM:
+                # Hard kill already sent, or this platform has no distinct
+                # SIGKILL — nothing left to escalate to.
+                return
+            # Graceful pass sent SIGTERM. A wedged child (stuck ffmpeg /
+            # demucs) can ignore it and survive, holding the source/output
+            # handle open. Mirror the Windows graceful->/F escalation: give
+            # the group up to ``timeout`` to exit, then SIGKILL the group.
+            if _wait_for_exit(process, timeout):
+                return
+            logger.debug(
+                "graceful SIGTERM for pid %s did not exit within %.1fs; "
+                "escalating to SIGKILL",
+                pid, timeout,
+            )
+            os.killpg(pgid, sigkill)
             return
         except Exception:  # noqa: BLE001
             logger.debug("killpg failed for pid %s; signalling parent",

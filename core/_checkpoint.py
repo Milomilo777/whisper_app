@@ -68,8 +68,19 @@ def partials_dir() -> Path:
 
 
 def source_key(source_path: str) -> str:
-    """Stable sha1 of the absolute source path."""
-    return hashlib.sha1(os.path.abspath(source_path).encode("utf-8")).hexdigest()
+    """Stable sha1 of the absolute source path.
+
+    The path is run through ``os.path.normcase`` so the key matches the
+    filesystem's own case semantics: on Windows it lowercases the drive
+    letter / path (and normalises slashes), so a checkpoint written for
+    ``C:\\Foo.mp4`` is still found when the same file is reopened as
+    ``c:\\foo.mp4`` — otherwise the differing-case path hashed to a
+    different key and the resume silently fell back to a full re-run.
+    On case-sensitive POSIX, ``normcase`` is a no-op, so two genuinely
+    distinct files differing only in case keep distinct keys.
+    """
+    norm = os.path.normcase(os.path.abspath(source_path))
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()
 
 
 def checkpoint_path(source_path: str) -> Path:
