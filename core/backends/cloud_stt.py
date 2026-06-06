@@ -270,13 +270,20 @@ def extract_text_from_response(resp: dict[str, Any]) -> str:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 texts.append(part["text"])
     text = "".join(texts).strip()
+    # A bad finishReason must abort the chunk REGARDLESS of whether any text
+    # came back. The dangerous case is PARTIAL text with finishReason
+    # MAX_TOKENS (a dense window that exceeded the output-token budget):
+    # returning that truncated text silently drops the rest of the chunk's
+    # audio from the transcript -> data loss. SAFETY / RECITATION are equally
+    # truncating. Only STOP (clean finish) or an absent reason are safe.
+    reason = first.get("finishReason")
+    if reason and reason not in ("STOP", None):
+        raise RuntimeError(
+            f"Gemini truncated or blocked this clip (finishReason={reason}); "
+            "the transcript would be incomplete. The clip may have been "
+            "blocked or exceeded the output-token limit."
+        )
     if not text:
-        reason = first.get("finishReason")
-        if reason and reason != "STOP":
-            raise RuntimeError(
-                f"Gemini returned no transcript (finishReason={reason}). "
-                "The clip may have been blocked or exceeded the output limit."
-            )
         # Clean stop with no text == a window with no recognizable speech.
         # Return "" (-> zero segments) rather than raising, so one silent /
         # music-only chunk does not discard the rest of a multi-chunk job.
