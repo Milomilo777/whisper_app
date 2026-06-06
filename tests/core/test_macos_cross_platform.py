@@ -248,7 +248,7 @@ def test_tiling_players_spawn_with_session_kwargs(monkeypatch):
     ctrl._url = "https://example.com/live"
     ctrl._divisions = 2
     ctrl._play_flag = True
-    ctrl._start()
+    ctrl._start(ctrl._generation)  # run-token guard: pass the current generation
 
     assert len(spawned) >= 2  # yt-dlp + at least one ffplay
     for s in spawned:
