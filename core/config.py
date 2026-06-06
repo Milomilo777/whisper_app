@@ -877,7 +877,16 @@ def _persistable_download_folder(config: dict[str, Any]) -> str:
         return current
     try:
         with open(config_path(), "r", encoding="utf-8") as f:
-            on_disk = json.load(f)
+            # Mirror the non-finite guard used by _read_local_config /
+            # fetch_online_config: this re-reads the raw on-disk config
+            # directly, bypassing _read_local_config's guard, so without
+            # parse_constant an Infinity/-Infinity/NaN literal would be
+            # accepted here too — and a non-finite download_folder value
+            # then crashes the .strip() below (AttributeError, uncaught).
+            # Treat such a file as corrupt: _reject_nonfinite raises a
+            # ValueError, already handled by the except, so we fall back
+            # to the in-memory value.
+            on_disk = json.load(f, parse_constant=_reject_nonfinite)
     except (OSError, ValueError):
         return current
     if not isinstance(on_disk, dict):
