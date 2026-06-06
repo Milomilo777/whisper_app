@@ -297,7 +297,12 @@ def test_build_recognition_config_diarization_forces_word_offsets():
     assert diar.kw == {"min_speaker_count": 2, "max_speaker_count": 6}
 
 
-def test_build_recognition_config_diarization_zero_speakers_omitted():
+def test_build_recognition_config_diarization_zero_speakers_defaults():
+    """The UI has no min/max inputs, so both arrive 0 when diarization is on.
+
+    A SpeakerDiarizationConfig() with no counts is rejected by Google v2, so
+    the builder must default to a sane 1..6 range instead of omitting them.
+    """
     cfg = g.build_recognition_config(
         _FakeCloudSpeech,
         language_code="auto",
@@ -307,9 +312,24 @@ def test_build_recognition_config_diarization_zero_speakers_omitted():
         min_speakers=0,
         max_speakers=0,
     )
-    # 0 means "let Google decide" — don't send the bound at all.
     diar = cfg.features.kw["diarization_config"]
-    assert diar.kw == {}
+    assert diar.kw == {"min_speaker_count": 1, "max_speaker_count": 6}
+
+
+def test_build_recognition_config_diarization_min_only_defaults_max():
+    """A positive min with max=0 still gets a valid (>= min) max."""
+    cfg = g.build_recognition_config(
+        _FakeCloudSpeech,
+        language_code="auto",
+        model="long",
+        want_words=False,
+        diarization=True,
+        min_speakers=3,
+        max_speakers=0,
+    )
+    diar = cfg.features.kw["diarization_config"]
+    assert diar.kw["min_speaker_count"] == 3
+    assert diar.kw["max_speaker_count"] >= 3
 
 
 # ---------------------------------------------------------------- language norm

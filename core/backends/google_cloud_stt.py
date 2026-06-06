@@ -638,11 +638,18 @@ def build_recognition_config(
         "enable_word_confidence": bool(want_words),
     }
     if diarization:
-        diar_kwargs: dict[str, Any] = {}
-        if min_speakers > 0:
-            diar_kwargs["min_speaker_count"] = int(min_speakers)
-        if max_speakers > 0:
-            diar_kwargs["max_speaker_count"] = int(max_speakers)
+        # The UI exposes no min/max-speaker inputs, so both arrive as 0 when
+        # diarization is on. A SpeakerDiarizationConfig() with no counts is
+        # rejected by Google v2 (it needs a positive max). Default to a sane
+        # 1..6 range so the feature actually works without UI plumbing.
+        lo = int(min_speakers) if min_speakers > 0 else 1
+        hi = int(max_speakers) if max_speakers > 0 else 6
+        if hi < lo:
+            hi = lo
+        diar_kwargs: dict[str, Any] = {
+            "min_speaker_count": lo,
+            "max_speaker_count": hi,
+        }
         features_kwargs["diarization_config"] = cloud_speech.SpeakerDiarizationConfig(
             **diar_kwargs
         )
