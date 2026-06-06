@@ -1288,10 +1288,6 @@ class App(tk.Tk):
                 pass
             return
 
-        # Flip the closing flag so watcher events / stability-checks
-        # in flight short-circuit before touching destroyed widgets.
-        self._closing = True
-
         active = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         active_downloads = [
             t for t in self.download_queue if t.status not in ("finished", "cancelled", "error")
@@ -1302,7 +1298,17 @@ class App(tk.Tk):
                 "There are queued or running tasks. Exit anyway?",
                 parent=self,
             ):
+                # Declining must NOT freeze the app. _closing is the sole
+                # gate that lets loop()/_drain_main_calls/_drain_watched_paths
+                # re-arm their after() callbacks; setting it before this
+                # return left it stuck True (it is only reset in __init__),
+                # permanently killing the queue pump and the drains.
                 return
+
+        # Confirmation passed (or there was nothing to confirm): flip the
+        # closing flag so watcher events / stability-checks in flight
+        # short-circuit before touching destroyed widgets.
+        self._closing = True
         # Persist window size + position so the next launch reopens at
         # the same shape. Runs *before* terminating subprocesses so it
         # never sees a broken state.
