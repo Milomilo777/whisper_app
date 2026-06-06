@@ -869,3 +869,139 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
             ),
             wraplength=620, justify="left", foreground="#b5651a",
         ).pack(anchor="w", pady=(10, 0))
+
+
+def build_server_tab(app: "App", parent: ttk.Frame) -> None:
+    """Web / LAN access: a one-click toggle to let a browser transcribe.
+
+    Turning this on starts a small web page (served by this app) so you —
+    or other people on your network — can drop a file or paste a link in a
+    browser and get subtitles back, without installing anything. One
+    obvious Start/Stop button; everything else has a plain-language note.
+    """
+    cfg = app.app_config
+    frame = ttk.Frame(parent, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame, text="Web / LAN access", font=("TkDefaultFont", 13, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text=(
+            "Turn this on to open a simple web page that uses this app to "
+            "transcribe. Open it in a browser on this computer, or share it "
+            "with phones and other PCs on your network. It stays off until "
+            "you start it, and there is nothing to install on the other "
+            "devices."
+        ),
+        wraplength=620, justify="left", foreground="#888",
+    ).pack(anchor="w", pady=(4, 12))
+
+    # --- the one obvious control: Start / Stop -------------------------------
+    toggle_row = ttk.Frame(frame)
+    toggle_row.pack(fill="x", pady=(0, 6))
+    app.server_toggle_btn = ttk.Button(
+        toggle_row, text="Start web access", command=app.toggle_server,
+    )
+    app.server_toggle_btn.pack(side="left")
+    app.server_open_btn = ttk.Button(
+        toggle_row, text="Open in browser",
+        command=app.open_server_in_browser, state="disabled",
+    )
+    app.server_open_btn.pack(side="left", padx=(8, 0))
+
+    # Status line ("Off" / "Running...").
+    app.server_status_var = tk.StringVar(value="Off")
+    ttk.Label(
+        frame, textvariable=app.server_status_var,
+        font=("TkDefaultFont", 10, "bold"),
+    ).pack(anchor="w", pady=(2, 0))
+
+    # The reachable address(es) — shown so the user can type them on a
+    # phone or another PC. Selectable so they can copy it.
+    app.server_url_var = tk.StringVar(value="")
+    url_label = ttk.Label(
+        frame, textvariable=app.server_url_var, foreground="#3a7bd5",
+        justify="left",
+    )
+    url_label.pack(anchor="w", pady=(2, 12))
+
+    # --- options -------------------------------------------------------------
+    opts = ttk.LabelFrame(frame, text="Options", padding=12)
+    opts.pack(fill="x", pady=(0, 8))
+
+    # Port.
+    port_row = ttk.Frame(opts)
+    port_row.pack(fill="x", pady=(0, 8))
+    ttk.Label(port_row, text="Port:").pack(side="left")
+    saved_port = cfg.get("server_port", 8765)
+    try:
+        saved_port = int(saved_port)
+    except (TypeError, ValueError):
+        saved_port = 8765
+    if not 1 <= saved_port <= 65535:
+        saved_port = 8765
+    app.server_port_var = tk.IntVar(value=saved_port)
+    ttk.Spinbox(
+        port_row, from_=1, to=65535, width=8,
+        textvariable=app.server_port_var,
+        command=app._save_server_prefs,
+    ).pack(side="left", padx=(8, 0))
+    ttk.Label(
+        port_row,
+        text="(the number after the address; leave the default if unsure)",
+        foreground="#888",
+    ).pack(side="left", padx=(8, 0))
+
+    # Share on local network.
+    app.server_share_lan_var = tk.BooleanVar(
+        value=bool(cfg.get("server_share_lan", False))
+    )
+    ttk.Checkbutton(
+        opts, text="Share on local network (other devices can use it)",
+        variable=app.server_share_lan_var,
+        command=app._save_server_prefs,
+    ).pack(anchor="w")
+    ttk.Label(
+        opts,
+        text=(
+            "Off: only this computer can use it (no firewall prompt).\n"
+            "On: Windows may ask to allow it through the firewall — click "
+            "Allow. Anyone on your network will be able to use it."
+        ),
+        wraplength=560, justify="left", foreground="#888",
+    ).pack(anchor="w", padx=(22, 0), pady=(0, 8))
+
+    # Optional access password (the --token mechanism).
+    pw_row = ttk.Frame(opts)
+    pw_row.pack(fill="x")
+    ttk.Label(pw_row, text="Access password (optional):").pack(side="left")
+    app.server_token_var = tk.StringVar(value=str(cfg.get("server_token", "")))
+    pw_entry = ttk.Entry(
+        pw_row, textvariable=app.server_token_var, width=24, show="•",
+    )
+    pw_entry.pack(side="left", padx=(8, 0))
+    pw_entry.bind("<FocusOut>", lambda _e: app._save_server_prefs())
+    ttk.Label(
+        opts,
+        text=(
+            "Leave blank for no password. If you set one, share it with the "
+            "people you want to let in — they will need to add it to the "
+            "address as  ?token=YOURPASSWORD"
+        ),
+        wraplength=560, justify="left", foreground="#888",
+    ).pack(anchor="w", padx=(0, 0), pady=(4, 0))
+
+    # --- safety note ---------------------------------------------------------
+    ttk.Label(
+        frame,
+        text=(
+            "Use this only on a network you trust (your home or office "
+            "Wi-Fi). It has no accounts and is not encrypted — anyone who "
+            "can reach the address (and knows the password, if you set one) "
+            "can use it. The first time you turn it on it may need to "
+            "download the speech model; jobs will wait for that."
+        ),
+        wraplength=620, justify="left", foreground="#b5651a",
+    ).pack(anchor="w", pady=(10, 0))

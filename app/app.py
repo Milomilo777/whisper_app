@@ -27,6 +27,7 @@ from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import (
     build_download_tab,
     build_queue_tab,
+    build_server_tab,
     build_tiling_tab,
     build_transcribe_tab,
 )
@@ -149,6 +150,14 @@ class App(tk.Tk):
     tiling_monitors_info_var: tk.StringVar
     # Spatial monitor indices (core.monitors) ticked for multi-monitor.
     tiling_selected_monitors: list[int]
+    # Web / LAN access tab (created by tabs.build_server_tab).
+    server_port_var: tk.IntVar
+    server_share_lan_var: tk.BooleanVar
+    server_token_var: tk.StringVar
+    server_status_var: tk.StringVar
+    server_url_var: tk.StringVar
+    server_toggle_btn: "ttk.Button"
+    server_open_btn: "ttk.Button"
     # Download-tab position sliders (created by tabs.build_download_tab).
     download_start_scale: "ttk.Scale"
     download_end_scale: "ttk.Scale"
@@ -294,6 +303,13 @@ class App(tk.Tk):
         from core.tiling import TilingController
         self.tiling = TilingController()
         self.integrations_service = IntegrationsService(self)
+        # Optional in-process web / LAN server (built lazily on first
+        # Start so importing core.server — and its model load — is paid
+        # only when the user actually turns it on). None = never started.
+        self._server_handle: Any = None
+        # True while a start/stop worker thread is in flight, so the
+        # toggle button can't be double-fired into a half-built state.
+        self._server_busy = False
 
         # SQLite history (Phase 3a). Mark any pre-crash row as interrupted on launch.
         try:
@@ -1002,6 +1018,9 @@ class App(tk.Tk):
             self.tiling.stop()
         except Exception:  # noqa: BLE001
             pass
+        # Stop the in-process web / LAN server so its socket + worker
+        # thread don't linger after the window closes.
+        self._shutdown_server_on_exit()
         self.transcription_service.stop_all()
         # Close the history DB connection (and checkpoint its WAL) on a
         # clean exit — the GUI never did, leaking the connection + the
@@ -1050,14 +1069,17 @@ class App(tk.Tk):
         self.t2 = ttk.Frame(self.nb)
         self.t3 = ttk.Frame(self.nb)
         self.t4 = ttk.Frame(self.nb)
+        self.t5 = ttk.Frame(self.nb)
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
         self.nb.add(self.t3, text="Download Videos")
         self.nb.add(self.t4, text="Video Tiling")
+        self.nb.add(self.t5, text="Web / LAN access")
         build_transcribe_tab(self, self.t1)
         build_queue_tab(self, self.t2)
         build_download_tab(self, self.t3)
         build_tiling_tab(self, self.t4)
+        build_server_tab(self, self.t5)
 
     def _save_auto_transcribe_pref(self) -> None:
         self.app_config["auto_transcribe_after_download"] = bool(self.auto_transcribe_var.get())
@@ -2374,6 +2396,172 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         self.tiling_status_var.set("Stopped.")
+
+    # Web / LAN access server -------------------------------------------------
+    def _save_server_prefs(self) -> None:
+        """Persist the port / share-on-LAN / token choices."""
+        try:
+            port = int(self.server_port_var.get())
+        except (tk.TclError, ValueError):
+            port = 8765
+        port = port if 1 <= port <= 65535 else 8765
+        self.app_config["server_port"] = port
+        self.app_config["server_share_lan"] = bool(self.server_share_lan_var.get())
+        self.app_config["server_token"] = self.server_token_var.get().strip()
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to save web/LAN server preferences")
+            self.log(f"Could not save Web / LAN settings: {e}")
+
+    def _server_is_running(self) -> bool:
+        h = self._server_handle
+        return h is not None and h.is_running()
+
+    def toggle_server(self) -> None:
+        """One-click Start/Stop for the web / LAN server (idempotent).
+
+        The bind + (first-time) model load happen on a daemon thread so
+        the UI never freezes; the result is marshalled back onto the Tk
+        main thread via post_to_main. Re-entrancy is guarded by
+        ``_server_busy`` so a double-click can't start two servers.
+        """
+        if self._server_busy:
+            return
+        self._save_server_prefs()
+        if self._server_is_running():
+            self._stop_server_async()
+        else:
+            self._start_server_async()
+
+    def _start_server_async(self) -> None:
+        import threading as _t
+
+        try:
+            port = int(self.server_port_var.get())
+        except (tk.TclError, ValueError):
+            port = int(self.app_config.get("server_port", 8765))
+        share_lan = bool(self.server_share_lan_var.get())
+        token = self.server_token_var.get().strip()
+        max_upload_mb = int(self.app_config.get("server_max_upload_mb", 512))
+
+        self._server_busy = True
+        self.server_toggle_btn.config(state="disabled")
+        self.server_status_var.set("Starting...")
+        self.server_url_var.set("")
+
+        def _work() -> None:
+            try:
+                from core.server import HOST_LAN, HOST_LOOPBACK, ServerHandle
+                host = HOST_LAN if share_lan else HOST_LOOPBACK
+                handle = ServerHandle()
+                # auto_port: if the chosen port is busy the handle falls
+                # back to a free one rather than failing — we report what
+                # it actually bound.
+                handle.start(host, port, token, max_upload_mb=max_upload_mb)
+                self._server_handle = handle
+                urls = handle.urls()
+                bound_port = handle.port
+                self.post_to_main(
+                    lambda: self._on_server_started(urls, bound_port, share_lan)
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Web / LAN server failed to start")
+                msg = str(e)
+                self.post_to_main(lambda: self._on_server_failed(msg))
+
+        _t.Thread(target=_work, name="server-start", daemon=True).start()
+
+    def _stop_server_async(self) -> None:
+        import threading as _t
+
+        handle = self._server_handle
+        self._server_busy = True
+        self.server_toggle_btn.config(state="disabled")
+        self.server_status_var.set("Stopping...")
+
+        def _work() -> None:
+            try:
+                if handle is not None:
+                    handle.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Web / LAN server failed to stop cleanly")
+            finally:
+                self._server_handle = None
+                self.post_to_main(self._on_server_stopped)
+
+        _t.Thread(target=_work, name="server-stop", daemon=True).start()
+
+    def _on_server_started(
+        self, urls: list[str], port: int, share_lan: bool
+    ) -> None:
+        self._server_busy = False
+        # Reflect the port the server actually bound (auto-port fallback).
+        try:
+            if int(self.server_port_var.get()) != port:
+                self.server_port_var.set(port)
+                self.app_config["server_port"] = port
+                save_config(self.app_config)
+        except (tk.TclError, ValueError):
+            pass
+        self.server_toggle_btn.config(
+            text="Stop web access", state="normal")
+        self.server_open_btn.config(state="normal")
+        primary = urls[0] if urls else f"http://127.0.0.1:{port}/"
+        if share_lan and len(urls) > 1:
+            self.server_status_var.set(
+                "Running. On this PC and on your network.")
+            self.server_url_var.set(
+                f"This PC:  {urls[0]}\nNetwork:  {urls[1]}")
+        else:
+            self.server_status_var.set("Running on this computer.")
+            self.server_url_var.set(primary)
+        self.log(f"Web / LAN access started: {primary}")
+
+    def _on_server_failed(self, message: str) -> None:
+        self._server_busy = False
+        self._server_handle = None
+        self.server_toggle_btn.config(text="Start web access", state="normal")
+        self.server_open_btn.config(state="disabled")
+        self.server_status_var.set("Off")
+        self.server_url_var.set("")
+        messagebox.showerror(
+            "Could not start web access",
+            f"The web / LAN server could not start.\n\n{message}",
+            parent=self,
+        )
+
+    def _on_server_stopped(self) -> None:
+        self._server_busy = False
+        self.server_toggle_btn.config(text="Start web access", state="normal")
+        self.server_open_btn.config(state="disabled")
+        self.server_status_var.set("Off")
+        self.server_url_var.set("")
+        self.log("Web / LAN access stopped.")
+
+    def open_server_in_browser(self) -> None:
+        """Open the loopback URL in the default browser."""
+        handle = self._server_handle
+        if handle is None or not handle.is_running():
+            return
+        import webbrowser
+        urls = handle.urls()
+        if urls:
+            try:
+                webbrowser.open(urls[0])
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not open browser")
+
+    def _shutdown_server_on_exit(self) -> None:
+        """Best-effort synchronous stop of the server during app exit."""
+        handle = self._server_handle
+        if handle is None:
+            return
+        try:
+            handle.stop(timeout=3.0)
+        except Exception:  # noqa: BLE001
+            logger.exception("Error stopping web / LAN server on exit")
+        self._server_handle = None
 
     # Rendering ---------------------------------------------------------------
     def fmt_time(self, t: Any) -> str:
