@@ -239,27 +239,55 @@ def install(
         pre_existing = set(os.listdir(final_target))
         merged_ok = True
         merge_err: Exception | None = None
+        # Backups of live dst entries displaced this iteration, keyed by the
+        # final dst path: name -> bak path. Each entry's replace is made
+        # atomic w.r.t. an EXISTING dst by moving the live dst aside to a
+        # .bak first, so a mid-loop os.replace failure (locked .pyd / AV /
+        # disk-full) can be undone and never leaves a pre-existing shared
+        # dir (e.g. torch/) destroyed with no restore path.
+        backups: dict[str, str] = {}
         for name in staged_names:
             src = os.path.join(staging, name)
             dst = os.path.join(final_target, name)
             tmp = os.path.join(final_target, f".{name}.merge-{os.getpid()}")
+            bak = os.path.join(final_target, f".{name}.bak-{os.getpid()}")
             try:
                 if os.path.exists(tmp):
                     _rm(tmp)
+                if os.path.lexists(bak):
+                    _rm(bak)
                 if os.path.isdir(src):
                     shutil.copytree(src, tmp)
                 else:
                     shutil.copy2(src, tmp)
-                # os.replace is atomic on the same volume for files and
-                # for replacing a non-existent / file target. For an
-                # existing destination DIRECTORY it would fail, so remove
-                # the stale dir first (a re-install of the same feature)
-                # then move the freshly-staged copy into place.
-                if os.path.isdir(dst):
-                    _rm(dst)
-                elif os.path.exists(dst):
-                    os.unlink(dst)
-                os.replace(tmp, dst)
+                # os.replace is atomic on the same volume for files and for
+                # replacing a non-existent / file target. For an existing
+                # destination DIRECTORY it would fail outright, and a plain
+                # _rm(dst) before the replace is NON-atomic: if the replace
+                # then fails (locked .pyd, AV, disk-full) the live dst — which
+                # may be a torch/ a sibling feature still needs — is already
+                # gone with no way back. Instead move the live dst aside to a
+                # .bak FIRST, then replace; restore the .bak on any failure.
+                displaced = False
+                if os.path.lexists(dst):
+                    os.replace(dst, bak)
+                    backups[dst] = bak
+                    displaced = True
+                try:
+                    os.replace(tmp, dst)
+                except Exception:
+                    # Replace failed — put the original dst back so the
+                    # pre-existing entry is never left missing, then re-raise
+                    # into the outer handler to roll the whole merge back.
+                    if displaced:
+                        os.replace(bak, dst)
+                        backups.pop(dst, None)
+                    raise
+                # Success for this entry: the staged copy is in place and the
+                # displaced original is now superseded — drop its backup.
+                if displaced:
+                    _rm(bak)
+                    backups.pop(dst, None)
             except Exception as e:  # noqa: BLE001
                 merged_ok = False
                 merge_err = e
@@ -267,6 +295,16 @@ def install(
                 break
 
         if not merged_ok:
+            # Restore every still-displaced original (entries replaced earlier
+            # in this loop before the failing one) so no pre-existing shared
+            # dir is left missing after a partial merge.
+            for d, b in backups.items():
+                _rm(d)
+                try:
+                    os.replace(b, d)
+                except OSError:
+                    pass
+            backups.clear()
             if log_cb:
                 log_cb(f"Could not finalise install: {merge_err}")
             # Roll back: delete only the top-level entries THIS install
