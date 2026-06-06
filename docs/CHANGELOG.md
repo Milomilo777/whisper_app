@@ -64,6 +64,57 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   `tiling_selected_monitors` / `tiling_auto_restart`. New optional
   dependency: **screeninfo** (multi-monitor degrades gracefully without it).
 
+#### Phase 2 (added later in the same local batch)
+
+- **Real Google Cloud Speech-to-Text backend** (`google_cloud_stt`) — a
+  second, more capable cloud option alongside the simple Gemini one. It
+  authenticates with a **service-account JSON file** (not a pasted key) and
+  uses the official `google-cloud-speech` **v2** client, which is installed
+  **on demand on first use** (via `core/optional_deps.py`) — not bundled.
+  Two modes:
+  - **Standard / online** — decodes with the bundled ffmpeg, splits the
+    local file into ≤ ~55 s chunks, calls `recognize()` inline per chunk,
+    and offsets + stitches the timestamps. No Cloud Storage needed
+    (~$0.016 / min).
+  - **Batch** — uses v2 `BatchRecognize` through a user-supplied Google
+    Cloud Storage bucket (`gs://`) with `DYNAMIC_BATCHING` (~$0.004 / min,
+    ~75 % cheaper) at the cost of up to ~24 h turnaround.
+
+  Supports word-level timestamps and speaker diarization. The earlier
+  Gemini backend (`cloud_stt`) is **kept** as the simpler paste-a-key
+  alternative; both are clearly labelled in the UI. *(The real Google Cloud
+  network path is **UNTESTED** here — no service-account JSON in this
+  environment; live-test before relying on it — see the handoff.)*
+- **Cloud STT settings UI** (`app/dialogs/advanced.py`) — the backend
+  dropdown now shows human labels for both cloud options, and a dedicated
+  **Google Cloud Speech-to-Text** section adds: a service-account JSON file
+  picker; a "How do I get this file?" step-by-step help dialog with
+  clickable links to the exact Google Cloud console pages; a non-blocking
+  **Test connection** button (installs the Google libs on demand, then
+  validates the JSON + auth); a **Batch-mode** toggle with a GCS bucket
+  field; a **diarization** toggle; and a **live usage display**.
+- **Free-tier usage tracking** — a local **monthly** minutes counter (it
+  resets each calendar month) plus an honest estimated-cost line
+  ("X / 60 free minutes this month; estimated $Y of the $300 credit"),
+  clearly labelled a *local estimate* with a link to the real Google
+  billing console (the true remaining credit is **not** readable from the
+  key). New config keys `gcloud_stt_minutes_used` /
+  `gcloud_stt_minutes_month` / `gcloud_stt_free_minutes_cap`.
+- **One-click Web / LAN access** — a new **Web / LAN access** tab
+  (`app/app.py` + `app/widgets/tabs.py`, backed by a `core/server`
+  `ServerHandle`) with a single **Start/Stop** toggle, a port field (with a
+  free-port fallback when the chosen port is busy), a **Share on local
+  network** checkbox (loopback by default vs `0.0.0.0` with a plain-language
+  firewall note), an optional **access password** (token), the reachable
+  URL(s) including the LAN IP, an **Open in browser** button, non-blocking
+  start/stop, and auto-stop on app exit. New config keys `server_share_lan`
+  / `server_token` (`server_port` / `server_max_upload_mb` already existed
+  from the Phase-1 `gui.py serve` work).
+- **About dialog enriched** (`app/app.py` `_show_about`) — a **What's new**
+  section plus plain-language descriptions of all the cloud options, the
+  Web / LAN access, the per-task controls, multi-monitor tiling, and the
+  update check / in-place upgrade, with clickable helpful links.
+
 ### Changed
 
 - **The model now downloads to a writable location by default.** The
@@ -99,6 +150,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   audio cap, a torch/BF16/~24 GB-VRAM requirement, no word timestamps, and
   no WER win over the current stack — while sketching a possible
   future-adjunct path and a hardware gate.
+- **New `docs/CLOUD_STT_GOOGLE.md`** (Phase 2) — service-account setup,
+  the Standard-vs-Batch trade-off, the GCS-bucket requirement for batch,
+  and the honest "the real $300-credit balance is not readable from the
+  key" usage note. `docs/SERVER.md` updated for the one-click Web / LAN
+  access toggle (alongside the existing `gui.py serve` CLI).
 
 ## [1.3.7] — 2026-05-29
 

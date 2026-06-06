@@ -5,15 +5,16 @@ this repo. Read this file before anything else.
 
 ---
 
-## 0. Latest session — 9 feature/hardening changes (2026-06-06) — LOCAL ONLY
+## 0. Latest session — Phase 1 (9 changes) + Phase 2 (cloud + web/LAN) (2026-06-06) — LOCAL ONLY
 
-**Current state: the v1.3.7 baseline + 9 changes committed on `master`,
-NOT pushed and NOT released.** No version bump, no tag — the owner will
-authorise the push + release later. pyright `app/ core/` is 0/0/0 and the
-targeted suites stay green. Full bullets are in `docs/CHANGELOG.md`
-`[Unreleased]` (and worded user-facing there).
+**Current state: the v1.3.7 baseline + the Phase-1 nine changes + the
+Phase-2 additions, all committed on `master`, NOT pushed and NOT
+released.** No version bump, no tag — the owner will authorise the push +
+release later. pyright `app/ core/` is 0/0/0 and the targeted suites stay
+green. Full bullets are in `docs/CHANGELOG.md` `[Unreleased]` (and worded
+user-facing there).
 
-The 9 changes (grouped):
+The Phase-1 9 changes (grouped):
 
 - **Model hub default → `%LOCALAPPDATA%\WhisperProject\Cache\models`**
   (was the install dir → "access is denied" for non-admin users). Added a
@@ -71,19 +72,82 @@ The 9 changes (grouped):
   torch/BF16/~24 GB VRAM, no word timestamps, no WER win), with a
   future-adjunct path + hardware-gate sketch.
 
+### Phase 2 — real Google Cloud STT + one-click Web/LAN (same 2026-06-06 batch)
+
+Committed locally on top of the Phase-1 nine (see the `git log` tail:
+`9fd5b3b` … `a2d05f9`). Still LOCAL ONLY, still 1.3.7-labelled.
+
+- **Real Google Cloud Speech-to-Text backend** (`google_cloud_stt`, new
+  `core/backends/google_cloud_stt.py`) — a second, more capable cloud
+  option next to the simple Gemini one. Authenticates with a
+  **service-account JSON file** (NOT a pasted key) via the official
+  `google-cloud-speech` **v2** client, installed **on demand on first use**
+  (`core/optional_deps.py`) — NOT bundled. Two modes: (a) Standard/online —
+  decode via ffmpeg, chunk the local file into ≤ ~55 s pieces, `recognize()`
+  inline per chunk, offset + stitch timestamps, no Cloud Storage (~$0.016/min);
+  (b) Batch — v2 `BatchRecognize` via a user-supplied GCS bucket (`gs://`),
+  `DYNAMIC_BATCHING`, ~$0.004/min (~75 % cheaper) but up to ~24 h turnaround.
+  Word-level timestamps + speaker diarization supported. The earlier Gemini
+  backend (`cloud_stt`) is KEPT as the simple paste-a-key alternative; both
+  labelled in the UI.
+- **Cloud STT settings UI** (`app/dialogs/advanced.py`) — backend dropdown
+  with human labels for both cloud options; a Google Cloud section with a
+  service-account JSON picker, a "How do I get this file?" step-by-step help
+  dialog (clickable links to the exact console pages), a non-blocking
+  **Test connection** button (installs the libs on demand + validates the
+  JSON/auth), a Batch-mode toggle + GCS bucket field, a diarization toggle,
+  and a LIVE usage display.
+- **Free-tier usage tracking** — a LOCAL **monthly** minutes counter (resets
+  each calendar month) + an honest estimated-cost line ("X / 60 free minutes
+  this month; estimated $Y of the $300 credit"), labelled a local estimate
+  with a billing-console link (the real remaining credit is NOT readable
+  from the key). New keys `gcloud_stt_minutes_used` /
+  `gcloud_stt_minutes_month` / `gcloud_stt_free_minutes_cap`.
+- **One-click Web / LAN access** (`app/app.py` + `app/widgets/tabs.py`, a
+  `core/server` `ServerHandle`) — a new **Web / LAN access** tab with a
+  single Start/Stop toggle, a port field (free-port fallback when busy), a
+  **Share on local network** checkbox (loopback default vs `0.0.0.0` with a
+  plain firewall note), an optional access password (token), the reachable
+  URL(s) incl. LAN IP, an **Open in browser** button, non-blocking
+  start/stop, and auto-stop on exit. New keys `server_share_lan` /
+  `server_token` (`server_port` / `server_max_upload_mb` already existed).
+- **About dialog enriched** (`app/app.py` `_show_about`) — a "What's new"
+  section + plain-language descriptions of all the cloud options, Web/LAN
+  access, per-task controls, multi-monitor tiling, and the update check /
+  in-place upgrade, with clickable helpful links.
+- **New docs** — `docs/CLOUD_STT_GOOGLE.md` (service-account setup + batch +
+  honest usage note); `docs/SERVER.md` updated for the one-click toggle. All
+  new `gcloud_stt_*` / `server_*` keys documented in `docs/CONFIG.md`.
+
 **Build/spec bookkeeping done:** the PyInstaller hidden-import lists in
-both `whisper_project_onefile.spec` and `whisper_project_onedir.spec` were
-updated for the new modules (`core.server.*`, `core.monitors`,
-`core.backends.cloud_stt`, `core.updates`) + **screeninfo**.
+both `whisper_project_onefile.spec` and `whisper_project_onedir.spec` carry
+all the new modules — Phase-1 (`core.server.*`, `core.monitors`,
+`core.backends.cloud_stt`, `core.updates`) + **screeninfo** AND the Phase-2
+backend (`core.backends.google_cloud_stt`) — both verified present this
+session. The `google-cloud-speech` / `google-cloud-storage` libs install on
+demand at runtime, so they are deliberately NOT bundled (only the backend
+module that imports them lazily is).
 
 **OPEN caveats for the next session (re-check; don't assume done):**
 - **R6 Gemini path is UNTESTED end-to-end** — no API key in this
   environment. The owner must live-test with their own key: paste key →
   "Test key" → run one file → confirm a transcript lands and the local
   minutes counter advances.
+- **The real Google Cloud STT (`google_cloud_stt`) network path is UNTESTED
+  here** — no service-account JSON in the dev environment. The owner must
+  live-test: in **Advanced > Backend** pick the JSON file → click **Test
+  connection** → run a file. **Standard mode** needs only the JSON + the
+  **Cloud Speech-to-Text User** role + the Speech-to-Text API enabled.
+  **Batch mode** additionally needs a GCS bucket + **Storage Object Admin**
+  on it. The `google-cloud-speech` (+ `google-cloud-storage` for batch) libs
+  install on **first use** (on demand), NOT bundled — so the first run with
+  this backend will pause to pip-install them.
 - **screeninfo is a NEW optional dependency** — multi-monitor tiling
   degrades to single-monitor without it; it's pruned/absent in some build
   trees, so confirm the Monitors chooser behaves when it's missing.
+
+**A build was produced this session** (the build path is appended
+separately) — still **v1.3.7-labelled, unreleased, local only**.
 
 **PRE-EXISTING test issues (NOT introduced this session — present at the
 baseline commit `53fc8b2`, so not a regression):**
@@ -155,8 +219,8 @@ modal-close changes (batches A/C) didn't disturb the cooperative path.
 
 | Item | Value |
 |---|---|
-| Branch | `master` — **the single mainline**. Published tip is **v1.3.7** (deep-audit hardening, see §0.1). On top of that sit the **9 LOCAL-ONLY changes from the 2026-06-06 session (see §0) — committed, NOT pushed, NOT released.** Owner will authorise the push/release later. |
-| Version | **unchanged — still 1.3.7** in all 4 places (pyproject, `core.__version__`, both `.iss`). This session deliberately did NOT bump — the 9 changes are unreleased; bump only when the owner authorises the release. |
+| Branch | `master` — **the single mainline**. Published tip is **v1.3.7** (deep-audit hardening, see §0.1). On top of that sit the **2026-06-06 LOCAL-ONLY changes — Phase 1 (9 changes) + Phase 2 (real Google Cloud STT, one-click Web/LAN, enriched About) (see §0) — committed, NOT pushed, NOT released.** Owner will authorise the push/release later. |
+| Version | **unchanged — still 1.3.7** in all 4 places (pyproject, `core.__version__`, both `.iss`). This session deliberately did NOT bump — the Phase-1 + Phase-2 changes are unreleased; bump only when the owner authorises the release. |
 | Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0.1); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
 | GitHub releases now | `v1.3.7` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** v1.3.6 release object was pruned on the v1.3.7 release; its git tag + the local `dist_installer/WhisperProject-v1.3.6-*` artefacts remain as backup. |
 | Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
