@@ -295,7 +295,7 @@ def write_bytes(
             _replace_in_paragraph(para, _FOREIGN_PLACEHOLDER, marker_label)
 
     # --- Transcription rows -------------------------------------------
-    nonempty = [s for s in segments if normalize_text(str(s.get("text", "")))]
+    nonempty = [s for s in segments if normalize_text(str(s.get("text") or ""))]
 
     for idx, seg in enumerate(nonempty):
         row_index = _FIRST_DATA_ROW + idx
@@ -309,7 +309,7 @@ def write_bytes(
         row_number = str(idx + 1)
         time_code = _fmt_smtv_time(float(seg.get("start", 0.0) or 0.0))
         prefix = speaker_prefix(seg)
-        body = sanitize_for_xml(prefix + normalize_text(str(seg.get("text", ""))))
+        body = sanitize_for_xml(prefix + normalize_text(str(seg.get("text") or "")))
 
         # col1 = row number
         _set_cell_text(cells[0], row_number)
