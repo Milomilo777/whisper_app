@@ -791,7 +791,10 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     row2 = ttk.Frame(frame)
     row2.pack(fill="x", pady=(0, 8))
     ttk.Label(row2, text="Grid (N×N):").pack(side="left")
-    app.tiling_divisions_var = tk.IntVar(value=3)
+    from core.tiling import clamp_divisions
+    app.tiling_divisions_var = tk.IntVar(
+        value=clamp_divisions(app.app_config.get("tiling_divisions", 3))
+    )
     ttk.Spinbox(
         row2, from_=1, to=64, width=5, textvariable=app.tiling_divisions_var,
     ).pack(side="left", padx=(8, 0))

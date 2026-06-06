@@ -2832,6 +2832,16 @@ class App(tk.Tk):
         self.app_config["tiling_auto_restart"] = bool(
             self.tiling_auto_restart_var.get()
         )
+        # Persist the grid size too (it was never saved/restored). The Spinbox
+        # is free-text editable, so .get() can raise TclError on junk — keep the
+        # prior saved value in that case rather than crashing the save.
+        try:
+            from core.tiling import clamp_divisions
+            self.app_config["tiling_divisions"] = clamp_divisions(
+                self.tiling_divisions_var.get()
+            )
+        except (tk.TclError, ValueError):
+            pass
         self.app_config["tiling_selected_monitors"] = list(
             getattr(self, "tiling_selected_monitors", [])
         )
