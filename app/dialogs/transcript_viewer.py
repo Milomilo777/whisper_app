@@ -1229,14 +1229,14 @@ class TranscriptViewer(tk.Toplevel):
 
         if not self.segments:
             return
-        starts = [float(s.get("start", 0.0)) for s in self.segments]
+        starts = [_seg_float(s, "start") for s in self.segments]
         # Candidate: largest start <= t_seconds.
         i = bisect_right(starts, t_seconds) - 1
         active_idx: int | None = None
         if 0 <= i < len(self.segments):
             seg = self.segments[i]
-            start = float(seg.get("start", 0.0))
-            end = float(seg.get("end", start))
+            start = _seg_float(seg, "start")
+            end = _seg_float(seg, "end", start)
             if start <= t_seconds <= end:
                 active_idx = i
         if active_idx is None:
