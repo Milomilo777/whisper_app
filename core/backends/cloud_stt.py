@@ -232,9 +232,19 @@ def _parse_ts(value: str) -> float:
 def extract_text_from_response(resp: dict[str, Any]) -> str:
     """Pull the concatenated text out of a Gemini generateContent JSON.
 
-    Surfaces a clear RuntimeError when the model returned no usable text
-    (e.g. a safety block, an empty candidate, or a finishReason other
-    than STOP), so the caller never silently writes an empty transcript.
+    Surfaces a clear RuntimeError on a *genuine* failure — an ``error``
+    payload, a whole-prompt ``blockReason``, a malformed candidate, or a
+    candidate that stopped for a bad reason (a ``finishReason`` other than
+    ``STOP``, e.g. ``SAFETY`` / ``MAX_TOKENS``) — so the caller never
+    silently writes a transcript that was actually cut short or blocked.
+
+    A candidate that finished CLEANLY (``finishReason`` ``STOP`` or absent)
+    but carries no text is NOT an error: it is a window with no recognizable
+    speech (music / applause / silence / a per-clip safety pass). Those
+    return ``""`` so the per-chunk caller yields zero segments for that
+    window and keeps the segments from its other chunks, instead of aborting
+    the whole multi-chunk job. (Mirrors ``google_cloud_stt``, where an empty
+    result simply contributes 0 segments.)
     """
     if "error" in resp:
         err = resp["error"]
@@ -267,7 +277,10 @@ def extract_text_from_response(resp: dict[str, Any]) -> str:
                 f"Gemini returned no transcript (finishReason={reason}). "
                 "The clip may have been blocked or exceeded the output limit."
             )
-        raise RuntimeError("Gemini returned an empty transcript for this clip.")
+        # Clean stop with no text == a window with no recognizable speech.
+        # Return "" (-> zero segments) rather than raising, so one silent /
+        # music-only chunk does not discard the rest of a multi-chunk job.
+        return ""
     return text
 
 
