@@ -5,6 +5,25 @@ this repo. Read this file before anything else.
 
 ---
 
+## 0b. Post-1.3.8 fixes (2026-06-07) — found by live end-to-end testing, on `macos-ci`
+
+Two real defects surfaced by a real offline+online+network E2E run on a 30s clip, a 3-hour
+file, and the LAN server — both fixed, tested, and pushed to `macos-ci` (NOT master):
+- **Server download of non-ASCII output names** (`core/server/httpd.py`): downloading the SMTV
+  `.docx` (en-dash in the name) over `/api/jobs/<id>/result` crashed the handler (http.server
+  latin-1 header encoding). Fixed with RFC 6266 `filename*` + ASCII fallback
+  (`content_disposition_attachment`) + test. Verified: the `.docx` now downloads (valid 4-col table).
+- **Offline time-range on huge files** (`core/transcriber.py`): a time range was passed as
+  faster_whisper `clip_timestamps`, which decodes the WHOLE file — a 3h file hung. Now the
+  offline path PRE-SLICES `[clip_start, clip_end]` via `_slice_audio_from` (fast ffmpeg seek),
+  transcribes only the slice, deletes it, and shifts timestamps back to the original timeline
+  (`_shift_segments`). Whole-file + resume paths untouched. Tests in
+  `tests/core/test_fixpack_timerange_slice.py`. Verified live: a [5,15] range emits an SRT
+  starting at 00:00:05. E2E test inputs live in `%TEMP%\wp_e2e_*`; drivers in `.claude/e2e_*.py`.
+
+These are committed on local `master` too. Remember: push only to `macos-ci` (fetch+rebase via a
+temp branch, never force-push) until the macOS build is green and we merge `macos-ci` → `master` once.
+
 ## 0. Latest session — Phases 1–6 + 44-bug audit fixpack → v1.3.8 (2026-06-06)
 
 **Current state: v1.3.8.** On top of the v1.3.7 baseline: Phase 1 (9
