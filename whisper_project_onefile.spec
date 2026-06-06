@@ -82,6 +82,10 @@ a = Analysis(
         # (gui.py serve -> core.server). Ship it so the frozen build can
         # serve the browser UI.
         ('core/server/static', 'core/server/static'),
+        # SMTV transcription writer's bundled Word template (the team's
+        # exact table styling). Resolved at runtime via
+        # core.paths.resource_base -> core/writers/templates/.
+        ('core/writers/templates', 'core/writers/templates'),
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
@@ -172,6 +176,7 @@ a = Analysis(
         'core.writers.md',
         'core.writers.docx_writer',
         'core.writers.pdf_writer',
+        'core.writers.smtv_docx_writer',
         'docx',
         'reportlab',
         'sherpa_onnx',
