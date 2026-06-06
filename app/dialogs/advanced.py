@@ -226,6 +226,11 @@ class AdvancedDialog(tk.Toplevel):
         content_container.pack(fill="both", expand=True)
 
         canvas = tk.Canvas(content_container, highlightthickness=0)
+        # Keep a handle so _teardown_mousewheel can drop the global
+        # bind_all on close (the <Leave> unbind only fires while the dialog
+        # stays open — closing with the pointer over the canvas would
+        # otherwise leave a bind_all pointing at a destroyed widget).
+        self._scroll_canvas = canvas
         scrollbar = ttk.Scrollbar(
             content_container,
             orient="vertical",
@@ -827,9 +832,29 @@ class AdvancedDialog(tk.Toplevel):
                     restart()
                 except Exception as e:  # noqa: BLE001
                     self.app.log(f"Watched-folder restart failed: {e}")
+        self._teardown_mousewheel()
         self.destroy()
 
+    def _teardown_mousewheel(self) -> None:
+        """Drop the global mousewheel binds before the dialog is destroyed.
+
+        _bind_mousewheel uses canvas.bind_all (a GLOBAL bind) on <Enter> and
+        only releases it on <Leave>. If the dialog is closed while the pointer
+        is still over the canvas, <Leave> never fires and the global bind keeps
+        pointing at the now-destroyed canvas — a stray callback on every
+        subsequent scroll. Both close paths call this first."""
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return
+        try:
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+        except Exception:  # noqa: BLE001
+            pass
+
     def _on_close(self) -> None:
+        self._teardown_mousewheel()
         self.destroy()
 
     def _browse_watched_folder(self) -> None:
