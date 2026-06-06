@@ -781,7 +781,18 @@ class CloudSttBackend(Backend):
         if not file_uri or not file_name:
             raise RuntimeError("Gemini Files API response missing file uri/name.")
         if state != "ACTIVE":
-            self._wait_for_active(str(file_name))
+            # The blob is already finalized on Google's servers. If the
+            # wait-for-active poll raises (timeout, state FAILED, HTTP / URL
+            # error), this method never returns the (uri, name) tuple, so the
+            # caller's ``finally: self._delete_file(file_name)`` never runs and
+            # the just-uploaded audio would be left on Google until its ~48 h
+            # expiry. Delete it best-effort here before re-raising so the
+            # "delete on success OR failure" contract holds on this path too.
+            try:
+                self._wait_for_active(str(file_name))
+            except Exception:
+                self._delete_file(str(file_name))
+                raise
         return str(file_uri), str(file_name)
 
     def _wait_for_active(self, file_name: str) -> None:
