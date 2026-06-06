@@ -370,13 +370,23 @@ class JobManager:
             return self._jobs.get(job_id)
 
     def output_path(self, job_id: str, fmt: str) -> str | None:
-        """Absolute path of a finished job's output for ``fmt``, or None."""
+        """Absolute path of a finished job's output for ``fmt``, or None.
+
+        Matches first on the stored format KEY (e.g. ``smtv_docx``), then
+        falls back to the on-disk EXTENSION so a plain ``?fmt=docx`` also
+        downloads an output stored under a registry key like ``smtv_docx``.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 return None
+            want = fmt.lower()
             for f, p in job.outputs:
-                if f.lower() == fmt.lower():
+                if f.lower() == want:
+                    return p
+            # Extension fallback: ?fmt=docx -> the smtv_docx file on disk.
+            for _f, p in job.outputs:
+                if os.path.splitext(p)[1].lstrip(".").lower() == want:
                     return p
         return None
 
@@ -553,12 +563,34 @@ class JobManager:
         which can mis-pick the ``.chapters.json`` / partial-checkpoint ``.json``
         a newer write left behind. Falls back to the legacy dir-scan only when
         the engine recorded nothing (e.g. an alt path that didn't set it).
+
+        The requested ``job.formats`` are registry KEYS (e.g. ``smtv_docx``),
+        but the engine writes their real on-disk EXTENSION (e.g. ``docx``).
+        We map each requested key through ``core.transcriber._FMT_EXTENSIONS``
+        and match the file by that extension, then surface it under the
+        requested key so a ``?fmt=smtv_docx`` download resolves (a plain
+        ``?fmt=docx`` also resolves via the extension fallback in
+        ``output_path``). Without this map, smtv_docx files were written but
+        never surfaced (job finished, outputs=[], ?fmt=smtv_docx -> 404).
         """
         written = getattr(task, "output_paths", None)
         if written:
+            try:
+                from core.transcriber import _FMT_EXTENSIONS
+            except Exception:  # noqa: BLE001 - never let an import break collection
+                _FMT_EXTENSIONS = {}
             out: list[tuple[str, str]] = []
-            requested = {f.lower() for f in job.formats}
-            seen_fmts: set[str] = set()
+            seen_keys: set[str] = set()
+            # Build ext -> registry-key so the on-disk file maps back to the
+            # key the caller asked for (e.g. "docx" -> "smtv_docx").
+            ext_to_key: dict[str, str] = {}
+            for key in job.formats:
+                kl = key.lower()
+                ext = _FMT_EXTENSIONS.get(kl, kl).lower()
+                # First requested key for an extension wins; this keeps a
+                # plain "docx" request distinct from "smtv_docx" when both
+                # are asked for (different on-disk files anyway).
+                ext_to_key.setdefault(ext, kl)
             for p in written:
                 if not p:
                     continue
@@ -566,9 +598,10 @@ class JobManager:
                 # Only surface formats the caller asked for, so the
                 # auto-chapters ``.chapters.json`` sidecar is not offered as
                 # the "json" download when json wasn't requested.
-                if ext in requested and ext not in seen_fmts and os.path.isfile(p):
-                    out.append((ext, p))
-                    seen_fmts.add(ext)
+                key = ext_to_key.get(ext)
+                if key and key not in seen_keys and os.path.isfile(p):
+                    out.append((key, p))
+                    seen_keys.add(key)
             if out:
                 return out
         return self._collect_outputs_by_scan(job)

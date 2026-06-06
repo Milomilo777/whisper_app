@@ -279,6 +279,82 @@ def test_output_path_resolves_finished_format(tmp_path):
         mgr.stop()
 
 
+# --- smtv_docx: registry-key vs on-disk-extension --------------------------
+
+def _smtv_writing_transcribe():
+    """Fake transcribe writing a ``.docx`` for the ``smtv_docx`` registry key.
+
+    Mirrors the engine: the requested format KEY is ``smtv_docx`` but the file
+    on disk carries the real EXTENSION ``docx``. The engine records the file
+    on ``task.output_paths`` (the authoritative list the manager reads).
+    """
+    def _fn(task, progress_cb=None, log_cb=None, language_cb=None):
+        base, _ = os.path.splitext(task.file_path)
+        written = []
+        for fmt in (task.output_formats or []):
+            ext = "docx" if fmt == "smtv_docx" else fmt
+            path = f"{base}.{ext}"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"dummy {fmt}")
+            written.append(path)
+        # An auto-chapters sidecar the manager must NOT surface as "json".
+        sidecar = f"{base}.chapters.json"
+        with open(sidecar, "w", encoding="utf-8") as f:
+            f.write("[]")
+        task.output_paths = written
+    return _fn
+
+
+def test_smtv_docx_output_is_surfaced_and_downloadable(tmp_path):
+    """Regression (HIGH-2): smtv_docx files were written but never surfaced.
+
+    ``_collect_outputs`` compared the on-disk extension ("docx") against the
+    raw requested KEYS ({"smtv_docx"}) -> no match -> outputs=[] and
+    ?fmt=smtv_docx 404'd. The fix maps the key through _FMT_EXTENSIONS.
+    """
+    mgr = _make_manager(tmp_path, _smtv_writing_transcribe())
+    try:
+        jid = mgr.submit_upload("clip.mp4", b"d", ["smtv_docx"], language="en")
+        job = _wait_terminal(mgr, jid)
+        assert job is not None and job.status == STATUS_FINISHED
+        fmts = {f for f, _ in job.outputs}
+        # Surfaced under the requested registry key.
+        assert "smtv_docx" in fmts
+        # The chapters sidecar must NOT leak in as a "json" output.
+        assert "json" not in fmts
+        # Both the registry key and the plain extension download it.
+        by_key = mgr.output_path(jid, "smtv_docx")
+        assert by_key is not None and by_key.endswith(".docx")
+        assert os.path.isfile(by_key)
+        by_ext = mgr.output_path(jid, "docx")
+        assert by_ext == by_key
+    finally:
+        mgr.stop()
+
+
+def test_collect_outputs_maps_smtv_docx_directly(tmp_path):
+    """Unit-level: _collect_outputs maps the key -> extension for smtv_docx."""
+    mgr = _make_manager(tmp_path, _writing_transcribe())
+    try:
+        base = str(tmp_path / "x")
+        docx_path = f"{base}.docx"
+        with open(docx_path, "w", encoding="utf-8") as f:
+            f.write("d")
+
+        class _Job:
+            formats = ["smtv_docx"]
+            work_dir = str(tmp_path)
+            media_path = f"{base}.mp4"
+
+        class _Task:
+            output_paths = [docx_path, f"{base}.chapters.json"]
+
+        out = mgr._collect_outputs(_Job(), _Task())  # type: ignore[arg-type]
+        assert out == [("smtv_docx", docx_path)]
+    finally:
+        mgr.stop()
+
+
 # --- streamed upload seam ----------------------------------------------------
 
 def test_streamed_upload_path(tmp_path):
