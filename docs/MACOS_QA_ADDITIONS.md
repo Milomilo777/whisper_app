@@ -29,6 +29,9 @@ gitignored)** and is meant for ongoing use in future releases. **When you merge
 - `macos-harsh.yml`       — randomized-order ×5 seeds, repeat-stress ×3, coverage, ruff/bandit/pip-audit/vulture.
 - `macos-health.yml`      — ruff(extended)/mypy/vulture/radon+xenon/interrogate/deptry + the invariant tests.
 - `macos-py311.yml`       — one-off py3.11 failure-pinner (the bug it found is fixed; keep or drop).
+- `macos-e2e.yml` + `tools/e2e_tiny_macos.py` — REAL transcription E2E: macOS `say` speech →
+  faster-whisper `tiny` model → the project's output writers. Proves inference + output work on
+  Apple Silicon without the 3 GB shipped model. VERIFIED green (100% word accuracy on the say clip).
 
 Triggering: these fire on a push to a dedicated throwaway branch
 (`macos-app-build` / `macos-test` / `macos-harsh` / `macos-health` / `macos-py311`) OR via the
