@@ -229,7 +229,11 @@ def filename_for(episode: SmtvEpisode, mode: str) -> str:
     url = best_url_for_mode(episode, mode)
     cdn_basename = _basename_from_cdn_url(url)
     if cdn_basename:
-        return cdn_basename
+        # The CDN basename comes from the page's ?file= value, which is
+        # attacker-influenceable; run it through the same sanitiser as the
+        # title-based fallback so a colon (NTFS ADS) or a reserved device
+        # stem (CON/PRN/…) can't reach os.path.join downstream.
+        return _sanitise_filename(cdn_basename)
     ext = ".mp3" if mode == "audio" else ".mp4"
     return _sanitise_filename(episode.title) + ext
 
@@ -244,7 +248,10 @@ def transcript_filename(episode: SmtvEpisode) -> str:
             continue
         base = _basename_from_cdn_url(cdn_url)
         if base:
-            return os.path.splitext(base)[0] + ".txt"
+            # Same attacker-influenceable CDN basename as filename_for():
+            # sanitise the .txt name so an ADS colon / reserved stem can't
+            # slip through the splitext path unguarded.
+            return _sanitise_filename(os.path.splitext(base)[0] + ".txt")
     return _sanitise_filename(episode.title) + ".txt"
 
 
