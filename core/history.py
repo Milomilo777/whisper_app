@@ -384,7 +384,8 @@ class HistoryDB:
                 1,
             )
             top_langs = self._conn.execute(
-                "SELECT language, COUNT(*) c FROM transcriptions WHERE language != '' "
+                "SELECT language, COUNT(*) c FROM transcriptions "
+                "WHERE status='finished' AND language != '' "
                 "GROUP BY language ORDER BY c DESC LIMIT 5"
             ).fetchall()
             rows["top_languages"] = [(r[0], int(r[1])) for r in top_langs]
