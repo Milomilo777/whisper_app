@@ -141,7 +141,7 @@ class FasterWhisperBackend(Backend):
             self._capture_effective_device("cpu", "int8")
 
     def load_existing(self, status_cb: Callable[[str], None] | None = None) -> bool:
-        config = load_config()
+        config = load_config(fetch_online=False)  # worker path: local keys only
         self._device, self._compute_type = _detect_device(config)
         self._requested_device = self._device
         self._downgraded = False
@@ -174,7 +174,7 @@ class FasterWhisperBackend(Backend):
         progress_cb: Callable[[dict[str, Any]], None] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> bool:
-        config = load_config()
+        config = load_config(fetch_online=False)  # worker path: local keys only
         self._device, self._compute_type = _detect_device(config)
         self._requested_device = self._device
         self._downgraded = False

@@ -7,6 +7,8 @@ import shutil
 import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -235,7 +237,68 @@ DEFAULT_CONFIG = {
     #     (app.observability); OFF means the telemetry module is inert.
     "minimise_to_tray": False,
     "telemetry_opt_in": False,
+    # --- Three-level config: ONLINE layer (P4-1) -------------------------
+    # URL of an app-level JSON config the maintainer hosts, fetched on
+    # startup so APP-LEVEL settings (model catalog, stats endpoint, latest
+    # version, ffplay download links) can change WITHOUT redistributing the
+    # program. The fetch is best-effort: a short timeout, a cached copy
+    # under user_cache_dir(), and a fall-through to the hard-coded defaults
+    # when offline — it NEVER blocks or crashes startup.
+    #
+    # OWNER ACTION: replace this placeholder with the real URL on the
+    # maintainer's host (e.g. a raw GitHub file or this smch.ir path). Until
+    # a valid JSON lives there, the app silently uses the built-in defaults.
+    "config_url": "https://smch.ir/whisper/app_config.json",
+    # Catalog of selectable Whisper models, in the same shape as
+    # core.model_manager.MODEL_REGISTRY (slug → {label, name, url, md5,
+    # approx_size_gb}). Empty by default: the built-in MODEL_REGISTRY is the
+    # baseline. The ONLINE config can ADD/OVERRIDE entries here so new models
+    # ship without an app update; a LOCAL override file can pin its own.
+    "model_catalog": {},
+    # App-level URLs/info that the ONLINE config is allowed to set. Defaulted
+    # here (empty/placeholder) so reads never KeyError. ``stats_url`` is the
+    # usage-stats POST endpoint; ``latest_version`` is the newest published
+    # version string; ``ffplay_downloads`` maps a platform key
+    # ("windows"/"macos"/...) to a download URL for the Video-Tiling ffplay
+    # binary (which is NOT bundled). All three are SAFE for the online layer
+    # to control.
+    "stats_url": "",
+    "latest_version": "",
+    "ffplay_downloads": {},
 }
+
+
+# Keys the ONLINE config is allowed to set/override. The online layer must
+# NEVER touch user-private / local-only settings — paths, API keys,
+# credentials, the model hub folder, or any user preference. Only this
+# APP-LEVEL allowlist is honoured from the fetched JSON; everything else in
+# the online payload is dropped. (Precedence is still local > online >
+# hard-coded — see ``merge_config_sources``.)
+ONLINE_ALLOWED_KEYS: frozenset[str] = frozenset({
+    "model_catalog",
+    "stats_url",
+    "latest_version",
+    "ffplay_downloads",
+})
+
+
+def online_cache_path() -> Path:
+    """Path of the cached last-good online config under the cache dir."""
+    return user_cache_dir() / "app_config_cache.json"
+
+
+# Process-lifetime memo of the fetched online config, so the many
+# ``load_config()`` callers in one process (worker import, backends,
+# dialogs) don't each pay a network round-trip / timeout. Keyed by URL.
+# ``refresh_online_config()`` clears it for an explicit re-check.
+_ONLINE_MEMO: dict[str, dict[str, Any]] = {}
+_ONLINE_MEMO_LOCK = threading.Lock()
+
+
+def refresh_online_config() -> None:
+    """Forget the in-process online-config memo so the next load re-fetches."""
+    with _ONLINE_MEMO_LOCK:
+        _ONLINE_MEMO.clear()
 
 
 def _legacy_config_path() -> str:
@@ -392,6 +455,10 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_with_defaults(loaded: dict[str, Any]) -> dict[str, Any]:
+    # Retained as a single-layer (local-over-hardcoded) merge helper. The
+    # canonical effective-config path is now the three-layer
+    # ``merge_config_sources`` used by ``load_config``; this remains for
+    # callers/tests that want only the defaults+local overlay.
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     for key, value in loaded.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -401,15 +468,125 @@ def _merge_with_defaults(loaded: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def load_config() -> dict[str, Any]:
-    migrate_config_location()
+# --- Three-level merged configuration (P4-1) --------------------------------
+#
+# Sources, merged with priority ``local file > online config > hard-coded
+# DEFAULT_CONFIG`` (a key missing from a higher-priority source falls through
+# to the next). The online layer is restricted to ``ONLINE_ALLOWED_KEYS`` so
+# it can change APP-LEVEL settings (model catalog, stats endpoint, latest
+# version, ffplay links) WITHOUT touching user-private / local-only keys
+# (paths, API keys, hub folder, credentials, user preferences). The merge is
+# PURE/testable (the three dicts are injected); fetching the online layer is a
+# separate, best-effort helper that caches its last good result and never
+# blocks or crashes startup.
+
+
+def merge_config_sources(
+    hardcoded: dict[str, Any],
+    online: dict[str, Any] | None,
+    local: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge the three config layers by precedence: local > online > hardcoded.
+
+    - ``hardcoded`` is the full baseline (``DEFAULT_CONFIG``).
+    - ``online`` is the fetched app-level config; only keys in
+      ``ONLINE_ALLOWED_KEYS`` are honoured, so it can never override
+      user-private / local-only settings (paths, keys, hub folder, prefs).
+    - ``local`` is the user's ``config.json`` (highest priority); it may set
+      any key, including the local-only ones the online layer cannot touch.
+
+    Dict-valued keys are deep-merged so a partial override (e.g. one new
+    ``model_catalog`` slug, or ``model.name`` alone) keeps the sibling keys
+    from the lower layer. A key missing from a higher-priority source falls
+    through to the next. The function is pure: inputs are never mutated and a
+    fresh dict is returned.
+    """
+    merged: dict[str, Any] = json.loads(json.dumps(hardcoded))
+    if online:
+        safe_online = {
+            k: v for k, v in online.items() if k in ONLINE_ALLOWED_KEYS
+        }
+        deep_merge_dicts(merged, safe_online)
+    if local:
+        deep_merge_dicts(merged, local)
+    return merged
+
+
+def fetch_online_config(
+    url: str,
+    *,
+    timeout: float = 4.0,
+    cache_path: Path | None = None,
+) -> dict[str, Any]:
+    """Fetch the app-level online config JSON, with a cache fallback.
+
+    Best-effort and FAIL-SAFE — it never raises and never blocks startup for
+    long:
+      1. GET ``url`` (stdlib urllib only) with a short ``timeout``.
+      2. On a successful JSON-object response, write it to ``cache_path``
+         (the last-good cache) and return it.
+      3. On ANY failure (offline, timeout, HTTP error, bad JSON), fall back
+         to the cached copy at ``cache_path`` if present and valid.
+      4. If there is no usable cache either, return ``{}`` — the caller then
+         uses only the hard-coded + local layers.
+
+    ``cache_path`` defaults to ``online_cache_path()``. An empty ``url``
+    short-circuits to the cache (then to ``{}``), so disabling the online
+    layer is just clearing ``config_url``.
+    """
+    if cache_path is None:
+        cache_path = online_cache_path()
+
+    if url:
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "WhisperProject"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+            data = json.loads(raw.decode("utf-8"))
+            if isinstance(data, dict):
+                try:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_text(
+                        json.dumps(data), encoding="utf-8"
+                    )
+                except OSError as e:
+                    logger.warning("Could not cache online config: %s", e)
+                return data
+            logger.warning("Online config at %s is not a JSON object", url)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            # URLError covers offline / timeout / HTTP errors; ValueError
+            # covers a JSON parse failure (and UnicodeDecodeError, a
+            # ValueError). Fall through to the cache.
+            logger.info(
+                "Online config fetch failed (%s); using cache if available", e
+            )
+
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(cached, dict):
+            return cached
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _read_local_config() -> dict[str, Any]:
+    """Read the user's ``config.json`` and return it as a dict.
+
+    Returns ``{}`` when the file is missing (a fresh install) and on a
+    corrupt / non-object file (which is renamed aside to ``.corrupt`` so the
+    next launch starts clean). Never raises — a bad local file degrades to
+    "use the online + hard-coded layers", not a crashed launch.
+    """
     path = config_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
     except FileNotFoundError:
         logger.warning("config.json not found at %s; using defaults", path)
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as e:
         # UnicodeDecodeError is a ValueError that escapes the OSError
         # branch (e.g. cp1252 bytes saved by an external editor); the
@@ -421,13 +598,44 @@ def load_config() -> dict[str, Any]:
             logger.info("Moved corrupt config to %s.corrupt", path)
         except OSError:
             pass
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
 
     if not isinstance(loaded, dict):
         logger.error("config.json is not a JSON object; using defaults")
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
+    return loaded
 
-    merged = _merge_with_defaults(loaded)
+
+def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
+    """Return the effective config from the three merged layers.
+
+    Precedence: ``local config.json`` > ``online app config`` > hard-coded
+    ``DEFAULT_CONFIG`` (see ``merge_config_sources``). The online layer is
+    fetched best-effort with a cache fallback and is restricted to
+    ``ONLINE_ALLOWED_KEYS``; pass ``fetch_online=False`` (or clear
+    ``config_url``) to skip the network entirely and use only the local +
+    hard-coded layers — useful in tests and for an offline-only run.
+    """
+    migrate_config_location()
+    local = _read_local_config()
+
+    # The online config URL itself can be overridden locally (an expert can
+    # point at a staging URL); otherwise the hard-coded default is used.
+    config_url = ""
+    if fetch_online:
+        config_url = str(local.get("config_url") or DEFAULT_CONFIG["config_url"])
+    online: dict[str, Any] = {}
+    if config_url:
+        with _ONLINE_MEMO_LOCK:
+            cached = _ONLINE_MEMO.get(config_url)
+        if cached is not None:
+            online = cached
+        else:
+            online = fetch_online_config(config_url)
+            with _ONLINE_MEMO_LOCK:
+                _ONLINE_MEMO[config_url] = online
+
+    merged = merge_config_sources(DEFAULT_CONFIG, online, local)
     # Coerce / drop wrong-type values for keys that ship a default —
     # e.g. parallel_workers="many" survives the merge and downstream
     # int() crashes later. Drop the bad value (restore default).

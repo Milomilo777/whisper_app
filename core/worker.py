@@ -133,7 +133,10 @@ def emit(event: str, **payload: Any) -> None:
 
 
 def main() -> int:
-    setup_logging(load_config().get("log_level", "INFO"))
+    # fetch_online=False: the worker only needs log_level here; skip the
+    # network round-trip so worker spawn is never blocked on the online
+    # config fetch (the parent App passes the effective per-task config).
+    setup_logging(load_config(fetch_online=False).get("log_level", "INFO"))
     # Make on-demand-installed optional packages (stable-ts → torch)
     # importable; alignment runs in THIS worker process.
     try:
