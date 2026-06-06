@@ -1336,12 +1336,9 @@ class App(tk.Tk):
         if len(chosen) == 1:
             self.fv.set(chosen[0])
             return
-        count = 0
-        for path in chosen:
-            self.fv.set(path)
-            self.add()
-            count += 1
-        self.log(f"Enqueued {count} files via Browse...")
+        count = self._bulk_enqueue(list(chosen))
+        if count:
+            self.log(f"Enqueued {count} files via Browse...")
 
     def browse_download_folder(self) -> None:
         folder = filedialog.askdirectory()
@@ -1647,17 +1644,35 @@ class App(tk.Tk):
         if not os.path.isfile(text):
             self.log(f"File not found — pick an existing file: {text}")
             return
-        # First-transcribe gating:
-        #   1. If the model bytes are not on disk → download dialog.
-        #   2. Then call ensure_worker_ready to lazy-load the model
-        #      into a worker subprocess. v1.0.3: was previously
-        #      preloaded at startup; deferring it here saves ~1.5 GB
-        #      of idle RAM in sessions where the user never clicks
-        #      Transcribe.
+        if not self._ensure_transcribe_ready():
+            return
+        # Per-task language override + optional clip range.
+        task = TranscriptionTask(self.fv.get())
+        self._apply_task_options(task)
+        self.queue.append(task)
+        self.pb["value"] = 0
+        self.nb.select(self.t2)
+        self.log(f"Queued: {os.path.basename(self.fv.get())}")
+        self.refresh()
+
+    def _ensure_transcribe_ready(self) -> bool:
+        """Run the one-time transcribe gates; True if a task may be enqueued.
+
+        Shared by add() and _bulk_enqueue so the ~3 GB model-download modal,
+        the optional-alignment offer, and the worker spawn happen exactly
+        ONCE per user action — not once per file in a multi-file batch.
+
+        First-transcribe gating:
+          1. If the model bytes are not on disk → download dialog.
+          2. Then call ensure_worker_ready to lazy-load the model into a
+             worker subprocess. v1.0.3: was previously preloaded at startup;
+             deferring it here saves ~1.5 GB of idle RAM in sessions where the
+             user never clicks Transcribe.
+        """
         if not self._model_bytes_present():
             if self.model_setup_running:
                 self.log("Model download already in progress — please wait.")
-                return
+                return False
             if not messagebox.askyesno(
                 "Whisper model required",
                 "The Whisper model must be downloaded before the first transcription. "
@@ -1665,10 +1680,10 @@ class App(tk.Tk):
                 parent=self,
             ):
                 self.log("Transcription cancelled: the Whisper model is required.")
-                return
+                return False
             if not self.ensure_model_with_modal():
                 self.log("Transcription cancelled: the Whisper model is not ready.")
-                return
+                return False
         # Slim build: if word-alignment is enabled but its (large, optional)
         # package isn't installed, offer the one-time download BEFORE the
         # worker spawns so the worker activates with it present. Declining
@@ -1677,11 +1692,19 @@ class App(tk.Tk):
             self._offer_optional_install("alignment", "Word-timestamp alignment", "700 MB")
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Transcription cancelled: model load was cancelled")
-            return
+            return False
+        return True
+
+    def _apply_task_options(self, task: TranscriptionTask) -> None:
+        """Apply the Transcribe-tab language + clip-range options to a task.
+
+        Shared by add() and _bulk_enqueue so a bulk-enqueued file gets the
+        same per-task language override and optional time-slice as a single
+        file enqueued through Transcribe.
+        """
         # Per-task language override. The picker shows "Auto" for the
         # default Whisper auto-detect; any other value is a language
         # name that maps to a known code via app.domain.languages.
-        task = TranscriptionTask(self.fv.get())
         lang_choice = getattr(self, "transcribe_lang_var", None)
         if lang_choice is not None:
             choice = lang_choice.get().strip()
@@ -1700,11 +1723,34 @@ class App(tk.Tk):
             from app.services.download_service import _parse_timecode
             task.clip_start = _parse_timecode(self.transcribe_start_time_var.get()) or None
             task.clip_end = _parse_timecode(self.transcribe_end_time_var.get()) or None
-        self.queue.append(task)
-        self.pb["value"] = 0
-        self.nb.select(self.t2)
-        self.log(f"Queued: {os.path.basename(self.fv.get())}")
-        self.refresh()
+
+    def _bulk_enqueue(self, paths: "list[str]") -> int:
+        """Enqueue many files as transcription tasks in one shot.
+
+        Multi-file Browse and multi-file drag-and-drop both call this instead
+        of looping add() per path: add() re-pops the ~3 GB model-download
+        modal and re-runs the tab-switch + full-tree refresh() PER FILE, which
+        is jarring for a 20-file drop. Here the model/worker gate runs ONCE up
+        front, every existing file is enqueued with the same language/clip
+        options, and refresh() runs ONCE at the end. Returns the count
+        enqueued (0 if the gate was declined or no path existed).
+        """
+        files = [p for p in paths if p and os.path.isfile(p)]
+        if not files:
+            return 0
+        if not self._ensure_transcribe_ready():
+            return 0
+        count = 0
+        for path in files:
+            task = TranscriptionTask(path)
+            self._apply_task_options(task)
+            self.queue.append(task)
+            count += 1
+        if count:
+            self.pb["value"] = 0
+            self.nb.select(self.t2)
+            self.refresh()
+        return count
 
     def _model_bytes_present(self) -> bool:
         """True when the Whisper model files are already on disk.
@@ -3804,12 +3850,9 @@ class App(tk.Tk):
                 self.nb.select(self.t1)
                 self.log(f"Picked: {os.path.basename(paths[0])} (drag-and-drop)")
             else:
-                count = 0
-                for p in paths:
-                    self.fv.set(p)
-                    self.add()
-                    count += 1
-                self.log(f"Enqueued {count} files via drag-and-drop")
+                count = self._bulk_enqueue(paths)
+                if count:
+                    self.log(f"Enqueued {count} files via drag-and-drop")
 
     def _cancel_running(self) -> None:
         """Esc handler — cancel whichever single running task is most relevant."""

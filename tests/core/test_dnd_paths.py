@@ -102,13 +102,18 @@ def _fake_app() -> types.SimpleNamespace:
         logs=[],
         log=lambda msg: None,  # set below to capture
         add=lambda: None,
+        _bulk_enqueue=lambda paths: 0,
     )
 
 
 def _drive(app: types.SimpleNamespace, raw: str) -> None:
     app.log = app.logs.append
-    # add() in the multi-file branch enqueues whatever fv currently holds.
-    app.add = lambda: app.enqueued.append(app.fv.value)
+    # The multi-file branch now calls _bulk_enqueue(paths) once (BUG I:
+    # gate the ~3 GB modal + tab-switch + refresh ONCE instead of per-file).
+    def _bulk(paths):
+        app.enqueued.extend(paths)
+        return len(paths)
+    app._bulk_enqueue = _bulk
     event = types.SimpleNamespace(data=raw)
     App._on_drop(app, event)  # type: ignore[arg-type]
 
@@ -147,3 +152,71 @@ def test_on_drop_url_routes_to_download_tab(monkeypatch):
     _drive(app, "https://example.com/video")
     assert app.download_url_var.value == "https://example.com/video"
     assert app.nb.selected == app.t3
+
+
+# --- BUG I: bulk enqueue gates the model/worker readiness ONCE -------------
+
+
+def test_bulk_enqueue_gates_once_and_refreshes_once(monkeypatch):
+    """Multi-file enqueue must gate model/worker readiness ONCE up front, then
+    enqueue a task per existing path and refresh() ONCE — not re-pop the
+    ~3 GB modal + tab-switch + refresh per file like the old add() loop."""
+    files = {r"C:\a.mp4", r"C:\b.mp4", r"C:\c.mp4"}
+    monkeypatch.setattr("app.app.os.path.isfile", lambda s: s in files)
+
+    calls = {"ready": 0, "refresh": 0, "opts": 0}
+
+    app = types.SimpleNamespace(
+        queue=[],
+        nb=_FakeNotebook(),
+        t2="queue-tab",
+        pb={"value": 99},
+        _ensure_transcribe_ready=lambda: (calls.__setitem__("ready", calls["ready"] + 1), True)[1],
+        _apply_task_options=lambda _t: calls.__setitem__("opts", calls["opts"] + 1),
+        refresh=lambda: calls.__setitem__("refresh", calls["refresh"] + 1),
+    )
+
+    count = App._bulk_enqueue(app, list(files))  # type: ignore[arg-type]
+
+    assert count == 3
+    assert len(app.queue) == 3            # one task per existing path
+    assert calls["ready"] == 1            # the gate ran exactly ONCE
+    assert calls["refresh"] == 1          # one refresh for the whole batch
+    assert calls["opts"] == 3             # language/clip options applied per task
+    assert app.nb.selected == app.t2      # switched to the queue tab once
+    assert app.pb["value"] == 0
+
+
+def test_bulk_enqueue_declined_gate_enqueues_nothing(monkeypatch):
+    monkeypatch.setattr("app.app.os.path.isfile", lambda s: True)
+    calls = {"refresh": 0}
+    app = types.SimpleNamespace(
+        queue=[],
+        nb=_FakeNotebook(),
+        t2="queue-tab",
+        pb={"value": 0},
+        _ensure_transcribe_ready=lambda: False,   # user declined the model download
+        _apply_task_options=lambda _t: None,
+        refresh=lambda: calls.__setitem__("refresh", calls["refresh"] + 1),
+    )
+    count = App._bulk_enqueue(app, [r"C:\a.mp4", r"C:\b.mp4"])  # type: ignore[arg-type]
+    assert count == 0
+    assert app.queue == []
+    assert calls["refresh"] == 0
+
+
+def test_bulk_enqueue_skips_missing_files(monkeypatch):
+    # Only files that still exist on disk are enqueued.
+    monkeypatch.setattr("app.app.os.path.isfile", lambda s: s == r"C:\real.mp4")
+    app = types.SimpleNamespace(
+        queue=[],
+        nb=_FakeNotebook(),
+        t2="queue-tab",
+        pb={"value": 0},
+        _ensure_transcribe_ready=lambda: True,
+        _apply_task_options=lambda _t: None,
+        refresh=lambda: None,
+    )
+    count = App._bulk_enqueue(app, [r"C:\real.mp4", r"C:\ghost.mp4"])  # type: ignore[arg-type]
+    assert count == 1
+    assert len(app.queue) == 1
