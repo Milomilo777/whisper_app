@@ -104,6 +104,279 @@ def _split_dnd_paths(raw: str) -> list[str]:
     return out
 
 
+# --- About dialog content (pure, Tk-free, unit-testable) -------------------
+# The About dialog's text and links live in these two module-level helpers so
+# they can be unit-tested without ever building a tk.Tk() root. The dialog in
+# App._show_about only walks the returned data structures into widgets.
+
+# A section is (title, [(subsection_title, [bullet, ...]), ...]).
+AboutSection = tuple[str, list[tuple[str, list[str]]]]
+
+
+def build_about_sections() -> list[AboutSection]:
+    """Return the full, plain-language feature inventory for the About dialog.
+
+    Many capabilities ship enabled-by-default but live behind the Advanced
+    dialog or have no surface in the main UI, so this is the canonical
+    "what does this app actually do" reference and is intentionally
+    exhaustive. Pure data: no Tk, no I/O — safe to call from a test.
+    """
+    return [
+        ("What's new in this version", [
+            ("Highlights", [
+                "Cloud transcription you can opt into: Google Gemini "
+                "(paste one free key) and Google Cloud Speech-to-Text "
+                "(service-account file, with a cheaper Batch mode)",
+                "Web / LAN access — one click to let a browser on this PC "
+                "or another device transcribe, with nothing to install",
+                "Per-task buttons on every queue item: Pause, Resume, "
+                "Cancel, Re-run, Remove",
+                "Video Tiling — a multi-monitor video wall that "
+                "auto-reconnects if a stream drops",
+                "Built-in update check (opt-in); the installer upgrades "
+                "in place over the old version — no need to uninstall first",
+            ]),
+        ]),
+        ("Transcription engine", [
+            ("Input", [
+                "Any audio or video file ffmpeg can read",
+                "Drag-and-drop one or many files onto the window",
+                "Browse… (Ctrl+O) for single or multi-select",
+                "Recent-files submenu (last 10 from history)",
+            ]),
+            ("Models", [
+                "Whisper Large v3 (default, ~3 GB)",
+                "Whisper Large v3 Turbo (~5× faster, ~1.6 GB)",
+                "Distil Large v3.5 (fastest English-only, ~1.5 GB)",
+                "Picker lives in the Advanced dialog",
+            ]),
+            ("Backends (pluggable)", [
+                "Local Whisper via faster-whisper — the default, fully "
+                "offline, nothing leaves your computer",
+                "whisper.cpp via pywhispercpp — optional, quantised, "
+                "kinder to weak CPUs",
+                "Parakeet TDT v3 via sherpa-onnx — optional, also offline",
+                "Switch in the Advanced dialog under Backend",
+            ]),
+            ("Cloud transcription (optional, uploads your audio)", [
+                "Off by default. These send your audio to Google, so they "
+                "break the offline guarantee — only use them on purpose.",
+                "Gemini (simple API key): paste one free key from "
+                "aistudio.google.com and it just works. Free tier is about "
+                "60 minutes a month.",
+                "Google Cloud Speech-to-Text (service account): a "
+                "purpose-built transcription service with real word "
+                "timestamps and speaker labels. New accounts get 60 free "
+                "minutes a month plus a $300 / 90-day credit.",
+                "It needs a service-account JSON file — set it under "
+                "Advanced › Backend, where a \"How do I get this file?\" "
+                "button walks you through it step by step.",
+                "Batch mode (Cloud Speech-to-Text): about 75% cheaper but "
+                "slower (up to ~24 hours) and needs a Cloud Storage bucket. "
+                "Good for large jobs you are not waiting on.",
+            ]),
+            ("Hardware", [
+                "Autodetect at first launch (CUDA / NPU / DirectML / CPU)",
+                "Choice persisted in hardware.json",
+                "Manual override in the Advanced dialog",
+            ]),
+            ("Quality controls", [
+                "Voice Activity Detection (Silero VAD), tunable",
+                "Word-level timestamps (opt-in)",
+                "Optional stable-ts word-alignment refinement",
+                "Optional Demucs vocal-separation pre-processing",
+            ]),
+        ]),
+        ("Output formats", [
+            ("Files written next to your source", [
+                "SubRip — .srt",
+                "WebVTT — .vtt",
+                "Whisper JSON — .json (segments + word-level data)",
+                "Plain text — .txt",
+                "Tab-separated — .tsv",
+                "LRC lyrics — .lrc",
+                "Markdown — .md",
+                "Microsoft Word — .docx",
+                "PDF — via reportlab",
+            ]),
+            ("Round-trip", [
+                "oTranscribe import (.otr → .srt)",
+                "oTranscribe export (.srt → .otr) for manual editing",
+            ]),
+            ("Templating", [
+                "output_filename_template config key with tokens "
+                "{base} {ext} {lang} {date} {speaker_count}",
+                "Sibling subdirectories created on the fly",
+            ]),
+        ]),
+        ("Post-processing", [
+            ("Per-file extras", [
+                "Speaker diarisation (sherpa-onnx, no HF token)",
+                "Auto-chapter markers (long-silence heuristic)",
+                "Hallucination detector — flags suspect segments "
+                "in the viewer (red rows)",
+            ]),
+            ("Optional local LLM", [
+                "Qwen2.5-1.5B-Instruct, download-on-first-use",
+                "Summaries, Q&A, AI-generated chapter titles",
+                "Off by default; opt in from the Advanced dialog",
+            ]),
+        ]),
+        ("Video download", [
+            ("Sources", [
+                "Any URL yt-dlp supports (YouTube, Vimeo, …)",
+                "Supreme Master TV episode pages "
+                "(multi-quality + article text + series parts)",
+            ]),
+            ("Pipeline options", [
+                "Format/quality picker per URL",
+                "Audio-only mode (MP3 / m4a / opus)",
+                "Subtitle download + burn-in to video",
+                "SponsorBlock category skipping",
+                "Auto-transcribe after download",
+                "Cookies from browser — download login-walled / "
+                "age-gated content (Facebook / Instagram / TikTok, "
+                "some YouTube Shorts)",
+            ]),
+        ]),
+        ("Video Tiling (video wall)", [
+            ("What it does", [
+                "Plays one live stream as a full-screen N×N grid",
+                "Can spread the wall across several monitors",
+                "Auto-reconnects if the stream drops, so the wall "
+                "keeps running unattended",
+                "Lives on its own \"Video Tiling\" tab",
+            ]),
+        ]),
+        ("Web / LAN access", [
+            ("Share transcription from a browser", [
+                "One click on the \"Web / LAN access\" tab opens a simple "
+                "web page served by this app — no app to install on the "
+                "other devices",
+                "Loopback by default: only this computer can reach it "
+                "(no firewall prompt)",
+                "Optional \"Share on local network\" so phones and other "
+                "PCs can use it (Windows may ask to allow the firewall — "
+                "click Allow)",
+                "Optional access password if you want to limit who can use it",
+                "Use it only on a network you trust — it is not encrypted",
+            ]),
+        ]),
+        ("Transcript viewer", [
+            ("Open via", [
+                "Help → Open transcript viewer…",
+                "Last-Result card → View transcript",
+            ]),
+            ("Editing", [
+                "Find / replace (Ctrl+F), case-insensitive default",
+                "Speaker rename — rewrites every same-labelled segment",
+                "Remove fillers — strips uh/um/er… with whole-word regex",
+                "Atomic save (Ctrl+S)",
+            ]),
+            ("Playback", [
+                "Embedded VLC when python-vlc + libvlc are installed",
+                "Click-to-seek on any segment",
+                "Karaoke — active word wrapped in [brackets] as VLC plays",
+            ]),
+            ("Display", [
+                "Word-confidence colour coding "
+                "(green ≥ 0.85, amber ≥ 0.6, red below)",
+                "Type-as-you-search filter",
+            ]),
+        ]),
+        ("Workflow + system integration", [
+            ("Queue", [
+                "Multi-file batch with per-file progress",
+                "Parallel workers (configurable, default 2)",
+                "Right-click any item for Pause, Resume, Cancel, "
+                "Re-run, and Remove — per task",
+                "Cancel a running job (Esc)",
+            ]),
+            ("Automation", [
+                "Watched folder — auto-enqueue files dropped in",
+                "Windows Explorer right-click "
+                "\"Transcribe with Whisper Project\" (optional install task)",
+                "Per-folder .whisperproject.json overrides",
+            ]),
+            ("Desktop", [
+                "System tray + minimise-to-tray (opt-in)",
+                "Native Windows toast on completion + chime",
+                "High-DPI scaling",
+                "Light / dark / system theme",
+            ]),
+            ("Reliability", [
+                "Crash-auto-resume — re-enqueues interrupted files",
+                "Worker subprocess with 5 s heartbeat + 30 s watchdog",
+                "history.db opens in WAL mode + integrity check",
+                "--safe-mode CLI flag backs up config and re-runs first-run",
+            ]),
+        ]),
+        ("Updates", [
+            ("Staying current", [
+                "Opt-in check against GitHub for a newer version — it only "
+                "tells you; it never downloads or installs on its own",
+                "Run it any time from Help → Check for updates…",
+                "When you install the newer Setup it upgrades in place over "
+                "the old version — you do NOT need to uninstall first",
+            ]),
+        ]),
+        ("Search + statistics", [
+            ("History", [
+                "Every finished job recorded in SQLite history.db",
+                "File → Recent files (last 10)",
+                "File → Statistics… — total minutes transcribed, etc.",
+            ]),
+        ]),
+        ("Keyboard shortcuts", [
+            ("Global", [
+                "Ctrl+O — Browse for files",
+                "Ctrl+Enter — Transcribe selected",
+                "Esc — Cancel running job",
+                "Ctrl+Q — Exit (bypasses minimise-to-tray)",
+            ]),
+            ("Viewer", [
+                "Ctrl+F — Find / replace",
+                "Ctrl+S — Save edits",
+            ]),
+        ]),
+        ("Privacy", [
+            ("Default", [
+                "Everything runs locally; no network call without your action",
+                "The cloud backends above are the exception — they upload "
+                "audio only when you choose one and start a job",
+            ]),
+            ("Opt-in telemetry", [
+                "Anonymous launch ping (config: telemetry_opt_in)",
+                "Sentry crash reporting (env: SENTRY_DSN + opt-in)",
+            ]),
+        ]),
+    ]
+
+
+def build_about_links() -> list[tuple[str, str]]:
+    """Return (label, url) pairs of helpful links for the About dialog.
+
+    Pure data: the dialog binds each to ``webbrowser.open``. The releases
+    URL is sourced from ``core.updates`` so it tracks the repo move note
+    there (single source of truth for the GitHub coordinates).
+    """
+    from core.updates import RELEASES_PAGE_URL
+
+    return [
+        ("Downloads & new versions (GitHub releases)", RELEASES_PAGE_URL),
+        ("Get a free Gemini API key — aistudio.google.com",
+         "https://aistudio.google.com/apikey"),
+        ("Google Cloud console (service account, billing)",
+         "https://console.cloud.google.com"),
+        ("Cloud setup guide — Gemini (paste a key)",
+         "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+         "/blob/master/docs/CLOUD_STT.md"),
+        ("Cloud setup guide — Google Cloud Speech-to-Text",
+         "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+         "/blob/master/docs/CLOUD_STT_GOOGLE.md"),
+    ]
+
+
 class App(tk.Tk):
     """The Tk root.
 
@@ -743,166 +1016,7 @@ class App(tk.Tk):
             "bullet", lmargin1=28, lmargin2=42, spacing1=1, spacing3=1,
         )
 
-        sections: list[tuple[str, list[tuple[str, list[str]]]]] = [
-            ("Transcription engine", [
-                ("Input", [
-                    "Any audio or video file ffmpeg can read",
-                    "Drag-and-drop one or many files onto the window",
-                    "Browse… (Ctrl+O) for single or multi-select",
-                    "Recent-files submenu (last 10 from history)",
-                ]),
-                ("Models", [
-                    "Whisper Large v3 (default, ~3 GB)",
-                    "Whisper Large v3 Turbo (~5× faster, ~1.6 GB)",
-                    "Distil Large v3.5 (fastest English-only, ~1.5 GB)",
-                    "Picker lives in the Advanced dialog",
-                ]),
-                ("Backends (pluggable)", [
-                    "faster-whisper (CTranslate2, default)",
-                    "whisper.cpp via pywhispercpp (quantised ggml)",
-                    "Parakeet TDT v3 via sherpa-onnx",
-                    "Switch in the Advanced dialog",
-                ]),
-                ("Hardware", [
-                    "Autodetect at first launch (CUDA / NPU / DirectML / CPU)",
-                    "Choice persisted in hardware.json",
-                    "Manual override in the Advanced dialog",
-                ]),
-                ("Quality controls", [
-                    "Voice Activity Detection (Silero VAD), tunable",
-                    "Word-level timestamps (opt-in)",
-                    "Optional stable-ts word-alignment refinement",
-                    "Optional Demucs vocal-separation pre-processing",
-                ]),
-            ]),
-            ("Output formats", [
-                ("Files written next to your source", [
-                    "SubRip — .srt",
-                    "WebVTT — .vtt",
-                    "Whisper JSON — .json (segments + word-level data)",
-                    "Plain text — .txt",
-                    "Tab-separated — .tsv",
-                    "LRC lyrics — .lrc",
-                    "Markdown — .md",
-                    "Microsoft Word — .docx",
-                    "PDF — via reportlab",
-                ]),
-                ("Round-trip", [
-                    "oTranscribe import (.otr → .srt)",
-                    "oTranscribe export (.srt → .otr) for manual editing",
-                ]),
-                ("Templating", [
-                    "output_filename_template config key with tokens "
-                    "{base} {ext} {lang} {date} {speaker_count}",
-                    "Sibling subdirectories created on the fly",
-                ]),
-            ]),
-            ("Post-processing", [
-                ("Per-file extras", [
-                    "Speaker diarisation (sherpa-onnx, no HF token)",
-                    "Auto-chapter markers (long-silence heuristic)",
-                    "Hallucination detector — flags suspect segments "
-                    "in the viewer (red rows)",
-                ]),
-                ("Optional local LLM", [
-                    "Qwen2.5-1.5B-Instruct, download-on-first-use",
-                    "Summaries, Q&A, AI-generated chapter titles",
-                    "Off by default; opt in from the Advanced dialog",
-                ]),
-            ]),
-            ("Video download", [
-                ("Sources", [
-                    "Any URL yt-dlp supports (YouTube, Vimeo, …)",
-                    "Supreme Master TV episode pages "
-                    "(multi-quality + article text + series parts)",
-                ]),
-                ("Pipeline options", [
-                    "Format/quality picker per URL",
-                    "Audio-only mode (MP3 / m4a / opus)",
-                    "Subtitle download + burn-in to video",
-                    "SponsorBlock category skipping",
-                    "Auto-transcribe after download",
-                    "Cookies from browser — download login-walled / "
-                    "age-gated content (Facebook / Instagram / TikTok, "
-                    "some YouTube Shorts)",
-                ]),
-            ]),
-            ("Transcript viewer", [
-                ("Open via", [
-                    "Help → Open transcript viewer…",
-                    "Last-Result card → View transcript",
-                ]),
-                ("Editing", [
-                    "Find / replace (Ctrl+F), case-insensitive default",
-                    "Speaker rename — rewrites every same-labelled segment",
-                    "Remove fillers — strips uh/um/er… with whole-word regex",
-                    "Atomic save (Ctrl+S)",
-                ]),
-                ("Playback", [
-                    "Embedded VLC when python-vlc + libvlc are installed",
-                    "Click-to-seek on any segment",
-                    "Karaoke — active word wrapped in [brackets] as VLC plays",
-                ]),
-                ("Display", [
-                    "Word-confidence colour coding "
-                    "(green ≥ 0.85, amber ≥ 0.6, red below)",
-                    "Type-as-you-search filter",
-                ]),
-            ]),
-            ("Workflow + system integration", [
-                ("Queue", [
-                    "Multi-file batch with per-file progress",
-                    "Parallel workers (configurable, default 2)",
-                    "Cancel a running job (Esc)",
-                ]),
-                ("Automation", [
-                    "Watched folder — auto-enqueue files dropped in",
-                    "Windows Explorer right-click "
-                    "\"Transcribe with Whisper Project\" (optional install task)",
-                    "Per-folder .whisperproject.json overrides",
-                ]),
-                ("Desktop", [
-                    "System tray + minimise-to-tray (opt-in)",
-                    "Native Windows toast on completion + chime",
-                    "High-DPI scaling",
-                    "Light / dark / system theme",
-                ]),
-                ("Reliability", [
-                    "Crash-auto-resume — re-enqueues interrupted files",
-                    "Worker subprocess with 5 s heartbeat + 30 s watchdog",
-                    "history.db opens in WAL mode + integrity check",
-                    "--safe-mode CLI flag backs up config and re-runs first-run",
-                ]),
-            ]),
-            ("Search + statistics", [
-                ("History", [
-                    "Every finished job recorded in SQLite history.db",
-                    "File → Recent files (last 10)",
-                    "File → Statistics… — total minutes transcribed, etc.",
-                ]),
-            ]),
-            ("Keyboard shortcuts", [
-                ("Global", [
-                    "Ctrl+O — Browse for files",
-                    "Ctrl+Enter — Transcribe selected",
-                    "Esc — Cancel running job",
-                    "Ctrl+Q — Exit (bypasses minimise-to-tray)",
-                ]),
-                ("Viewer", [
-                    "Ctrl+F — Find / replace",
-                    "Ctrl+S — Save edits",
-                ]),
-            ]),
-            ("Privacy", [
-                ("Default", [
-                    "Everything runs locally; no network call without your action",
-                ]),
-                ("Opt-in telemetry", [
-                    "Anonymous launch ping (config: telemetry_opt_in)",
-                    "Sentry crash reporting (env: SENTRY_DSN + opt-in)",
-                ]),
-            ]),
-        ]
+        sections = build_about_sections()
 
         for section_title, subsections in sections:
             text.insert("end", section_title + "\n", "section")
@@ -910,6 +1024,34 @@ class App(tk.Tk):
                 text.insert("end", sub_title + "\n", "subsection")
                 for line in bullets:
                     text.insert("end", "• " + line + "\n", "bullet")
+
+        # Helpful links — each rendered as a clickable, underlined row that
+        # opens in the default browser. A per-link Text tag carries the URL
+        # so one bound handler can serve them all.
+        import webbrowser
+
+        text.tag_configure(
+            "link", foreground="#1a6fb5", underline=True,
+            lmargin1=28, lmargin2=42, spacing1=1, spacing3=1,
+        )
+        text.insert("end", "Helpful links\n", "section")
+        for idx, (label, url) in enumerate(build_about_links()):
+            tag = f"link-{idx}"
+            text.tag_configure(tag)
+
+            def _open(_e: object, _u: str = url) -> None:
+                webbrowser.open(_u)
+
+            text.tag_bind(tag, "<Button-1>", _open)
+            text.tag_bind(
+                tag, "<Enter>",
+                lambda _e: text.configure(cursor="hand2"),
+            )
+            text.tag_bind(
+                tag, "<Leave>",
+                lambda _e: text.configure(cursor=""),
+            )
+            text.insert("end", "• " + label + "\n", ("link", tag))
 
         text.configure(state="disabled")
 
