@@ -48,6 +48,11 @@ def count_words_in_segments(segments: list[dict] | None) -> int:
         return 0
     total = 0
     for s in segments:
+        # A JSON sidecar that is a list of non-dicts (a hand-edited or
+        # malformed file -> e.g. ["a", "b"]) would AttributeError on
+        # ``.get``; skip any element that is not a segment dict.
+        if not isinstance(s, dict):
+            continue
         text = s.get("text", "")
         if isinstance(text, str):
             total += count_words(text)
@@ -63,8 +68,14 @@ def audio_duration_from_segments(segments: list[dict] | None) -> float:
     """
     if not segments:
         return 0.0
+    last = segments[-1]
+    # The final element may not be a segment dict (a malformed sidecar list
+    # of non-dicts); ``.get`` would raise AttributeError, which the
+    # (TypeError, ValueError) handler below does NOT catch. Guard it.
+    if not isinstance(last, dict):
+        return 0.0
     try:
-        return float(segments[-1].get("end", 0.0) or 0.0)
+        return float(last.get("end", 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
 
