@@ -139,12 +139,21 @@ if (isset($_POST['form_submitted'])) {
 // Plain text so the python client can read a one-word confirmation cheaply.
 header('Content-Type: text/plain; charset=UTF-8');
 
-$ver = SQLite3::version();
+// Version string for the cosmetic banner. Read it from the PDO driver
+// (pdo_sqlite) rather than the standalone SQLite3 class: many shared hosts
+// ship pdo_sqlite WITHOUT the separate sqlite3 extension, so a static
+// SQLite3::version() call would fatal there. Guard the lookup so a driver
+// that does not expose ATTR_SERVER_VERSION still produces output.
+try {
+    $sqlite_version = (string) $db->getAttribute(PDO::ATTR_SERVER_VERSION);
+} catch (Throwable $e) {
+    $sqlite_version = 'unknown';
+}
 if ($recorded) {
     echo "OK\n";
 } else {
     echo "Whisper Project transcription stats endpoint.\n";
-    echo "SQLite " . $ver['versionString'] . "\n";
+    echo "SQLite " . $sqlite_version . "\n";
     echo "POST form_submitted=1 with: file_name, model, language, ";
     echo "audio_duration, transcription_time, word_count, status\n";
 }
