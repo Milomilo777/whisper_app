@@ -103,3 +103,12 @@ details also in `docs/SESSION_HANDOFF_NEXT.md` + `docs/CHANGELOG.md [Unreleased]
 - Owner is non-technical, Persian; full autonomy granted (proceed to completion, local-only,
   real tests + debug allowed). Wants ZERO bugs. Keeps adding request batches; "continue to
   the end of all items" + "test/debug the frontend maximally."
+
+## UPDATE — P4 ALL DONE (commits ~4e71068 … b3801b0; pyright app core 0/0/0)
+- P4-1 three-level merged config (local > online URL > hard-coded) + cache/fail-safe; new keys config_url / model_catalog / stats_url / latest_version / ffplay_downloads.
+- P4-2 config-driven model catalog + Advanced model selector (large-v3 default; medium/turbo/distil entries; medium URL on smch.ir flagged for the owner to upload).
+- P4-3 core/convert.py (parse SRT/VTT/TSV/JSON + .otr → segments → emit any text format) + File→"Convert transcript…" menu.
+- P4-4 core/history.py word_count column (idempotent) + core/stats.py opt-in POST (gated on telemetry_opt_in) + stats/transcription_stats.php (deploy to host).
+- P4-5 core/tiling.py download_ffplay + "Download ffplay" button; ffplay_downloads default URLs (BtbN win zip / evermeet mac) — OWNER MUST VERIFY/host real URLs via the online config.
+- OWNER ACTIONS: host the online config JSON at config_url; set the real stats_url + deploy the PHP; upload faster-whisper-medium to smch.ir; verify ffplay URLs.
+- ⚠ REBUILD NEEDED to ship P4: the dist_installer\*.exe / *.zip are PHASE-3 only. To rebuild: `build_embed_installer.bat` → `ISCC.exe installer_embed.iss` → `python -c "import shutil; shutil.make_archive(...Portable,'zip','embed_build')"` → relaunch embed pythonw gui.py for a visual smoke. (A rebuild may have been kicked off in the background near the end of the session — check dist_installer timestamps.)
