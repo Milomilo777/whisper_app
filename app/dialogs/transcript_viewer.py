@@ -146,6 +146,24 @@ def _filler_regex() -> re.Pattern[str]:
     return re.compile(rf"(?i)\b(?:{words})\b[,.!?]*\s?")
 
 
+def _seg_float(seg: dict[str, Any], key: str, default: float = 0.0) -> float:
+    """Read ``seg[key]`` as a float, coercing defensively to ``default``.
+
+    Transcript JSON is user-supplied (or hand-edited), so a segment's
+    ``start`` / ``end`` may carry a non-numeric value — a European
+    decimal string like ``"1,5"``, a stray ``"abc"``, or ``None``. A
+    bare ``float(seg.get(...))`` on those raises ``ValueError`` /
+    ``TypeError`` and crashes the viewer at construction, bypassing the
+    friendly "pick the .json" guard in :meth:`_load_segments`. Coercing
+    to ``default`` (0.0) keeps the row visible with a sane timestamp
+    instead of taking down the whole window.
+    """
+    try:
+        return float(seg.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _segment_min_probability(seg: dict[str, Any]) -> float | None:
     """Min word-confidence in a segment, or None when not available."""
     words = seg.get("words") or []
@@ -673,7 +691,7 @@ class TranscriptViewer(tk.Toplevel):
                 "",
                 "end",
                 iid=str(idx),
-                values=(_fmt_hms(float(seg.get("start", 0.0))), speaker, text),
+                values=(_fmt_hms(_seg_float(seg, "start")), speaker, text),
                 tags=tags,
             )
 
@@ -691,7 +709,7 @@ class TranscriptViewer(tk.Toplevel):
         except ValueError:
             return
         seg = self.segments[idx]
-        self._seek_to(float(seg.get("start", 0.0)))
+        self._seek_to(_seg_float(seg, "start"))
         self._set_active_segment(idx)
 
     def _on_segment_double_click(self, _event: tk.Event) -> None:
