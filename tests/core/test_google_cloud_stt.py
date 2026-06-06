@@ -1,0 +1,513 @@
+"""Hermetic tests for the REAL Google Cloud Speech-to-Text v2 backend.
+
+NO network, NO service-account JSON, NO google libraries. These exercise
+only the pure seams:
+
+  * the service-account JSON reader (project_id extraction + clear errors),
+  * the recognizer-path builder,
+  * the RecognitionConfig builder (against a FAKE cloud_speech module),
+  * the v2 response -> segments parser (canned duck-typed results, incl.
+    word timings + speaker labels),
+  * the chunk planner + timeline offsetter,
+  * the monthly-usage accumulator (rolls over on a new month),
+  * the error classifier,
+  * load() with a missing / bad JSON path -> clear error.
+
+The real end-to-end Google call is intentionally NOT tested here (there is
+no service-account JSON in this environment); the owner live-tests that.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import types
+
+import pytest
+
+from core.backends import get_backend
+from core.backends import google_cloud_stt as g
+
+
+# ---------------------------------------------------------------- JSON / project_id
+
+
+def _write_sa_json(tmp_path, **extra) -> str:
+    data = {"type": "service_account", "project_id": "my-proj-123"}
+    data.update(extra)
+    p = tmp_path / "key.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    return str(p)
+
+
+def test_read_project_id_happy(tmp_path):
+    path = _write_sa_json(tmp_path)
+    assert g.read_project_id(path) == "my-proj-123"
+
+
+def test_read_project_id_empty_path():
+    with pytest.raises(RuntimeError) as e:
+        g.read_project_id("")
+    assert "service-account JSON" in str(e.value)
+
+
+def test_read_project_id_missing_file(tmp_path):
+    with pytest.raises(RuntimeError) as e:
+        g.read_project_id(str(tmp_path / "nope.json"))
+    assert "not found" in str(e.value)
+
+
+def test_read_project_id_not_json(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("this is not json {{{", encoding="utf-8")
+    with pytest.raises(RuntimeError) as e:
+        g.read_project_id(str(p))
+    assert "corrupt" in str(e.value) or "could not read" in str(e.value).lower()
+
+
+def test_read_project_id_no_project_id(tmp_path):
+    p = tmp_path / "noproj.json"
+    p.write_text(json.dumps({"type": "service_account"}), encoding="utf-8")
+    with pytest.raises(RuntimeError) as e:
+        g.read_project_id(str(p))
+    assert "project_id" in str(e.value)
+
+
+# ---------------------------------------------------------------- recognizer path
+
+
+def test_recognizer_path_global():
+    assert g.recognizer_path("p1") == (
+        "projects/p1/locations/global/recognizers/_"
+    )
+
+
+def test_recognizer_path_regional():
+    assert g.recognizer_path("p1", "europe-west4") == (
+        "projects/p1/locations/europe-west4/recognizers/_"
+    )
+
+
+# ---------------------------------------------------------------- chunk planner
+
+
+def test_plan_chunks_splits_under_one_minute():
+    chunks = g.plan_chunks(130.0, 55.0)
+    assert chunks == [(0.0, 55.0), (55.0, 110.0), (110.0, 130.0)]
+
+
+def test_plan_chunks_single_when_short():
+    assert g.plan_chunks(40.0, 55.0) == [(0.0, 40.0)]
+
+
+def test_plan_chunks_unknown_duration_whole_file_marker():
+    assert g.plan_chunks(0.0, 55.0) == [(0.0, 0.0)]
+
+
+# ---------------------------------------------------------------- offset
+
+
+def test_offset_segments_shifts_to_global_timeline():
+    chunk_segs = [
+        {"start": 0.0, "end": 2.0, "text": "a"},
+        {"start": 2.0, "end": 4.0, "text": "b"},
+    ]
+    shifted = g.offset_segments(chunk_segs, 55.0)
+    assert shifted[0] == {"start": 55.0, "end": 57.0, "text": "a"}
+    assert shifted[1] == {"start": 57.0, "end": 59.0, "text": "b"}
+    # Pure — input untouched.
+    assert chunk_segs[0]["start"] == 0.0
+
+
+def test_offset_segments_shifts_word_timings_too():
+    segs = [{
+        "start": 0.0, "end": 1.0, "text": "hi",
+        "words": [{"start": 0.0, "end": 0.5, "word": "hi"}],
+    }]
+    shifted = g.offset_segments(segs, 10.0)
+    assert shifted[0]["words"][0]["start"] == 10.0
+    assert shifted[0]["words"][0]["end"] == 10.5
+
+
+def test_offset_segments_zero_is_copy():
+    segs = [{"start": 1.0, "end": 2.0, "text": "x"}]
+    out = g.offset_segments(segs, 0.0)
+    assert out == segs
+    assert out is not segs  # still a fresh copy
+
+
+# ---------------------------------------------------------------- offset->seconds
+
+
+def test_offset_to_seconds_timedelta():
+    assert g._offset_to_seconds(dt.timedelta(seconds=2, milliseconds=500)) == 2.5
+
+
+def test_offset_to_seconds_raw_duration_like():
+    dur = types.SimpleNamespace(seconds=3, nanos=500_000_000)
+    assert g._offset_to_seconds(dur) == pytest.approx(3.5)
+
+
+def test_offset_to_seconds_number_and_none():
+    assert g._offset_to_seconds(4.0) == 4.0
+    assert g._offset_to_seconds(None) == 0.0
+
+
+# ---------------------------------------------------------------- response parser
+
+
+def _word(word, start, end, *, conf=0.9, speaker=""):
+    return types.SimpleNamespace(
+        word=word,
+        start_offset=dt.timedelta(seconds=start),
+        end_offset=dt.timedelta(seconds=end),
+        confidence=conf,
+        speaker_label=speaker,
+    )
+
+
+def _result(transcript, words=(), result_end=0.0):
+    alt = types.SimpleNamespace(transcript=transcript, words=list(words))
+    return types.SimpleNamespace(
+        alternatives=[alt],
+        result_end_offset=dt.timedelta(seconds=result_end),
+    )
+
+
+def test_parse_results_text_only_uses_result_end_offset():
+    results = [
+        _result("hello there", result_end=2.0),
+        _result("second part", result_end=5.0),
+    ]
+    segs = g.parse_recognize_results(results, want_words=False)
+    assert len(segs) == 2
+    assert segs[0]["text"] == "hello there"
+    assert segs[0]["start"] == 0.0
+    assert segs[0]["end"] == 2.0
+    # Second segment advances from the previous end.
+    assert segs[1]["start"] == 2.0
+    assert segs[1]["end"] == 5.0
+    assert "words" not in segs[0]
+
+
+def test_parse_results_with_word_timings():
+    words = [_word("hello", 0.5, 1.0), _word("world", 1.0, 1.8)]
+    results = [_result("hello world", words=words)]
+    segs = g.parse_recognize_results(results, want_words=True)
+    assert len(segs) == 1
+    seg = segs[0]
+    assert seg["text"] == "hello world"
+    assert seg["start"] == pytest.approx(0.5)
+    assert seg["end"] == pytest.approx(1.8)
+    assert len(seg["words"]) == 2
+    assert seg["words"][0] == {
+        "start": 0.5, "end": 1.0, "word": "hello", "probability": 0.9,
+    }
+
+
+def test_parse_results_diarization_speaker_label():
+    words = [
+        _word("hi", 0.0, 0.4, speaker="1"),
+        _word("there", 0.4, 0.9, speaker="1"),
+    ]
+    results = [_result("hi there", words=words)]
+    segs = g.parse_recognize_results(results, want_words=True, want_speaker=True)
+    assert segs[0]["speaker"] == "1"
+    assert segs[0]["words"][0]["speaker"] == "1"
+
+
+def test_parse_results_skips_empty_alternatives():
+    empty = types.SimpleNamespace(alternatives=[])
+    results = [empty, _result("kept", result_end=1.0)]
+    segs = g.parse_recognize_results(results)
+    assert len(segs) == 1
+    assert segs[0]["text"] == "kept"
+
+
+def test_parse_results_empty_input():
+    assert g.parse_recognize_results(None) == []
+    assert g.parse_recognize_results([]) == []
+
+
+# ---------------------------------------------------------------- config builder
+
+
+class _FakeCloudSpeech:
+    """A stand-in for google.cloud.speech_v2.types.cloud_speech.
+
+    Each "class" just records the kwargs it was built with so the test can
+    assert the exact field shapes without importing the google libs.
+    """
+
+    class AutoDetectDecodingConfig:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class SpeakerDiarizationConfig:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class RecognitionFeatures:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+            self.kw = kw
+
+    class RecognitionConfig:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+            self.kw = kw
+
+
+def test_build_recognition_config_words_no_diarization():
+    cfg = g.build_recognition_config(
+        _FakeCloudSpeech,
+        language_code="en-US",
+        model="long",
+        want_words=True,
+        diarization=False,
+    )
+    assert cfg.language_codes == ["en-US"]
+    assert cfg.model == "long"
+    assert cfg.features.enable_word_time_offsets is True
+    assert cfg.features.enable_word_confidence is True
+    assert "diarization_config" not in cfg.features.kw
+    assert isinstance(cfg.auto_decoding_config, _FakeCloudSpeech.AutoDetectDecodingConfig)
+
+
+def test_build_recognition_config_diarization_forces_word_offsets():
+    cfg = g.build_recognition_config(
+        _FakeCloudSpeech,
+        language_code="auto",
+        model="long",
+        want_words=False,
+        diarization=True,
+        min_speakers=2,
+        max_speakers=6,
+    )
+    # Diarization must force word offsets on (labels ride the word stream).
+    assert cfg.features.enable_word_time_offsets is True
+    diar = cfg.features.kw["diarization_config"]
+    assert diar.kw == {"min_speaker_count": 2, "max_speaker_count": 6}
+
+
+def test_build_recognition_config_diarization_zero_speakers_omitted():
+    cfg = g.build_recognition_config(
+        _FakeCloudSpeech,
+        language_code="auto",
+        model="long",
+        want_words=False,
+        diarization=True,
+        min_speakers=0,
+        max_speakers=0,
+    )
+    # 0 means "let Google decide" — don't send the bound at all.
+    diar = cfg.features.kw["diarization_config"]
+    assert diar.kw == {}
+
+
+# ---------------------------------------------------------------- language norm
+
+
+def test_normalize_language_code():
+    assert g.normalize_language_code("en") == "en"
+    assert g.normalize_language_code("EN-US") == "en-us"
+    assert g.normalize_language_code(None) == "auto"
+    assert g.normalize_language_code("") == "auto"
+
+
+# ---------------------------------------------------------------- usage accumulator
+
+
+def test_accumulate_minutes_same_month_adds():
+    now = dt.datetime(2026, 6, 6, tzinfo=dt.timezone.utc)
+    total, marker = g.accumulate_minutes(10.0, "2026-06", 5.0, now=now)
+    assert total == 15.0
+    assert marker == "2026-06"
+
+
+def test_accumulate_minutes_new_month_resets():
+    now = dt.datetime(2026, 7, 1, tzinfo=dt.timezone.utc)
+    total, marker = g.accumulate_minutes(58.0, "2026-06", 3.0, now=now)
+    assert total == 3.0  # reset to just the new run
+    assert marker == "2026-07"
+
+
+def test_accumulate_minutes_empty_marker_starts_fresh():
+    now = dt.datetime(2026, 6, 6, tzinfo=dt.timezone.utc)
+    total, marker = g.accumulate_minutes(0.0, "", 2.0, now=now)
+    assert total == 2.0
+    assert marker == "2026-06"
+
+
+def test_month_marker_format():
+    assert g.month_marker(dt.datetime(2026, 1, 9)) == "2026-01"
+    assert g.month_marker(dt.datetime(2026, 12, 31)) == "2026-12"
+
+
+# ---------------------------------------------------------------- error classifier
+
+
+def test_classify_error_permission_denied():
+    class PermissionDenied(Exception):
+        pass
+    msg = g.classify_google_error(
+        PermissionDenied("Cloud Speech-to-Text API has not been used")
+    )
+    assert "Enable the Speech-to-Text API" in msg
+
+
+def test_classify_error_unauthenticated():
+    class Unauthenticated(Exception):
+        pass
+    msg = g.classify_google_error(Unauthenticated("invalid JWT signature"))
+    assert "credentials" in msg.lower()
+
+
+def test_classify_error_quota():
+    class ResourceExhausted(Exception):
+        pass
+    msg = g.classify_google_error(ResourceExhausted("Quota exceeded"))
+    assert "quota" in msg.lower()
+
+
+def test_classify_error_invalid_argument_model():
+    class InvalidArgument(Exception):
+        pass
+    msg = g.classify_google_error(InvalidArgument("Unsupported model: bogus"))
+    assert "model" in msg.lower()
+
+
+def test_classify_error_offline():
+    class ServiceUnavailable(Exception):
+        pass
+    msg = g.classify_google_error(ServiceUnavailable("failed to connect"))
+    assert "reach Google" in msg
+
+
+def test_classify_error_generic_fallback():
+    msg = g.classify_google_error(ValueError("something weird"))
+    assert "Google Cloud transcription failed" in msg
+
+
+# ---------------------------------------------------------------- minutes helper
+
+
+def test_minutes_for_uses_known_duration_without_probe():
+    # 90 s known duration -> 1.5 min, no ffprobe call.
+    assert g._minutes_for("/does/not/exist.wav", 90.0) == pytest.approx(1.5)
+
+
+# ---------------------------------------------------------------- load()
+
+
+def test_load_missing_credentials_clear_error(monkeypatch):
+    # Pretend the google lib IS importable so load() reaches the JSON check.
+    monkeypatch.setattr(g, "runtime_available", lambda: True)
+    backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
+    statuses: list[str] = []
+    ok = backend.load(statuses.append)
+    assert ok is False
+    assert backend.is_ready() is False
+    err = backend.get_error() or ""
+    assert "service-account JSON" in err
+    assert statuses and "JSON" in statuses[-1]
+
+
+def test_load_bad_json_path_clear_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(g, "runtime_available", lambda: True)
+    backend = g.GoogleCloudSttBackend(
+        config={"gcloud_stt_credentials_json": str(tmp_path / "missing.json")}
+    )
+    ok = backend.load()
+    assert ok is False
+    assert "not found" in (backend.get_error() or "")
+
+
+def test_load_lib_missing_clear_error(monkeypatch):
+    monkeypatch.setattr(g, "runtime_available", lambda: False)
+    backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
+    ok = backend.load()
+    assert ok is False
+    assert "not installed" in (backend.get_error() or "").lower()
+
+
+def test_load_ok_with_valid_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(g, "runtime_available", lambda: True)
+    path = _write_sa_json(tmp_path)
+    backend = g.GoogleCloudSttBackend(
+        config={"gcloud_stt_credentials_json": path, "gcloud_stt_model": "long"}
+    )
+    ok = backend.load()
+    assert ok is True
+    assert backend.is_ready() is True
+    assert backend.get_error() is None
+
+
+def test_load_batch_without_bucket_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(g, "runtime_available", lambda: True)
+    path = _write_sa_json(tmp_path)
+    backend = g.GoogleCloudSttBackend(config={
+        "gcloud_stt_credentials_json": path,
+        "gcloud_stt_batch_mode": True,
+        "gcloud_stt_bucket": "",
+    })
+    ok = backend.load()
+    assert ok is False
+    assert "bucket" in (backend.get_error() or "").lower()
+
+
+def test_transcribe_without_load_raises(monkeypatch):
+    monkeypatch.setattr(g, "runtime_available", lambda: False)
+    backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
+    with pytest.raises(RuntimeError):
+        backend.transcribe_to_segments("/tmp/whatever.wav", duration=1.0)
+
+
+# ---------------------------------------------------------------- factory
+
+
+def test_get_backend_returns_google_cloud_stt():
+    b = get_backend("google_cloud_stt")
+    assert b.name == "google_cloud_stt"
+
+
+def test_get_backend_keeps_gemini_cloud_stt_separate():
+    b = get_backend("cloud_stt")
+    assert b.name == "cloud_stt"
+
+
+# ---------------------------------------------------------------- batch parse
+
+
+def test_parse_batch_response_inline_by_uri():
+    backend = g.GoogleCloudSttBackend(config={})
+    uri = "gs://bucket/whisper-project/123-audio.flac"
+    transcript = types.SimpleNamespace(
+        results=[_result("batch words here", result_end=4.0)]
+    )
+    file_result = types.SimpleNamespace(transcript=transcript)
+    response = types.SimpleNamespace(results={uri: file_result})
+    segs = backend._parse_batch_response(response, uri, want_words=False)
+    assert len(segs) == 1
+    assert segs[0]["text"] == "batch words here"
+
+
+def test_parse_batch_response_falls_back_to_single_value():
+    backend = g.GoogleCloudSttBackend(config={})
+    transcript = types.SimpleNamespace(
+        results=[_result("only result", result_end=2.0)]
+    )
+    file_result = types.SimpleNamespace(transcript=transcript)
+    # URI key doesn't match -> single-value fallback.
+    response = types.SimpleNamespace(results={"gs://other/x": file_result})
+    segs = backend._parse_batch_response(
+        response, "gs://bucket/mine.flac", want_words=False
+    )
+    assert segs[0]["text"] == "only result"
+
+
+def test_parse_batch_response_no_results_raises():
+    backend = g.GoogleCloudSttBackend(config={})
+    response = types.SimpleNamespace(results={})
+    with pytest.raises(RuntimeError) as e:
+        backend._parse_batch_response(response, "gs://b/x.flac", want_words=False)
+    assert "no batch results" in str(e.value).lower()
