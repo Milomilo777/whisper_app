@@ -24,6 +24,38 @@ file, and the LAN server — both fixed, tested, and pushed to `macos-ci` (NOT m
 These are committed on local `master` too. Remember: push only to `macos-ci` (fetch+rebase via a
 temp branch, never force-push) until the macOS build is green and we merge `macos-ci` → `master` once.
 
+### Round 2 (2026-06-07) — frontend edge-case hunt + macOS-report triage (on `macos-ci`)
+A 50-agent frontend edge-case hunt (16 confirmed) + a 6-cluster triage of the macOS session's
+`BUG_CANDIDATES_for_feature_session.md` (88 candidates, their auto-voting was unreliable so each was
+re-verified against CURRENT code). FIXED + tested + pushed:
+- **Frontend (HIGH):** re-run/resume of a CLIPPED transcription dropped clip_start/clip_end →
+  transcribed the whole file (now preserved in _rerun_task/resume_task/_bulk_rerun/_bulk_resume);
+  App.cancel() now ignores a terminal task; worker_exit marks a PAUSED task as error (was stranded).
+- **Time-range hardening:** start ≥ media duration now errors clearly; pre-slice temp file removed via try/finally.
+- **Security/privacy:** Gemini API key moved from the `?key=` URL into the `x-goog-api-key` header
+  (was leaking into logs); uploaded Gemini Files-API blobs now DELETED after use.
+- **Cloud accounting:** usage minutes no longer billed on cancel / over-counted (bills actual transcribed seconds).
+- **Concurrency:** worker `emit()` now serialises stdout writes (was interleaving/corrupting the frozen
+  JSON protocol); the stdin reader enforces the 1 MB cap WHILE reading (OOM guard was defeated).
+- **LAN server:** multipart text fields placed AFTER the file part were dropped (every upload silently
+  fell back to [srt]+auto) — now re-scanned; a trailing-CRLF appended 2 junk bytes to saved media — fixed.
+- **Data loss:** Recorder.stop() no longer truncates the WAV a still-alive capture thread is writing.
+- **POSIX:** kill_process_tree(force=False) now escalates SIGTERM→SIGKILL (only Windows did before);
+  checkpoint key is now case-folded so resume works on case-insensitive FS.
+Tests in tests/core/test_fixpack_{frontend_edges,cloud,gcloud,worker,server,recorder,proc_ckpt}.py.
+`macos-ci` tip after this round: ~4697e3a. pyright app core 0/0/0.
+
+**REMAINING BACKLOG (lower priority — verified-real but not yet fixed):**
+- Frontend mediums/lows from the hunt (full list in the wf_c7cb6f91-7a6 run output): duplicate concurrent
+  re-run of the same file; stale SMTV episode reused for a different URL; tiling grid size not persisted;
+  server port out-of-range not clamped on Start; directory/empty/non-http/multi-URL drop = silent no-op;
+  download slider knobs can cross; Advanced "Download now" leaks the mousewheel bind; LAN-IP-detect-fail
+  status wording.
+- macOS-report mediums/lows (41+26) NOT triaged this round — e.g. _checkpoint language-validation (needs a
+  signature change), config UNC `.exists()` startup hang, smtv CDN filename sanitize, history lastrowid=0,
+  tiling lock/zombie reaping, writers/base time formatting. Triage each against CURRENT code (lines are stale)
+  before fixing; many may already be guarded.
+
 ## 0. Latest session — Phases 1–6 + 44-bug audit fixpack → v1.3.8 (2026-06-06)
 
 **Current state: v1.3.8.** On top of the v1.3.7 baseline: Phase 1 (9
