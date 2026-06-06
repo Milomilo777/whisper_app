@@ -1,0 +1,91 @@
+name: macOS test matrix (edge cases + atomic)
+
+# Comprehensive cloud testing while the local VM is unavailable. Fires only on a
+# push to the dedicated `macos-test` branch (not on macos-ci), so it never runs by
+# accident. Two jobs:
+#   1) matrix  — full hermetic suite across BOTH macOS arches (Apple Silicon +
+#                Intel) and ALL supported Python versions (3.11/3.12/3.13).
+#   2) atomic  — every test file in its OWN pytest process, to surface
+#                order-dependent / global-state-leak bugs that hide in a full run.
+# Deps are installed "slim" (no stable-ts/torch) to match the shipped build and to
+# avoid the torch-has-no-recent-macOS-x86_64-wheel install failure on Intel.
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos-test]
+
+jobs:
+  matrix:
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Toolchain
+        run: |
+          python --version
+          python -c "import tkinter; print('Tk', tkinter.TkVersion)"
+          uname -m
+      - name: Install slim deps + dev tools
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pytest pytest-cov responses
+      - name: Pytest (hermetic, no smoke)
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: python -m pytest tests/ --ignore=tests/smoke -q
+
+  atomic:
+    name: atomic per-file isolation + pyright (macos-15 / py3.12)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install slim deps + dev tools
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pytest pyright responses
+      - name: Pyright (static type-check)
+        continue-on-error: true
+        run: python -m pyright app core
+      - name: Atomic — each test file in its own pytest process
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: |
+          set +e
+          fail=0
+          failed_files=""
+          for f in $(find tests -name 'test_*.py' -not -path 'tests/smoke/*' | sort); do
+            echo "::group::$f"
+            python -m pytest "$f" -q
+            rc=$?
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              echo "ATOMIC FAIL: $f (rc=$rc)"
+              failed_files="$failed_files $f"
+              fail=1
+            fi
+          done
+          echo "================ ATOMIC SUMMARY ================"
+          if [ "$fail" -eq 0 ]; then
+            echo "OK — all test files pass in full isolation (no order-dependence)."
+          else
+            echo "Files that FAIL in isolation (order-dependent / global-state leak):"
+            echo "$failed_files"
+          fi
+          exit $fail
