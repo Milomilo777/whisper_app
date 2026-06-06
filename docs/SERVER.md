@@ -10,7 +10,32 @@ third-party dependency — it is built on the Python standard library
 > reach the address (and present the optional token) can submit jobs and
 > download results. Run it on a network you trust.
 
-## Start it
+## Easiest: the one-click toggle in the app
+
+Open the desktop app and go to the **Web / LAN access** tab. There is one
+obvious button:
+
+- Click **Start web access** to turn it on. The status line shows the
+  address to open in a browser. Click **Open in browser** to open it on
+  this PC, or type the address on a phone / another computer.
+- Click **Stop web access** to turn it off. It is off until you start it,
+  and it stops automatically when you close the app.
+
+Three optional settings on that tab (all remembered for next time):
+
+- **Port** — the number after the address. Leave the default (8765) unless
+  it is already in use; if it is, the app quietly picks a free port and
+  shows you the one it used.
+- **Share on local network** — OFF (default) = only this computer can use it
+  and there is no firewall prompt. ON = other devices on your network can
+  use it; Windows may ask to allow it through the firewall — click **Allow**.
+- **Access password (optional)** — leave blank for none. If you set one,
+  share it; the other person adds `?token=YOURPASSWORD` to the address.
+
+The rest of this document describes the equivalent command-line server for
+headless / scripted use.
+
+## Start it from the command line
 
 ```
 python gui.py serve
@@ -94,10 +119,19 @@ The page (served at `/`) lets a user:
 
 ## Configuration
 
-Two keys in `config.json` (see [CONFIG.md](CONFIG.md)) set the defaults the
-`serve` subcommand uses when its flags are omitted:
+Keys in `config.json` (see [CONFIG.md](CONFIG.md)) hold the defaults. The
+`serve` subcommand reads `server_port` / `server_max_upload_mb` when its
+flags are omitted; the in-app **Web / LAN access** toggle reads and writes
+all four:
 
 ```
-server_port            8765
-server_max_upload_mb   512
+server_port            8765     listen port
+server_max_upload_mb   512      single-upload cap (MB)
+server_share_lan       false    in-app toggle: bind 0.0.0.0 (LAN) vs 127.0.0.1
+server_token           ""       optional access password (cleartext; see below)
 ```
+
+`server_token` is stored in cleartext, the same as cookies / API keys —
+`config.json` is per-user under `%LOCALAPPDATA%\WhisperProject` and is not
+encrypted. The CLI's `--lan` / `--token` flags are the command-line
+equivalents of `server_share_lan` / `server_token`.

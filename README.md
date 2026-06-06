@@ -168,17 +168,23 @@ diagram) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (prose).
 
 ### Optional: share it on your local network
 
-Instead of installing the app on every machine, you can run a small
-stdlib-only HTTP server and let people on a trusted network transcribe
-through a browser:
+Instead of installing the app on every machine, you can let people on a
+trusted network transcribe through a browser. The easiest way is the
+**Web / LAN access** tab in the app: one button turns it on/off, with an
+optional port, a "Share on local network" checkbox, and an optional access
+password — all explained in plain language right on the tab.
+
+For headless / scripted use there is an equivalent command-line server
+(same stdlib-only HTTP engine):
 
 ```cmd
 python gui.py serve          REM loopback only (no firewall prompt)
 python gui.py serve --lan    REM share on the LAN (allow the firewall prompt)
 ```
 
-See [docs/SERVER.md](docs/SERVER.md) for routes, the upload cap, the
-optional `--token`, and the trusted-network security caveats.
+See [docs/SERVER.md](docs/SERVER.md) for the one-click toggle, routes, the
+upload cap, the optional password / `--token`, and the trusted-network
+security caveats.
 
 ---
 
