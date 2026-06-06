@@ -31,8 +31,17 @@ def fmt_lrc_time(seconds: float) -> str:
         seconds = 0.0
     if not math.isfinite(float(seconds)) or seconds < 0:
         seconds = 0.0
-    minutes, rem = divmod(seconds, 60)
-    return f"[{int(minutes):02d}:{rem:05.2f}]"
+    # Quantise to integer centiseconds *before* splitting into
+    # minutes/seconds — mirroring fmt_srt_time. Rounding the float
+    # remainder after divmod (the old approach) let a value just below a
+    # whole minute, e.g. 59.996, keep minutes=0 and round the remainder
+    # up to "60.00", emitting the illegal "[00:60.00]" (the ss field must
+    # be 0-59). Carrying the carry through the divmod rolls it into the
+    # next minute -> "[01:00.00]".
+    total_cs = int(round(seconds * 100))
+    minutes, rem_cs = divmod(total_cs, 6000)
+    sec, cs = divmod(rem_cs, 100)
+    return f"[{minutes:02d}:{sec:02d}.{cs:02d}]"
 
 
 def normalize_text(text: str) -> str:
