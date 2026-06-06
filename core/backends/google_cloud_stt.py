@@ -64,6 +64,7 @@ import datetime as _dt
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -703,12 +704,14 @@ def classify_google_error(exc: Exception) -> str:
             "fresh JSON key from the Google Cloud console and pick it in "
             f"Advanced > Backend. [{name}] {msg[:300]}"
         )
-    # Quota / rate limit.
+    # Quota / rate limit. Match 429 as a standalone status token (\b429\b),
+    # not any message merely CONTAINING the digits — a file name like
+    # "clip_4290.mp4" or an offset "1429" must not be read as a rate limit.
     if (
         "ResourceExhausted" in name
         or "resource_exhausted" in low
         or "quota" in low
-        or "429" in msg
+        or re.search(r"\b429\b", msg) is not None
         or "rate limit" in low
     ):
         return (

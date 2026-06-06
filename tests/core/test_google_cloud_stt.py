@@ -654,6 +654,19 @@ def test_classify_error_quota():
     assert "quota" in msg.lower()
 
 
+def test_classify_error_standalone_429_is_quota():
+    """A standalone 429 status token reads as a rate limit."""
+    msg = g.classify_google_error(Exception("HTTP 429: Too Many Requests"))
+    assert "quota / rate limit" in msg.lower()
+
+
+def test_classify_error_embedded_429_is_not_quota():
+    """Digits 429 inside a larger number/filename must NOT read as quota."""
+    msg = g.classify_google_error(ValueError("failed to process clip_4290.mp4"))
+    assert "Google Cloud transcription failed" in msg
+    assert "rate limit" not in msg.lower()
+
+
 def test_classify_error_invalid_argument_model():
     class InvalidArgument(Exception):
         pass
