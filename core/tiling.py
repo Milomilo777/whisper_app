@@ -40,7 +40,7 @@ import urllib.request
 from typing import Any, Callable, Optional
 
 from . import monitors as _monitors
-from ._proc import kill_process_tree
+from ._proc import kill_process_tree, new_session_kwargs
 from .paths import bin_dir, bundled_binary
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,13 @@ QUALITY_CHOICES = ["Auto", "1080p", "720p", "480p", "360p", "240p", "144p"]
 
 # On Windows, keep helper processes (yt-dlp / ffplay) from flashing a console
 # window. ffplay still shows its own SDL video window. No effect on other OSes.
+#
+# IMPORTANT: the long-lived yt-dlp / ffplay players are spawned with
+# ``new_session_kwargs()`` (NOT this bare flag) so that on POSIX they LEAD
+# THEIR OWN process group — otherwise ``core._proc.kill_process_tree`` would
+# ``os.killpg`` the app's OWN group on Stop and take the whole app down with
+# it. This constant is only for the short-lived, NOT-tree-killed
+# ``yt-dlp -U`` / ``pip`` self-heal ``subprocess.run`` calls below.
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 StatusCb = Callable[[str, str], None]  # (message, color)
@@ -579,7 +586,9 @@ class TilingController:
         ytdlp = subprocess.Popen(
             self._yt_dlp_argv(yt_path),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            creationflags=_CREATE_NO_WINDOW,
+            # CREATE_NO_WINDOW on Windows; start_new_session=True on POSIX so
+            # kill_process_tree can killpg this child's OWN group (not the app's).
+            **new_session_kwargs(),
         )
         # Drain yt-dlp stderr into a ring buffer so the log can say WHY a
         # session dropped (HTTP 403, format gone, geo-block, …).
@@ -601,7 +610,8 @@ class TilingController:
                     subprocess.Popen(
                         self._ffplay_argv(ff_path, targets[0], True, muted),
                         stdin=ytdlp.stdout, stderr=subprocess.DEVNULL,
-                        creationflags=_CREATE_NO_WINDOW,
+                        # See yt-dlp spawn: own session/group for safe teardown.
+                        **new_session_kwargs(),
                     )
                 ]
                 # Let ffplay own the read end so yt-dlp gets SIGPIPE if it dies.
@@ -617,7 +627,8 @@ class TilingController:
                     proc = subprocess.Popen(
                         self._ffplay_argv(ff_path, mon, False, muted or i > 0),
                         stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                        creationflags=_CREATE_NO_WINDOW,
+                        # See yt-dlp spawn: own session/group for safe teardown.
+                        **new_session_kwargs(),
                     )
                     c: dict[str, Any] = {
                         "proc": proc,
