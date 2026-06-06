@@ -1,0 +1,34 @@
+name: macOS real E2E (tiny model)
+
+# Closes the biggest functional gap: a REAL transcription on a real Mac, using
+# genuine macOS `say` speech + the ~75 MB faster-whisper `tiny` model (no 3 GB
+# shipped model) + the project's real output writers. Fires on a push to the
+# dedicated `macos-e2e` branch (or workflow_dispatch).
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos-e2e]
+
+jobs:
+  e2e:
+    name: real tiny-model transcription (macos-15 / py3.12)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install slim deps (faster-whisper is in requirements)
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+      - name: Generate real speech with macOS `say`, convert to 16k mono WAV
+        run: |
+          brew install ffmpeg
+          say -o clip.aiff "the quick brown fox jumps over the lazy dog. pack my box with five dozen liquor jugs."
+          ffmpeg -hide_banner -loglevel error -i clip.aiff -ar 16000 -ac 1 -y clip.wav
+          ls -la clip.aiff clip.wav
+      - name: Real E2E — transcribe with tiny + run the project's writers
+        run: python tools/e2e_tiny_macos.py clip.wav
