@@ -39,10 +39,19 @@ def count_words(text: str) -> int:
 
 
 def count_words_in_segments(segments: list[dict] | None) -> int:
-    """Total words across a faster-whisper segment list's ``text`` fields."""
+    """Total words across a faster-whisper segment list's ``text`` fields.
+
+    A non-string / missing ``text`` counts as 0 words. ``str(None)`` is
+    ``"None"`` which would otherwise be miscounted as one real word.
+    """
     if not segments:
         return 0
-    return sum(count_words(str(s.get("text", ""))) for s in segments)
+    total = 0
+    for s in segments:
+        text = s.get("text", "")
+        if isinstance(text, str):
+            total += count_words(text)
+    return total
 
 
 def audio_duration_from_segments(segments: list[dict] | None) -> float:

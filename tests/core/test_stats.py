@@ -88,6 +88,21 @@ def test_count_words_in_segments():
     assert stats.count_words_in_segments(None) == 0
 
 
+def test_count_words_in_segments_ignores_non_string_text():
+    """A None / non-string / missing text counts as 0 words, not 1.
+
+    Regression: str(None) -> "None" was previously counted as one word.
+    """
+    segs = [
+        {"text": "one two"},
+        {"text": None},        # was miscounted as 1 ("None")
+        {},                    # missing key
+        {"text": 123},         # non-string
+        {"text": "three"},
+    ]
+    assert stats.count_words_in_segments(segs) == 3  # type: ignore[list-item]
+
+
 def test_audio_duration_from_segments():
     segs = [{"start": 0.0, "end": 2.0}, {"start": 2.0, "end": 6.5}]
     assert stats.audio_duration_from_segments(segs) == pytest.approx(6.5)
