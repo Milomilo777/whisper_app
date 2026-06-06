@@ -1292,6 +1292,35 @@ def _clip_timestamps_arg(task: TranscriptionTask) -> str | None:
     return f"{start_s}"
 
 
+def _shift_segments(segments: Any, offset: float) -> Any:
+    """Yield faster-whisper segments shifted by ``+offset`` seconds.
+
+    Used by the time-range path: we transcribe a PRE-SLICED span (whose times
+    start at 0) and shift the results back onto the ORIGINAL file timeline by
+    ``clip_start``. faster_whisper segments are NamedTuples, so we ``_replace``
+    start/end (and each word's start/end) without mutating the engine's objects.
+    """
+    for s in segments:
+        words = getattr(s, "words", None)
+        if words:
+            try:
+                words = [
+                    w._replace(start=w.start + offset, end=w.end + offset)
+                    for w in words
+                ]
+            except Exception:  # noqa: BLE001 — best-effort word shift
+                pass
+        try:
+            yield s._replace(start=s.start + offset, end=s.end + offset, words=words)
+        except Exception:  # noqa: BLE001 — non-NamedTuple fallback
+            try:
+                s.start = s.start + offset
+                s.end = s.end + offset
+            except Exception:  # noqa: BLE001
+                pass
+            yield s
+
+
 def transcribe(
     task: TranscriptionTask,
     progress_cb: Callable[[int], None] | None = None,
@@ -1369,8 +1398,9 @@ def transcribe(
         runner: Any = PIPELINE if use_batched else MODEL
         if use_batched:
             transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
-        if clip is not None:
-            transcribe_kwargs["clip_timestamps"] = clip
+        # NOTE: a time range is NOT passed as clip_timestamps (that makes
+        # faster-whisper decode the WHOLE file — it hung on a multi-hour
+        # input). It is handled by pre-slicing just below; see _clip_slice_path.
 
         # Progress is measured against the clip span — segment timestamps
         # stay on the original timeline, so without this the bar would
@@ -1383,7 +1413,35 @@ def transcribe(
             else duration
         )
 
+        # Time range: pre-slice the [clip_start, clip_end] span with a fast
+        # ffmpeg -ss seek and transcribe ONLY that slice — not clip_timestamps,
+        # which decodes the whole file (it hung on a multi-hour input). The
+        # slice is only read during runner.transcribe(); delete it right after.
+        # Results are shifted back by +clip_start to stay on the original
+        # timeline, and outputs keep the original file's base name.
+        _ts_offset = 0.0
+        _clip_slice_path = ""
+        if clip is not None:
+            _clip_end_arg = (
+                float(_clip_end_v)
+                if (_clip_end_v and float(_clip_end_v) > _clip_start_s)
+                else None
+            )
+            _clip_slice_path = _slice_audio_from(
+                audio_path, _clip_start_s, _checkpoint.partials_dir(),
+                end_seconds=_clip_end_arg,
+            )
+            audio_path = _clip_slice_path
+            _ts_offset = _clip_start_s
+
         segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
+        if _clip_slice_path:
+            try:
+                os.remove(_clip_slice_path)
+            except OSError:
+                pass
+        if _ts_offset:
+            segments = _shift_segments(segments, _ts_offset)
 
         if getattr(info, "language", None):
             lang_code = str(info.language)
