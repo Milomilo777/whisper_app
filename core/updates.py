@@ -77,6 +77,13 @@ def _version_tuple(version: str) -> tuple[int, ...]:
     leading digit contributes ``0`` and STOPS parsing the rest, so a
     wildly malformed tag degrades to a short tuple instead of raising.
     Returns ``()`` for an empty / all-garbage string.
+
+    ``str.isdigit()`` is broader than ``int()`` will accept: it also
+    matches Unicode digits such as superscripts (``²``) and other exotic
+    digit code points that ``int()`` rejects with ``ValueError``. The
+    ``int()`` conversion is therefore guarded so such a tag degrades to a
+    short tuple (the offending component ends the numeric prefix) instead
+    of raising — preserving the never-raise contract of the public API.
     """
     s = version.strip()
     if s[:1] in ("v", "V"):
@@ -92,7 +99,13 @@ def _version_tuple(version: str) -> tuple[int, ...]:
         if not digits:
             # First non-numeric component ends the numeric prefix.
             break
-        parts.append(int(digits))
+        try:
+            value = int(digits)
+        except ValueError:
+            # ``isdigit()`` accepted a Unicode digit (e.g. a superscript)
+            # that ``int()`` cannot parse. Stop here rather than raise.
+            break
+        parts.append(value)
     return tuple(parts)
 
 
