@@ -416,6 +416,12 @@ class TilingController:
         self._stderr_thread: Optional[threading.Thread] = None
         self._stderr_tail: Optional[Any] = None
         self._worker: Optional[threading.Thread] = None
+        # Monotonic run token. Every start() bumps it; each worker captures the
+        # value it was launched with and exits the moment self._generation no
+        # longer matches — so a revived OLD worker (e.g. one that was wedged in
+        # a slow self-heal while start() flipped _play_flag back to True for a
+        # NEW run) cannot keep looping over the new run's shared state.
+        self._generation = 0
 
         # Run options (set on start, read by the worker thread).
         self._play_flag = False
@@ -471,12 +477,21 @@ class TilingController:
                 "full ffmpeg build) or install ffmpeg so ffplay is on PATH."
             )
         self.stop()
-        # Wait for any prior worker to finish its non-blocking teardown so we
-        # don't run two engines at once (fast — the old worker only joins its
-        # own short-lived helper threads).
+        # Bump the run token FIRST: even if the prior worker is wedged (slow
+        # self-heal / long backoff) and outlives the join below, it will see a
+        # newer self._generation and exit instead of reviving its loop now that
+        # _play_flag goes back to True for THIS run. (The race the generation
+        # guard closes; the join below is only a best-effort tidy wait.)
+        self._generation += 1
+        # Best-effort wait for any prior worker to finish its non-blocking
+        # teardown so we don't run two engines at once. Poll in short slices up
+        # to a hard cap; if it is still wedged we proceed anyway — correctness
+        # no longer depends on it exiting first (the generation guard does).
         old = self._worker
-        if old is not None and old.is_alive() and old is not threading.current_thread():
-            old.join(timeout=5)
+        if old is not None and old is not threading.current_thread():
+            deadline = time.monotonic() + 5.0
+            while old.is_alive() and time.monotonic() < deadline:
+                old.join(timeout=0.25)
 
         self._url = url
         self._divisions = _clamp_divisions(divisions)
@@ -499,7 +514,10 @@ class TilingController:
             + (" (multi-monitor)" if multi_monitor else "")
             + "…"
         )
-        self._worker = threading.Thread(target=self._run, daemon=True)
+        my_gen = self._generation
+        self._worker = threading.Thread(
+            target=self._run, args=(my_gen,), daemon=True
+        )
         self._worker.start()
 
     def stop(self) -> None:
@@ -570,10 +588,21 @@ class TilingController:
             + audio + win
         )
 
+    # ---- run-token / activity guard --------------------------------------- #
+    def _is_active(self, my_gen: int) -> bool:
+        """True while THIS worker's run is the live one.
+
+        A worker stays active only while a stop has not been requested AND its
+        launch generation is still the current one. A revived OLD worker (whose
+        generation was superseded by a newer start()) returns False here and
+        exits, even though _play_flag is back to True for the new run.
+        """
+        return bool(self._play_flag) and self._generation == my_gen
+
     # ---- process lifecycle ------------------------------------------------ #
-    def _start(self) -> None:
+    def _start(self, my_gen: int) -> None:
         self._terminate(join=True)  # clean slate
-        if not self._play_flag:
+        if not self._is_active(my_gen):
             return
 
         # Re-resolve tools every start so a transient absence self-recovers.
@@ -662,10 +691,11 @@ class TilingController:
                 kill_process_tree(p, force=True)
             raise
 
-        # Publish under the lock. If a Stop landed during the launch, tear the
-        # freshly-built pipeline down instead of leaving it orphaned.
+        # Publish under the lock. If a Stop landed during the launch (or a new
+        # run superseded this worker), tear the freshly-built pipeline down
+        # instead of leaving it orphaned.
         with self._lock:
-            published = self._play_flag
+            published = self._is_active(my_gen)
             if published:
                 self._ytdlp = ytdlp
                 self._stderr_tail = stderr_tail
@@ -853,31 +883,55 @@ class TilingController:
                         )
 
     # ---- worker entry point ----------------------------------------------- #
-    def _wait_backoff(self, backoff: float) -> None:
+    def _wait_backoff(self, backoff: float, my_gen: int) -> None:
         waited = 0.0
-        while self._play_flag and waited < backoff:
+        while self._is_active(my_gen) and waited < backoff:
             time.sleep(0.25)
             waited += 0.25
 
-    def _run(self) -> None:
+    def _run_self_heal(self, my_gen: int) -> None:
+        """Run the in-loop self-heal off the worker thread, then wait for it in
+        short interruptible slices.
+
+        ``_self_heal_ytdlp`` blocks for up to ~8 minutes in ``yt-dlp -U`` / pip
+        (neither child is tree-tracked, so _terminate can't kill them). Running
+        it synchronously here would make Stop unresponsive for that whole
+        window. Instead spawn it on a daemon thread (same pattern as
+        :meth:`update_yt_dlp`) and poll our run token, so a Stop / new-run flips
+        _is_active and the worker returns to its backoff promptly while the
+        self-heal finishes in the background.
+        """
+        done = threading.Event()
+
+        def worker() -> None:
+            try:
+                self._self_heal_ytdlp(self._log)
+            finally:
+                done.set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        while self._is_active(my_gen) and not done.wait(timeout=0.25):
+            pass
+
+    def _run(self, my_gen: int) -> None:
         self._status("Starting…", "#b06a00")
         backoff: float = 3
-        while self._play_flag:
+        while self._is_active(my_gen):
             ran_for = 0.0
             reason = "an unknown reason"
             try:
-                self._start()
-                if not self._play_flag:
+                self._start(my_gen)
+                if not self._is_active(my_gen):
                     break
                 started = time.time()
                 announced = False
                 self._status("Connecting…", "#b06a00")
-                while self._play_flag and self._alive():
+                while self._is_active(my_gen) and self._alive():
                     if not announced and (time.time() - started) >= self.ANNOUNCE_AFTER:
                         announced = True
                         self._status("Playing", "#1f7a1f")
                     time.sleep(0.4)
-                if not self._play_flag:
+                if not self._is_active(my_gen):
                     break
                 ran_for = time.time() - started
                 reason = self._death_reason()
@@ -915,10 +969,18 @@ class TilingController:
             # days into an outage is still picked up.
             if self._fail_count % self.REHEAL_EVERY == 0:
                 self._healed = False
-            if self._fail_count >= self.HEAL_AFTER_FAILS and not self._healed:
+            # Skip self-heal when a stop / new run is already pending: launching
+            # an ~8-minute yt-dlp -U/pip on the way out is pure waste.
+            if (
+                self._fail_count >= self.HEAL_AFTER_FAILS
+                and not self._healed
+                and self._is_active(my_gen)
+            ):
                 self._healed = True
                 logger.info("tiling self-heal: updating yt-dlp")
-                self._self_heal_ytdlp(self._log)
+                # Off-thread + interruptible so Stop stays responsive even while
+                # the (blocking, up-to-~8-min) yt-dlp -U / pip runs.
+                self._run_self_heal(my_gen)
 
             if self._fail_count >= self.OFFLINE_AFTER_FAILS:
                 self._status(
@@ -930,11 +992,19 @@ class TilingController:
                     "Reconnecting in {}s…".format(int(backoff)), "#b06a00"
                 )
 
-            self._wait_backoff(backoff)
+            self._wait_backoff(backoff, my_gen)
             backoff = next_backoff(backoff)
 
-        self._terminate(join=True)
-        self._status("Stopped.", "#666666")
+        # Terminal teardown. A superseded OLD worker must NOT run _terminate /
+        # touch shared state here: a NEWER run already owns self._ytdlp/_ffplay
+        # (its own _start began by tearing the old pipeline down), so a stray
+        # _terminate from this loser would kill the live run's processes and
+        # null the fields it just published — the corruption this guard closes.
+        # On a plain Stop the generation is unchanged, so we DO tear down and
+        # show "Stopped." as before.
+        if self._generation == my_gen:
+            self._terminate(join=True)
+            self._status("Stopped.", "#666666")
 
     def _self_heal_ytdlp(self, log: LogCb) -> None:
         """Update yt-dlp via ``-U`` with a pip fallback. Blocking; run on a

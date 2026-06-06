@@ -80,6 +80,64 @@ def _from_screeninfo() -> list[dict[str, Any]]:
     return mons
 
 
+# DPI_AWARENESS_CONTEXT sentinels (passed to SetThreadDpiAwarenessContext as
+# opaque pseudo-handles). PER_MONITOR_AWARE_V2 needs Win10 1703+; PER_MONITOR
+# AWARE is the 1607 fallback. See the _from_win32 docstring for why we only set
+# this for the THREAD, never the process.
+_DPI_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+_DPI_CONTEXT_PER_MONITOR_AWARE = -3
+
+
+class _ThreadDpiAware:
+    """Make ONLY the current thread per-monitor-DPI-aware for the duration of a
+    ``with`` block, restoring the previous context on exit.
+
+    This is the tightly-scoped fix for mixed-DPI monitor probing: a DPI-unaware
+    thread gets EnumDisplayMonitors/GetMonitorInfoW rectangles VIRTUALIZED to
+    the primary monitor's DPI, so a secondary screen at a different scale is
+    reported in the wrong coordinate space and ffplay is mis-placed/-sized.
+    Setting the awareness on the THREAD (``SetThreadDpiAwarenessContext``, not
+    the process) yields true physical rectangles for the enumeration WITHOUT
+    changing process-wide awareness — so it never alters Tk's rendering or any
+    other thread. Restored in ``__exit__`` so the thread is left exactly as
+    found. A best-effort no-op when the API is missing (pre-1607) or fails.
+    """
+
+    def __init__(self) -> None:
+        self._prev: Any = None
+        self._fn: Any = None
+
+    def __enter__(self) -> "_ThreadDpiAware":
+        if os.name != "nt":
+            return self
+        try:
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            fn = getattr(user32, "SetThreadDpiAwarenessContext", None)
+            if fn is None:  # Windows < 10 1607
+                return self
+            fn.restype = ctypes.c_void_p
+            fn.argtypes = [ctypes.c_void_p]
+            for ctx in (
+                _DPI_CONTEXT_PER_MONITOR_AWARE_V2,
+                _DPI_CONTEXT_PER_MONITOR_AWARE,
+            ):
+                prev = fn(ctypes.c_void_p(ctx))
+                if prev:  # non-NULL => the context was accepted
+                    self._fn = fn
+                    self._prev = prev
+                    break
+        except Exception:  # noqa: BLE001 — never let DPI tuning break detection
+            logger.debug("SetThreadDpiAwarenessContext unavailable", exc_info=True)
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        if self._fn is not None and self._prev is not None:
+            try:
+                self._fn(ctypes.c_void_p(self._prev))
+            except Exception:  # noqa: BLE001
+                logger.debug("restoring thread DPI context failed", exc_info=True)
+
+
 def _from_win32() -> list[dict[str, Any]]:
     """Enumerate monitors via the Win32 API using only the stdlib (ctypes).
 
@@ -87,6 +145,12 @@ def _from_win32() -> list[dict[str, Any]]:
     ``EnumDisplayMonitors`` + ``GetMonitorInfoW``; the primary monitor is
     the one whose flags carry ``MONITORINFOF_PRIMARY`` (1). No-op (returns
     ``[]``) off Windows or on any ctypes/API failure.
+
+    The enumeration runs inside :class:`_ThreadDpiAware` so the rectangles are
+    true physical pixels even on a mixed-DPI multi-monitor desktop (a 150%
+    laptop panel + a 100% external). The awareness is scoped to THIS thread for
+    the call only and restored afterward — it never changes process-wide DPI
+    awareness, so Tk rendering elsewhere is untouched.
     """
     if os.name != "nt":
         return []
@@ -147,9 +211,12 @@ def _from_win32() -> list[dict[str, Any]]:
         return 1  # keep enumerating
 
     try:
-        ctypes.windll.user32.EnumDisplayMonitors(  # type: ignore[attr-defined]
-            None, None, monitor_enum_proc(_callback), 0
-        )
+        # Per-monitor DPI awareness for THIS thread only (restored on exit), so
+        # secondary screens at a different scale report true physical rects.
+        with _ThreadDpiAware():
+            ctypes.windll.user32.EnumDisplayMonitors(  # type: ignore[attr-defined]
+                None, None, monitor_enum_proc(_callback), 0
+            )
     except Exception:  # noqa: BLE001 — API unavailable / failed
         logger.debug("EnumDisplayMonitors failed", exc_info=True)
         return []
@@ -164,18 +231,25 @@ def _single_fallback() -> list[dict[str, Any]]:
 
 
 def list_monitors() -> list[Monitor]:
-    """Return all monitors as plain dicts, ordered left-to-right by x position.
+    """Return all monitors as plain dicts, ordered left-to-right, top-to-bottom.
 
-    ``index`` is assigned AFTER the left-to-right sort, so it is the spatial
-    position (0 = left-most), which is far more stable across reboots / driver
+    ``index`` is assigned AFTER the sort, so it is the spatial position
+    (0 = top-left-most), which is far more stable across reboots / driver
     updates / hotplug than the OS enumeration order would be — a saved monitor
     selection then keeps pointing at the same physical screen.
+
+    The sort key is the FULL tuple ``(x, y, name)`` — not x alone — so the order
+    is total and deterministic even for monitors that share an x coordinate
+    (vertically stacked / column-aligned displays). Sorting by x only would
+    leave equal-x monitors in OS enumeration order, which is NOT stable across
+    reboots / hotplug, so two stacked screens could swap indices between
+    sessions and silently send playback to the wrong physical screen.
 
     Tries :func:`_from_screeninfo`, then :func:`_from_win32`, then a single
     1920x1080 fallback so the app/playback worker never crashes on detection.
     """
     raw = _from_screeninfo() or _from_win32() or _single_fallback()
-    raw.sort(key=lambda mm: mm["x"])
+    raw.sort(key=lambda mm: (mm["x"], mm["y"], mm.get("name") or ""))
     out: list[Monitor] = []
     for i, m in enumerate(raw):
         name = m.get("name") or "Display {}".format(i + 1)
