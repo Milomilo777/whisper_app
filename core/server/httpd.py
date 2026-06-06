@@ -45,6 +45,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import math
 import os
 import urllib.parse
 from http import HTTPStatus
@@ -431,7 +432,15 @@ def _coerce_float(value: Any) -> float | None:
 
 def _coerce_int(value: Any) -> int | None:
     f = _coerce_float(value)
-    return None if f is None else int(f)
+    # Reject non-finite floats. A client int option of 'inf' / 'nan' /
+    # '1e400' parses to inf/nan here, and int(inf) raises OverflowError while
+    # int(nan) raises ValueError — unhandled in the POST handler, that drops
+    # the connection (RemoteDisconnected) instead of a clean 400. Returning
+    # None lets normalize_options skip the option cleanly, mirroring the
+    # float01 clamp that already neutralises inf/nan.
+    if f is None or not math.isfinite(f):
+        return None
+    return int(f)
 
 
 def normalize_options(raw: Any) -> dict[str, Any]:
