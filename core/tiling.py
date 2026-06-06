@@ -686,9 +686,30 @@ class TilingController:
                 )
                 fanout_thread.start()
         except Exception:
+            # A launch failure mid-setup (e.g. a later monitor's ffplay) must
+            # not orphan the consumer-writer threads already started for the
+            # earlier monitors: across reconnect attempts those daemon threads
+            # would leak unbounded. Mirror the not-published teardown — signal
+            # the fan-out stop_event and wake/join each started consumer (its
+            # ffplay is killed below, and a None sentinel unblocks a writer
+            # idle on an empty queue) — BEFORE re-raising.
+            if stop_event:
+                stop_event.set()
             kill_process_tree(ytdlp, force=True)
             for p in ffplay:
                 kill_process_tree(p, force=True)
+            for c in consumers:
+                try:
+                    c["q"].put_nowait(None)
+                except Exception:  # noqa: BLE001
+                    pass
+            for c in consumers:
+                t = c.get("thread")
+                if t is not None:
+                    try:
+                        t.join(timeout=2)
+                    except Exception:  # noqa: BLE001
+                        pass
             raise
 
         # Publish under the lock. If a Stop landed during the launch (or a new
