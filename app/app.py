@@ -2623,11 +2623,17 @@ class App(tk.Tk):
                 from core.server import HOST_LAN, HOST_LOOPBACK, ServerHandle
                 host = HOST_LAN if share_lan else HOST_LOOPBACK
                 handle = ServerHandle()
+                # Register the handle BEFORE start(). start() can block on a
+                # model load ("Starting…"); if the user quits during that
+                # window, _shutdown_server_on_exit must already see the handle
+                # so it can stop it. The handle is start-idempotent and
+                # is_running() stays False until the serve thread is alive, so
+                # an early stop() on a not-yet-started handle is a safe no-op.
+                self._server_handle = handle
                 # auto_port: if the chosen port is busy the handle falls
                 # back to a free one rather than failing — we report what
                 # it actually bound.
                 handle.start(host, port, token, max_upload_mb=max_upload_mb)
-                self._server_handle = handle
                 urls = handle.urls()
                 bound_port = handle.port
                 self.post_to_main(
