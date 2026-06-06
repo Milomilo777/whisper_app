@@ -23,6 +23,7 @@ import threading
 import time
 from typing import Callable
 
+from . import _proc
 from .config import user_cache_dir
 
 # Hard cap on a single on-demand pip install. A stalled PyPI / proxy
@@ -52,6 +53,17 @@ FEATURES: dict[str, tuple[str, list[str]]] = {
         ["google-cloud-speech", "google-cloud-storage"],
     ),
 }
+
+
+def _rm(path: str) -> None:
+    """Best-effort remove a file or directory tree. Never raises."""
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        elif os.path.lexists(path):
+            os.unlink(path)
+    except OSError:
+        pass
 
 
 def extras_dir() -> str:
@@ -126,6 +138,12 @@ def install(
             "--target", staging, "--upgrade", *pkgs,
         ]
         try:
+            # Spawn with new_session_kwargs() (start_new_session=True on
+            # POSIX so pip leads its own process group; CREATE_NO_WINDOW on
+            # Windows) so the WHOLE pip tree — pip shells out to a build
+            # backend / downloaders — can be reaped on cancel/timeout
+            # instead of orphaning grandchildren that hold the staging dir
+            # open and defeat the rmtree below.
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -133,7 +151,7 @@ def install(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                **_proc.new_session_kwargs(),
             )
         except Exception as e:  # noqa: BLE001
             shutil.rmtree(staging, ignore_errors=True)
@@ -174,13 +192,20 @@ def install(
                 break
 
         if aborted:
-            for _stop in (proc.terminate, proc.kill):
+            # Reap the entire pip tree (build backend / downloader
+            # grandchildren), not just the immediate pip process —
+            # otherwise an orphan keeps the --target staging files open
+            # and the rmtree below silently fails on Windows, leaking a
+            # partial pylibs-stage-* dir.
+            _proc.kill_process_tree(proc, force=False)
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                _proc.kill_process_tree(proc, force=True)
                 try:
-                    _stop()
                     proc.wait(timeout=5)
-                    break
                 except Exception:  # noqa: BLE001
-                    continue
+                    pass
             reader.join(timeout=2)
             shutil.rmtree(staging, ignore_errors=True)
             return False
@@ -192,13 +217,55 @@ def install(
             shutil.rmtree(staging, ignore_errors=True)
             return False
 
-        # Merge the freshly-installed tree into the extras dir, then drop
-        # the staging copy. dirs_exist_ok merges over an existing sibling.
-        try:
-            shutil.copytree(staging, final_target, dirs_exist_ok=True)
-        except Exception as e:  # noqa: BLE001
+        # Merge the freshly-installed tree into the extras dir top-level
+        # entry by entry. A bare ``copytree(staging, final_target,
+        # dirs_exist_ok=True)`` is NOT atomic: if it fails partway (disk
+        # full, a locked .pyd already imported in the GUI, antivirus
+        # lock) it leaves the top-level package dir + __init__.py written
+        # but submodules missing. is_available()'s find_spec then sees
+        # the half-tree, returns True, the next install() short-circuits,
+        # and the real import crashes — exactly what staging was meant to
+        # prevent. Instead: copy each top-level entry into a temp name on
+        # the same volume and os.replace() it into place atomically; on
+        # ANY failure, remove from final_target every top-level entry
+        # that staging contributes, so no partial package is left behind.
+        staged_names = os.listdir(staging)
+        merged_ok = True
+        merge_err: Exception | None = None
+        for name in staged_names:
+            src = os.path.join(staging, name)
+            dst = os.path.join(final_target, name)
+            tmp = os.path.join(final_target, f".{name}.merge-{os.getpid()}")
+            try:
+                if os.path.exists(tmp):
+                    _rm(tmp)
+                if os.path.isdir(src):
+                    shutil.copytree(src, tmp)
+                else:
+                    shutil.copy2(src, tmp)
+                # os.replace is atomic on the same volume for files and
+                # for replacing a non-existent / file target. For an
+                # existing destination DIRECTORY it would fail, so remove
+                # the stale dir first (a re-install of the same feature)
+                # then move the freshly-staged copy into place.
+                if os.path.isdir(dst):
+                    _rm(dst)
+                elif os.path.exists(dst):
+                    os.unlink(dst)
+                os.replace(tmp, dst)
+            except Exception as e:  # noqa: BLE001
+                merged_ok = False
+                merge_err = e
+                _rm(tmp)
+                break
+
+        if not merged_ok:
             if log_cb:
-                log_cb(f"Could not finalise install: {e}")
+                log_cb(f"Could not finalise install: {merge_err}")
+            # Roll back: delete every top-level entry staging would have
+            # contributed so is_available() cannot observe a partial tree.
+            for name in staged_names:
+                _rm(os.path.join(final_target, name))
             shutil.rmtree(staging, ignore_errors=True)
             return False
         shutil.rmtree(staging, ignore_errors=True)

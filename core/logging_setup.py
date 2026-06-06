@@ -28,13 +28,24 @@ def _quiet_third_parties():
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def setup_logging(level: str = "INFO", stream=None):
-    """Configure the root logger. Idempotent; safe to call more than once."""
+def setup_logging(level: str = "INFO", stream=None, filename: str | None = None):
+    """Configure the root logger. Idempotent; safe to call more than once.
+
+    ``filename`` overrides the default ``app.log`` so a second process can
+    own its OWN log file. A ``RotatingFileHandler`` rolls over by renaming
+    the active file (app.log -> app.log.1); on Windows you cannot rename a
+    file another process still holds open, so when the GUI process and any
+    worker subprocess share one app.log the rollover raises
+    ``PermissionError`` (WinError 32), logging swallows it, the rotation
+    silently fails and the file grows past the 5 MB x 3 cap. The worker
+    therefore passes a per-process name (``worker-<pid>.log``) so each
+    process rotates its own file independently.
+    """
     global _configured
 
     log_dir = user_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / LOG_FILENAME
+    log_file = log_dir / (filename or LOG_FILENAME)
 
     root = logging.getLogger()
     numeric = getattr(logging, str(level).upper(), logging.INFO)
@@ -64,6 +75,15 @@ def setup_logging(level: str = "INFO", stream=None):
 
     _configured = True
     return log_file
+
+
+def worker_log_filename(pid: int | None = None) -> str:
+    """Per-process worker log name so each worker rotates its own file
+    instead of fighting the GUI process over a single shared app.log
+    (see ``setup_logging`` for the Windows-rename rationale)."""
+    import os
+
+    return f"worker-{pid if pid is not None else os.getpid()}.log"
 
 
 def get_ui_logger() -> logging.Logger:

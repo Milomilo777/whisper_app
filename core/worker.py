@@ -42,7 +42,7 @@ import time
 from typing import Any
 
 from .config import load_config
-from .logging_setup import setup_logging
+from .logging_setup import setup_logging, worker_log_filename
 from .task import TranscriptionTask
 from .transcriber import (
     get_effective_device,
@@ -136,7 +136,14 @@ def main() -> int:
     # fetch_online=False: the worker only needs log_level here; skip the
     # network round-trip so worker spawn is never blocked on the online
     # config fetch (the parent App passes the effective per-task config).
-    setup_logging(load_config(fetch_online=False).get("log_level", "INFO"))
+    # Use a per-process log file (worker-<pid>.log) rather than sharing
+    # the GUI's app.log: a RotatingFileHandler shared across processes
+    # cannot roll over on Windows (renaming a file another process holds
+    # open raises PermissionError), silently defeating the 5 MB x 3 cap.
+    setup_logging(
+        load_config(fetch_online=False).get("log_level", "INFO"),
+        filename=worker_log_filename(),
+    )
     # Make on-demand-installed optional packages (stable-ts → torch)
     # importable; alignment runs in THIS worker process.
     try:
@@ -231,6 +238,15 @@ def main() -> int:
                     command = json.loads(line)
                 except json.JSONDecodeError as e:
                     emit("error", message=f"Invalid worker command: {e}")
+                    continue
+                # A line can be valid JSON yet not an object (e.g. 5,
+                # "foo", [1,2], null). The protocol is "one JSON object
+                # per line"; calling .get on a non-dict raises
+                # AttributeError, which would escape this loop, hit the
+                # finally (cmd_queue.put(None)) and tear the whole worker
+                # down on a single malformed line. Ignore it loudly.
+                if not isinstance(command, dict):
+                    emit("error", message="worker command must be a JSON object")
                     continue
                 if command.get("action") in ("cancel", "pause", "resume"):
                     _apply_control(command["action"])

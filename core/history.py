@@ -124,14 +124,25 @@ class HistoryDB:
             logger.exception("history.db word_count migration failed: %s", e)
 
     def _check_integrity_or_recover(self) -> None:
-        """Run ``PRAGMA integrity_check``. On a non-``ok`` result,
-        close the connection, rename the DB to ``.corrupt``, and
-        recreate it fresh. The user loses history but the app
-        launches; trade-off chosen over a launch crash."""
+        """Run ``PRAGMA integrity_check``. On a non-``ok`` result, close the
+        connection, rename the DB to ``.corrupt``, and recreate it fresh. The
+        user loses history but the app launches; trade-off chosen over a
+        launch crash.
+
+        A badly-mangled file makes the PRAGMA itself raise
+        ``sqlite3.DatabaseError`` ("file is not a database") rather than
+        returning a non-``ok`` row — that is ALSO corruption and must trigger
+        the same recover-aside, otherwise __init__ would fall through to
+        ``executescript(SCHEMA)`` and crash on the malformed file at launch.
+        """
         try:
             row = self._conn.execute("PRAGMA integrity_check").fetchone()
         except sqlite3.Error as e:
-            logger.exception("history.db integrity_check raised: %s", e)
+            logger.error(
+                "history.db integrity_check raised (%s); treating as "
+                "corruption and recovering.", e,
+            )
+            self._recover_corrupt_db(str(e))
             return
         if row is None:
             return
@@ -143,18 +154,58 @@ class HistoryDB:
             "history.db failed integrity_check (%s); renaming to "
             ".corrupt and recreating.", result,
         )
+        self._recover_corrupt_db(result)
+
+    def _recover_corrupt_db(self, reason: str) -> None:
+        """Move the corrupt DB (and its WAL/SHM sidecars) aside and reopen a
+        fresh one. Never raises — the goal is to always leave ``self._conn``
+        pointing at a usable, clean database so __init__ can build the schema.
+        """
+        logger.debug("history.db recovery starting (reason=%s)", reason)
         try:
             self._conn.close()
         except sqlite3.Error:
             pass
+        import os as _os
         corrupt_path = str(self.path) + ".corrupt"
+        moved_main = False
         try:
-            import os as _os
             if _os.path.exists(corrupt_path):
                 _os.unlink(corrupt_path)
             _os.replace(str(self.path), corrupt_path)
+            moved_main = True
         except OSError as e:
             logger.error("Could not move corrupt history.db aside: %s", e)
+        # WAL mode was enabled before the integrity check, so the
+        # ``-wal`` / ``-shm`` sidecars exist next to the corrupt DB. If
+        # they are left behind, SQLite may try to recover/checkpoint them
+        # into the fresh DB (salt/checksum mismatch can re-introduce
+        # malformed frames). Move them aside with the corrupt main file,
+        # or delete them when that is not possible.
+        for ext in ("-wal", "-shm"):
+            side = str(self.path) + ext
+            try:
+                if moved_main:
+                    _os.replace(side, corrupt_path + ext)
+                else:
+                    _os.unlink(side)
+            except OSError:
+                try:
+                    _os.unlink(side)
+                except OSError:
+                    pass
+        # If the main DB could NOT be moved aside (e.g. a Windows file
+        # lock on os.replace), do not silently reopen the still-corrupt
+        # file — reopening it and running executescript() on a malformed
+        # DB raises an uncaught DatabaseError in __init__ and crashes the
+        # app on launch. Delete it in place so a clean DB is created.
+        if not moved_main:
+            try:
+                _os.unlink(str(self.path))
+            except OSError as e:
+                logger.error(
+                    "Could not delete corrupt history.db in place: %s", e
+                )
         # Reopen fresh.
         self._conn = sqlite3.connect(
             str(self.path), check_same_thread=False
@@ -217,10 +268,17 @@ class HistoryDB:
             )
 
     def list_downloads(self, limit: int = 200) -> list[dict[str, Any]]:
-        cur = self._conn.execute(
-            "SELECT * FROM downloads ORDER BY id DESC LIMIT ?", (limit,)
-        )
-        return [_row_to_dict(r, ("output_paths",)) for r in cur.fetchall()]
+        # Serialise the read through _write_lock (same rationale as
+        # stats()): list_* runs on the Tk main thread while download /
+        # transcription worker threads concurrently run insert_/finish_
+        # on the SAME shared self._conn. Two simultaneous executes on one
+        # sqlite3.Connection are documented-unsafe and can raise
+        # sqlite3.ProgrammingError or return a half-stepped result set.
+        with self._write_lock:
+            cur = self._conn.execute(
+                "SELECT * FROM downloads ORDER BY id DESC LIMIT ?", (limit,)
+            )
+            return [_row_to_dict(r, ("output_paths",)) for r in cur.fetchall()]
 
     # ----- transcriptions ---------------------------------------------
 
@@ -253,10 +311,12 @@ class HistoryDB:
             )
 
     def list_transcriptions(self, limit: int = 200) -> list[dict[str, Any]]:
-        cur = self._conn.execute(
-            "SELECT * FROM transcriptions ORDER BY id DESC LIMIT ?", (limit,)
-        )
-        return [_row_to_dict(r, ("output_paths",)) for r in cur.fetchall()]
+        # Serialise the read through _write_lock — see list_downloads().
+        with self._write_lock:
+            cur = self._conn.execute(
+                "SELECT * FROM transcriptions ORDER BY id DESC LIMIT ?", (limit,)
+            )
+            return [_row_to_dict(r, ("output_paths",)) for r in cur.fetchall()]
 
     # ----- maintenance -------------------------------------------------
 
