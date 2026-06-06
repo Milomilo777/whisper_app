@@ -933,11 +933,21 @@ class JobRequestHandler(BaseHTTPRequestHandler):
     ) -> tuple[str, int, int, dict[str, str]]:
         """Locate the file part's ``[start, end)`` range + text fields on disk.
 
-        Reads only a bounded leading window (headers + small text fields + the
-        file part's header) and a bounded trailing window (the closing
-        boundary) of the temp file — never the payload. Returns
+        Reads only a bounded leading window (headers + the file part's header)
+        and a bounded trailing window (the closing boundary + any text parts
+        placed after the file) of the temp file — never the payload. Returns
         ``(filename, file_start, file_end, fields)`` with ``file_start == -1``
         when no file part is present.
+
+        The server's own page (and a browser ``FormData`` in general) sends the
+        ``file`` part FIRST and the small ``formats`` / ``language`` / option
+        text fields AFTER it, so for any real (multi-MB) upload those fields lie
+        BEYOND the leading window. We therefore scan the trailing window not
+        just for the file part's true end but for those after-file text fields
+        too, merging them with anything the leading window already yielded. The
+        file's true end is the FIRST delimiter after its body start (the one
+        closing the file part) — using the LAST delimiter would swallow the
+        trailing text-field parts into the saved media as junk bytes.
         """
         delim = b"--" + boundary.encode("latin-1")
         with open(tmp_path, "rb") as f:
@@ -945,11 +955,13 @@ class JobRequestHandler(BaseHTTPRequestHandler):
             parts = scan_multipart_file(head, boundary)
             file_start = parts.file_start
             file_end = parts.file_end
+            fields = dict(parts.fields)
             if file_start < 0:
-                return "", -1, -1, dict(parts.fields)
+                return "", -1, -1, fields
             # If the closing boundary lay beyond the leading window, the scan
-            # reported file_end at the window edge. Find the TRUE end from a
-            # bounded tail window so the payload is never read into RAM.
+            # reported file_end at the window edge. Find the TRUE end + recover
+            # any after-file text fields from a bounded tail window so the
+            # payload is never read into RAM.
             if file_end >= len(head) and len(head) < size:
                 tail_len = min(size, _MULTIPART_TAIL_WINDOW)
                 # Never read back past the file part's start, so we don't
@@ -958,7 +970,11 @@ class JobRequestHandler(BaseHTTPRequestHandler):
                 tail_start = max(file_start, size - tail_len)
                 f.seek(tail_start)
                 tail = f.read(size - tail_start)
-                idx = tail.rfind(delim)
+                # The file part's body ends at the FIRST delimiter after its
+                # start, NOT the last: any text-field parts sit between that
+                # first delimiter and the closing boundary, and must not be
+                # copied into the media file.
+                idx = tail.find(delim)
                 if idx == -1:
                     file_end = size
                 else:
@@ -967,7 +983,13 @@ class JobRequestHandler(BaseHTTPRequestHandler):
                     if tail[idx - 2:idx] == b"\r\n":
                         end -= 2
                     file_end = end
-            return parts.filename, file_start, file_end, dict(parts.fields)
+                    # Re-scan the tail from the file part's closing delimiter so
+                    # the after-file text fields (formats/language/options) are
+                    # recovered. Leading-window fields, if any, take precedence.
+                    tail_parts = scan_multipart_file(tail[idx:], boundary)
+                    for key, val in tail_parts.fields.items():
+                        fields.setdefault(key, val)
+            return parts.filename, file_start, file_end, fields
 
     @staticmethod
     def _copy_range(src_path: str, dst_path: str, start: int, end: int) -> None:
