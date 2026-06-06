@@ -9,12 +9,27 @@ Routes
   GET  /                          -> the bundled static index.html
   GET  /api/health                -> {status, version, formats}
   GET  /api/formats               -> {formats}
+  GET  /api/options               -> {formats, languages, diarization_available,
+                                     backend_switchable}
+  GET  /api/jobs                  -> {jobs: [{id, status, progress, paused,
+                                     source, formats, created_at}, ...]}
   POST /api/jobs                  -> create a job (multipart upload OR
-                                     JSON {"url", "formats", "language"})
-                                     -> {job_id}
-  GET  /api/jobs/<id>             -> {status, progress, error, outputs}
+                                     JSON {"url", "formats", "language", and
+                                     the advanced options}) -> {job_id}
+  GET  /api/jobs/<id>             -> {status, progress, paused, error, outputs}
+  GET  /api/jobs/<id>/outputs     -> {outputs: [{fmt, name}, ...]}
   GET  /api/jobs/<id>/result?fmt= -> stream the written output as download
   POST /api/jobs/<id>/cancel      -> flag the job for cancellation
+  POST /api/jobs/<id>/pause       -> pause the running/queued job
+  POST /api/jobs/<id>/resume      -> resume a paused job
+
+Per-job advanced options (vad / diarization / word-timestamps / demucs /
+hallucination / chapters) are validated by the pure ``normalize_options``
+seam and written into a per-job ``.whisperproject.json`` so the engine's
+per-folder override mechanism applies them to THAT job only. ``clip_start`` /
+``clip_end`` map onto the task's clip attributes. ``transcribe_backend`` is
+intentionally NOT per-job switchable over the web (cloud engines upload audio
++ need keys; an alt-backend switch is a heavy server-global reload).
 
 Design constraints honoured here:
   * No third-party deps — only the standard library.
@@ -27,6 +42,7 @@ Design constraints honoured here:
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -81,16 +97,17 @@ def parse_route(method: str, raw_path: str) -> Route:
         return Route(m, "health", "", query)
     if parts == ["api", "formats"]:
         return Route(m, "formats", "", query)
+    if parts == ["api", "options"]:
+        return Route(m, "options", "", query)
     if parts == ["api", "jobs"]:
+        # GET = list, POST = create — the handler dispatches on method.
         return Route(m, "jobs", "", query)
     if len(parts) == 3 and parts[0] == "api" and parts[1] == "jobs":
         return Route(m, "job", parts[2], query)
     if (len(parts) == 4 and parts[0] == "api" and parts[1] == "jobs"
-            and parts[3] == "result"):
-        return Route(m, "result", parts[2], query)
-    if (len(parts) == 4 and parts[0] == "api" and parts[1] == "jobs"
-            and parts[3] == "cancel"):
-        return Route(m, "cancel", parts[2], query)
+            and parts[3] in ("result", "cancel", "pause", "resume",
+                             "outputs")):
+        return Route(m, parts[3], parts[2], query)
     return Route(m, "unknown", "", query)
 
 
@@ -99,11 +116,16 @@ def token_ok(expected: str, header_token: str | None,
     """Auth gate. When no token is configured, every request passes.
 
     Otherwise the request must present the matching secret via the
-    ``X-Auth-Token`` header OR the ``?token=`` query parameter.
+    ``X-Auth-Token`` header OR the ``?token=`` query parameter. The compare
+    is constant-time (``hmac.compare_digest``) so a remote client can't
+    recover the token byte-by-byte via response-timing.
     """
     if not expected:
         return True
-    return header_token == expected or query_token == expected
+    for candidate in (header_token, query_token):
+        if candidate is not None and hmac.compare_digest(candidate, expected):
+            return True
+    return False
 
 
 def parse_multipart_filename(content_type: str | None) -> str:
@@ -200,6 +222,147 @@ def normalize_formats(raw: Any) -> list[str]:
     return deduped or ["srt"]
 
 
+# Curated language whitelist for the web UI, mirroring the desktop's
+# ~26-language list (app.domain.languages.SUBTITLE_LANGUAGES) but expressed as
+# the ISO codes Whisper accepts directly (core.transcriber._normalize_language
+# would otherwise strip BCP-47 region/script suffixes). ``""`` = auto-detect.
+# core stays Tk-free, so this is duplicated here rather than imported from app/.
+WEB_LANGUAGE_CODES: tuple[str, ...] = (
+    "", "en", "ar", "zh", "cs", "da", "nl", "fi", "fr", "de", "el", "he",
+    "hi", "hu", "id", "it", "ja", "ko", "no", "fa", "pl", "pt", "ro", "ru",
+    "es", "sv", "th", "tr", "uk", "vi",
+)
+
+
+def normalize_language(raw: Any) -> str:
+    """Coerce a language hint to a whitelisted ISO code, or "" (auto-detect).
+
+    Lower-cases, strips a BCP-47 region/script suffix (``en-US`` -> ``en``),
+    and validates against :data:`WEB_LANGUAGE_CODES`. Unknown / blank values
+    return "" so the job auto-detects rather than failing. Pure + testable.
+    """
+    if not isinstance(raw, str):
+        return ""
+    code = raw.strip().lower()
+    if not code:
+        return ""
+    # Split a region/script suffix the way the engine's normaliser does.
+    code = code.replace("_", "-").split("-", 1)[0]
+    return code if code in WEB_LANGUAGE_CODES else ""
+
+
+# Per-job options the web may set. Each entry is (key, kind) where kind drives
+# the coercion in normalize_options. These mirror the desktop Advanced dialog /
+# Transcribe-tab keys and are written into the per-job .whisperproject.json so
+# the engine's per-folder override mechanism applies them to THAT job only.
+#
+# ``transcribe_backend`` is deliberately ABSENT: switching backend per job can
+# trigger an alt-backend (re)load (a heavy, server-global side effect) and the
+# cloud backends upload audio to third parties + need keys. Backend stays a
+# server-level setting. ``clip_start`` / ``clip_end`` are handled separately
+# (they map onto the _ServerTask attributes, not the override file).
+_OPTION_SPEC: tuple[tuple[str, str], ...] = (
+    ("vad_enabled", "bool"),
+    ("vad_threshold", "float01"),
+    ("vad_min_silence_ms", "int_nonneg"),
+    ("word_timestamps", "bool"),
+    ("diarization_enabled", "bool"),
+    ("diarization_num_speakers", "int_speakers"),
+    ("demucs_enabled", "bool"),
+    ("hallucination_detect_enabled", "bool"),
+    ("auto_chapters_enabled", "bool"),
+)
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low in ("1", "true", "yes", "on"):
+            return True
+        if low in ("0", "false", "no", "off", ""):
+            return False
+    return None
+
+
+def _coerce_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
+    f = _coerce_float(value)
+    return None if f is None else int(f)
+
+
+def normalize_options(raw: Any) -> dict[str, Any]:
+    """Whitelist + type-coerce a raw options blob into a validated dict.
+
+    PURE (no I/O). Whitelists exactly the keys in :data:`_OPTION_SPEC`,
+    coerces each to the right type, drops unknown keys and any value that
+    can't be coerced. The result is shaped to overlay DEFAULT_CONFIG, so
+    writing it into a per-job ``.whisperproject.json`` passes
+    ``core.config._validate_overrides`` cleanly. Mirrors the existing
+    ``normalize_formats`` / ``parse_*`` seams so it is unit-testable without
+    a socket.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, kind in _OPTION_SPEC:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if kind == "bool":
+            coerced: Any = _coerce_bool(value)
+        elif kind == "float01":
+            f = _coerce_float(value)
+            coerced = None if f is None else max(0.0, min(1.0, f))
+        elif kind == "int_nonneg":
+            i = _coerce_int(value)
+            coerced = None if i is None else max(0, i)
+        elif kind == "int_speakers":
+            # -1 = auto-cluster (the engine's sentinel); otherwise >= 1.
+            i = _coerce_int(value)
+            if i is None:
+                coerced = None
+            else:
+                coerced = -1 if i < 1 else i
+        else:  # pragma: no cover - guarded by the static spec
+            coerced = None
+        if coerced is not None:
+            out[key] = coerced
+    return out
+
+
+def parse_clip(raw_start: Any, raw_end: Any) -> tuple[float | None, float | None]:
+    """Validate a clip window into ``(clip_start, clip_end)`` seconds.
+
+    Either may be ``None`` (omit that bound). A non-positive start is treated
+    as no start; an end at/<= the start is dropped (no valid window). Pure.
+    """
+    start = _coerce_float(raw_start)
+    end = _coerce_float(raw_end)
+    if start is not None and start <= 0.0:
+        start = None
+    if end is not None and end <= 0.0:
+        end = None
+    if start is not None and end is not None and end <= start:
+        end = None
+    return start, end
+
+
 # --- the HTTP server ---------------------------------------------------------
 
 class JobHTTPServer(ThreadingHTTPServer):
@@ -293,16 +456,54 @@ class JobRequestHandler(BaseHTTPRequestHandler):
             })
         elif route.name == "formats":
             self._send_json(HTTPStatus.OK, {"formats": supported_formats()})
+        elif route.name == "options":
+            self._send_json(HTTPStatus.OK, self._options_payload())
+        elif route.name == "jobs":
+            # GET /api/jobs -> the live job list.
+            self._send_json(HTTPStatus.OK,
+                            {"jobs": self._srv.manager.list()})
         elif route.name == "job":
             job = self._srv.manager.get(route.job_id)
             if job is None:
                 self._send_error_json(HTTPStatus.NOT_FOUND, "no such job")
             else:
                 self._send_json(HTTPStatus.OK, job.public_dict())
+        elif route.name == "outputs":
+            job = self._srv.manager.get(route.job_id)
+            if job is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "no such job")
+            else:
+                self._send_json(HTTPStatus.OK, {
+                    "job_id": job.job_id,
+                    "outputs": [{"fmt": fmt, "name": os.path.basename(p)}
+                                for fmt, p in job.outputs],
+                })
         elif route.name == "result":
             self._serve_result(route)
         else:
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
+
+    def _options_payload(self) -> dict[str, Any]:
+        """Describe formats, languages, and available backends for the page.
+
+        Backend availability is probed cheaply (no model load); diarization
+        availability gates whether the page offers the "Identify speakers"
+        toggle. Defensive: any probe failure degrades to "unavailable".
+        """
+        try:
+            from core import diarization as _diar
+            diar_available = bool(_diar.is_available())
+        except Exception:  # noqa: BLE001
+            diar_available = False
+        return {
+            "formats": supported_formats(),
+            "languages": list(WEB_LANGUAGE_CODES),
+            "diarization_available": diar_available,
+            # Backend is a server-level setting and NOT switchable per job
+            # over the web (cloud engines need keys + upload audio; an
+            # alt-backend switch is a heavy server-global reload).
+            "backend_switchable": False,
+        }
 
     def _serve_index(self) -> None:
         path = os.path.join(_STATIC_DIR, "index.html")
@@ -348,19 +549,75 @@ class JobRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         route = self._route()
         if not self._authed(route):
-            self._send_error_json(HTTPStatus.UNAUTHORIZED, "auth required")
+            # Drain the declared body before replying. Under HTTP/1.1
+            # keep-alive an unread request body desyncs the connection —
+            # the next request would read this body's leftover bytes. We
+            # send Connection: close as a belt-and-braces guard too.
+            self._reject_post_early(HTTPStatus.UNAUTHORIZED, "auth required")
             return
         if route.name == "jobs":
             self._create_job()
         elif route.name == "cancel":
+            self._drain_declared_body()
             ok = self._srv.manager.cancel(route.job_id)
             if ok:
                 self._send_json(HTTPStatus.OK, {"cancelled": route.job_id})
             else:
                 self._send_error_json(
                     HTTPStatus.NOT_FOUND, "no such active job")
+        elif route.name == "pause":
+            self._drain_declared_body()
+            ok = self._srv.manager.pause(route.job_id)
+            if ok:
+                self._send_json(HTTPStatus.OK, {"paused": route.job_id})
+            else:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND, "no such active job")
+        elif route.name == "resume":
+            self._drain_declared_body()
+            ok = self._srv.manager.resume(route.job_id)
+            if ok:
+                self._send_json(HTTPStatus.OK, {"resumed": route.job_id})
+            else:
+                self._send_error_json(
+                    HTTPStatus.NOT_FOUND, "no such active job")
         else:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
+            self._reject_post_early(HTTPStatus.NOT_FOUND, "not found")
+
+    def _declared_length(self) -> int:
+        """The non-negative Content-Length, or 0 when absent / malformed."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            return 0
+        return length if length > 0 else 0
+
+    def _drain_declared_body(self) -> None:
+        """Consume the request body for a control POST that carries one.
+
+        cancel/pause/resume take no body, but a client may still send one
+        (or a stray Content-Length); draining keeps keep-alive in sync.
+        """
+        length = self._declared_length()
+        if length:
+            self._drain_body(length)
+
+    def _reject_post_early(self, status: int, message: str) -> None:
+        """Reject a POST before reading its body, keeping HTTP/1.1 in sync.
+
+        Drains the declared Content-Length, then replies with
+        Connection: close. Without the drain, the unread body would desync
+        a keep-alive connection (the historical 401-on-POST bug).
+        """
+        length = self._declared_length()
+        if length:
+            if length > self._srv.max_upload_bytes:
+                # Don't read an oversized body just to discard it on an early
+                # reject — close immediately instead.
+                self._send_error_json_close(status, message)
+                return
+            self._drain_body(length)
+        self._send_error_json_close(status, message)
 
     def _read_body(self) -> bytes | None:
         """Read the request body, enforcing the max-upload cap.
@@ -410,41 +667,134 @@ class JobRequestHandler(BaseHTTPRequestHandler):
     def _create_job(self) -> None:
         ctype = self.headers.get("Content-Type", "")
         boundary = parse_multipart_filename(ctype)
+        if boundary:
+            self._create_upload_job(boundary)
+        else:
+            self._create_url_job()
+
+    def _options_from(self, getter: Any) -> tuple[dict[str, Any], float | None,
+                                                  float | None]:
+        """Build (options, clip_start, clip_end) from a raw-field getter.
+
+        ``getter`` maps a key to its raw value (JSON dict or multipart fields).
+        Validated through the pure ``normalize_options`` / ``parse_clip``
+        seams so the caller never touches raw client data directly.
+        """
+        raw_opts = {key: getter(key) for key, _ in _OPTION_SPEC
+                    if getter(key) is not None}
+        options = normalize_options(raw_opts)
+        clip_start, clip_end = parse_clip(getter("clip_start"),
+                                          getter("clip_end"))
+        return options, clip_start, clip_end
+
+    def _create_upload_job(self, boundary: str) -> None:
+        """Stream a multipart upload to disk (never fully buffered in RAM).
+
+        Reads the raw body to a per-job temp file in 64 KB chunks, enforcing
+        the upload cap against Content-Length, then extracts the single
+        ``file`` part's bytes into the per-job media path and parses the small
+        text fields. The dead in-RAM ``extract_upload`` whole-body parser is
+        retained only as the PURE unit-test seam — the live path streams.
+        """
+        import tempfile
+
+        length = self._declared_length()
+        if length > self._srv.max_upload_bytes:
+            self._drain_body(length)
+            self._send_error_json_close(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                f"upload exceeds "
+                f"{self._srv.max_upload_bytes // (1024 * 1024)} MB cap",
+            )
+            return
+
+        manager = self._srv.manager
+        fd, tmp_path = tempfile.mkstemp(prefix="upload-", suffix=".part")
+        written = 0
+        try:
+            with os.fdopen(fd, "wb") as out:
+                remaining = length
+                chunk = 64 * 1024
+                while remaining > 0:
+                    buf = self.rfile.read(min(chunk, remaining))
+                    if not buf:
+                        break
+                    out.write(buf)
+                    written += len(buf)
+                    remaining -= len(buf)
+            # Hard cap guard even when Content-Length lied about the size.
+            if written > self._srv.max_upload_bytes:
+                self._send_error_json_close(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "upload too large")
+                return
+            with open(tmp_path, "rb") as f:
+                body = f.read()
+        except OSError as e:
+            self._send_error_json(HTTPStatus.BAD_REQUEST,
+                                  f"could not read upload: {e}")
+            return
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        filename, file_bytes, fields = extract_upload(body, boundary)
+        if not filename or not file_bytes:
+            self._send_error_json(
+                HTTPStatus.BAD_REQUEST, "no file part in upload")
+            return
+        formats = normalize_formats(fields.get("formats"))
+        language = normalize_language(fields.get("language", ""))
+        options, clip_start, clip_end = self._options_from(fields.get)
+        try:
+            # Stream the extracted file part to its final per-job location so
+            # it is never held in RAM a second time alongside the response.
+            job_id, media_path = manager.submit_upload_stream(
+                filename, formats, language, options=options,
+                clip_start=clip_start, clip_end=clip_end)
+            try:
+                with open(media_path, "wb") as f:
+                    f.write(file_bytes)
+            except OSError as e:
+                manager.discard(job_id)
+                self._send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR,
+                                      f"could not save upload: {e}")
+                return
+            manager.enqueue_upload(job_id)
+        except QueueFull as e:
+            self._send_error_json(HTTPStatus.SERVICE_UNAVAILABLE, str(e))
+            return
+        except ValueError as e:
+            self._send_error_json(HTTPStatus.BAD_REQUEST, str(e))
+            return
+        self._send_json(HTTPStatus.ACCEPTED, {"job_id": job_id})
+
+    def _create_url_job(self) -> None:
         body = self._read_body()
         if body is None:
             return  # error already sent (cap exceeded / bad length)
         manager = self._srv.manager
         try:
-            if boundary:
-                filename, file_bytes, fields = extract_upload(body, boundary)
-                if not filename or not file_bytes:
-                    self._send_error_json(
-                        HTTPStatus.BAD_REQUEST, "no file part in upload")
-                    return
-                formats = normalize_formats(fields.get("formats"))
-                language = fields.get("language", "")
-                job_id = manager.submit_upload(
-                    filename, file_bytes, formats, language)
-            else:
-                try:
-                    data = json.loads(body.decode("utf-8") or "{}")
-                except (ValueError, UnicodeDecodeError):
-                    self._send_error_json(
-                        HTTPStatus.BAD_REQUEST, "invalid JSON body")
-                    return
-                if not isinstance(data, dict):
-                    self._send_error_json(
-                        HTTPStatus.BAD_REQUEST, "JSON object expected")
-                    return
-                url = str(data.get("url", "")).strip()
-                if not url:
-                    self._send_error_json(
-                        HTTPStatus.BAD_REQUEST,
-                        "provide a file upload or a JSON url")
-                    return
-                formats = normalize_formats(data.get("formats"))
-                language = str(data.get("language", ""))
-                job_id = manager.submit_url(url, formats, language)
+            data = json.loads(body.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            self._send_error_json(HTTPStatus.BAD_REQUEST, "invalid JSON body")
+            return
+        if not isinstance(data, dict):
+            self._send_error_json(HTTPStatus.BAD_REQUEST, "JSON object expected")
+            return
+        url = str(data.get("url", "")).strip()
+        if not url:
+            self._send_error_json(
+                HTTPStatus.BAD_REQUEST, "provide a file upload or a JSON url")
+            return
+        formats = normalize_formats(data.get("formats"))
+        language = normalize_language(data.get("language", ""))
+        options, clip_start, clip_end = self._options_from(data.get)
+        try:
+            job_id = manager.submit_url(
+                url, formats, language, options=options,
+                clip_start=clip_start, clip_end=clip_end)
         except ValueError as e:
             self._send_error_json(HTTPStatus.BAD_REQUEST, str(e))
             return
