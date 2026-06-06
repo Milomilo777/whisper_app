@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 
 from core.config import (
     PROJECT_FILE_NAME,
@@ -106,6 +109,13 @@ def test_load_project_overrides_silent_on_bad_encoding(tmp_path):
     assert load_project_overrides(str(tmp_path)) == {}
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="This test monkeypatches os.name='nt'; on POSIX that makes pathlib build a "
+    "WindowsPath (uninstantiable on Python <=3.12), which crashes pytest's own "
+    "report machinery (INTERNALERROR). The UNC drive-mounted probe is a Windows-only "
+    "path — _drive_is_mounted() returns True immediately off Windows.",
+)
 def test_drive_is_mounted_unc_skips_blocking_probe(monkeypatch):
     """UNC paths must not trigger a (potentially blocking) .exists()
     probe — the SMB timeout can be 30 s and would freeze launch."""
