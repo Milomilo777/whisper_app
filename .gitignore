@@ -29,6 +29,7 @@ MANIFEST
 # ...but keep the committed production spec files.
 !whisper_project_onefile.spec
 !whisper_project_onedir.spec
+!platform/macos/pyinstaller/whisper_project_mac.spec
 *.spec.bak
 
 # Virtual environments
