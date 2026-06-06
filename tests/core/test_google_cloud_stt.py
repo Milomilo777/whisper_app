@@ -107,8 +107,22 @@ def test_plan_chunks_single_when_short():
     assert g.plan_chunks(40.0, 55.0) == [(0.0, 40.0)]
 
 
-def test_plan_chunks_unknown_duration_whole_file_marker():
-    assert g.plan_chunks(0.0, 55.0) == [(0.0, 0.0)]
+def test_plan_chunks_unknown_duration_chunks_under_inline_cap():
+    """An unknown duration must STILL be sliced into inline-sized windows,
+    not collapsed to one whole-file request that blows the ~1 min inline cap.
+    """
+    chunks = g.plan_chunks(0.0, 55.0)
+    # Many bounded windows, each exactly chunk_seconds long, starting at 0.
+    assert len(chunks) == g.MAX_UNKNOWN_DURATION_CHUNKS
+    assert chunks[0] == (0.0, 55.0)
+    assert chunks[1] == (55.0, 110.0)
+    for start, end in chunks:
+        assert round(end - start, 3) == 55.0  # each under the 1-min cap
+
+
+def test_plan_chunks_unknown_duration_whole_file_when_disabled():
+    """Batch mode keeps the single whole-file (0,0) marker via the flag."""
+    assert g.plan_chunks(0.0, 55.0, chunk_when_unknown=False) == [(0.0, 0.0)]
 
 
 # ---------------------------------------------------------------- offset

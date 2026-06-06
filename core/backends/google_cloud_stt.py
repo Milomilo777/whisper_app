@@ -106,6 +106,12 @@ DEFAULT_CHUNK_SECONDS = 55.0
 CHUNK_MIME = "audio/flac"
 CHUNK_EXT = ".flac"
 
+#: A FLAC slice that starts past the real end of file decodes to ~no audio,
+#: leaving only the container header (well under this). Used by the
+#: unknown-duration STANDARD path to detect EOF and stop early. 1 s of 16 kHz
+#: mono FLAC is several KB, so this never trips on a real (non-empty) chunk.
+_EMPTY_FLAC_BYTES = 4096
+
 #: Approximate published Google Cloud Speech-to-Text v2 prices (USD per
 #: minute), used ONLY for the LOCAL cost estimate shown in the UI. The real
 #: bill is on Google's side and is NOT readable from a service-account key,
@@ -212,18 +218,46 @@ def recognizer_path(project_id: str, location: str = DEFAULT_LOCATION) -> str:
     return f"projects/{project_id}/locations/{loc}/recognizers/_"
 
 
-def plan_chunks(duration: float, chunk_seconds: float) -> list[tuple[float, float]]:
+#: When the duration cannot be determined (corrupt header, streamed source,
+#: ffprobe missing), STANDARD mode must STILL slice into inline-sized windows
+#: rather than send the whole file as one request — a long file would blow
+#: past the ~1 min / ~10 MB inline cap and Google rejects it. We plan this
+#: many back-to-back ``chunk_seconds`` windows; the ffmpeg ``-ss/-t`` slicer
+#: naturally returns empty FLAC for windows past EOF (-> 0 segments), so the
+#: bound just caps wasted requests on a genuinely unknown-length file.
+#: 1200 * 55s ~= 18 h, comfortably longer than any realistic input.
+MAX_UNKNOWN_DURATION_CHUNKS = 1200
+
+
+def plan_chunks(
+    duration: float,
+    chunk_seconds: float,
+    *,
+    chunk_when_unknown: bool = True,
+) -> list[tuple[float, float]]:
     """Split ``[0, duration]`` into (start, end) windows of ``chunk_seconds``.
 
-    Pure. Returns at least one chunk even for a zero / unknown duration so
-    a file with an unreadable duration still gets transcribed whole
-    (``(0.0, 0.0)`` end means "to end of file" for the ffmpeg slicer).
+    Pure. With a known ``duration`` this slices ``[0, duration]`` into
+    ``chunk_seconds`` windows. When the duration is unknown (``<= 0``) and
+    ``chunk_when_unknown`` is True (the STANDARD-mode default), it returns a
+    bounded run of fixed ``chunk_seconds`` windows so a long file with an
+    unreadable header is still chunked under the inline cap — windows past
+    the real end of file produce empty slices (0 segments). Batch mode passes
+    ``chunk_when_unknown=False`` to keep the single whole-file ``(0.0, 0.0)``
+    request (its ``-ss/-t``-free slice means "to end of file").
     """
     if chunk_seconds <= 0:
         chunk_seconds = DEFAULT_CHUNK_SECONDS
     if duration <= 0:
-        return [(0.0, 0.0)]
-    chunks: list[tuple[float, float]] = []
+        if not chunk_when_unknown:
+            return [(0.0, 0.0)]
+        chunks: list[tuple[float, float]] = []
+        start = 0.0
+        for _ in range(MAX_UNKNOWN_DURATION_CHUNKS):
+            chunks.append((start, start + chunk_seconds))
+            start += chunk_seconds
+        return chunks
+    chunks = []
     start = 0.0
     while start < duration - 0.001:
         end = min(start + chunk_seconds, duration)
@@ -1061,11 +1095,35 @@ class GoogleCloudSttBackend(Backend):
             max_speakers=self._diar_max(),
         )
 
-        chunks = plan_chunks(duration, self._chunk_seconds)
+        # Resolve a real duration before planning chunks. A 0 / unknown
+        # duration used to collapse STANDARD mode to ONE whole-file inline
+        # request, which blows past the ~1 min / ~10 MB inline cap on any
+        # non-trivial file. Probe with the bundled ffprobe first; only if
+        # that still fails do we fall back to the bounded unknown-length
+        # chunk plan (and stop early once we slice past EOF).
+        effective_duration = duration
+        if effective_duration <= 0:
+            try:
+                from ..transcriber import get_duration
+                effective_duration = float(get_duration(audio_path) or 0.0)
+            except Exception:  # noqa: BLE001 - probe failure is non-fatal
+                effective_duration = 0.0
+            if log_cb and effective_duration > 0:
+                log_cb(
+                    f"Google Cloud STT: probed duration "
+                    f"{effective_duration:.0f}s for chunk planning."
+                )
+
+        duration_unknown = effective_duration <= 0
+        chunks = plan_chunks(effective_duration, self._chunk_seconds)
         total = len(chunks)
         if log_cb:
+            count_text = (
+                "unknown length, chunking until end of file"
+                if duration_unknown else f"{total} chunk(s)"
+            )
             log_cb(
-                f"Google Cloud STT: {total} chunk(s) to Google "
+                f"Google Cloud STT: {count_text} to Google "
                 f"(project {self._project_id}, model {self._model}). "
                 "Audio leaves this machine."
             )
@@ -1083,6 +1141,17 @@ class GoogleCloudSttBackend(Backend):
             try:
                 with open(flac_path, "rb") as fp:
                     content = fp.read()
+                # Unknown-length path: once a slice starting past EOF comes
+                # back essentially empty (just a FLAC header, no audio), we
+                # have reached the end of the file — stop instead of firing
+                # the rest of the bounded chunk plan at Google for nothing.
+                if duration_unknown and idx > 0 and len(content) < _EMPTY_FLAC_BYTES:
+                    if log_cb:
+                        log_cb(
+                            "Google Cloud STT: reached end of file "
+                            f"after {idx} chunk(s)."
+                        )
+                    break
                 request = cloud_speech.RecognizeRequest(
                     recognizer=recognizer,
                     config=config,
