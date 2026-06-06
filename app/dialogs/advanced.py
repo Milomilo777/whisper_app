@@ -763,7 +763,11 @@ class AdvancedDialog(tk.Toplevel):
         except tk.TclError:
             pass
         self.destroy()
-        self.app.after(0, lambda: self.app.ensure_model_with_modal(mandatory=False))
+        # Use download_model_now (not ensure_model_with_modal): the latter
+        # early-returns on the app-global model_ready flag, so once ANY model
+        # was loaded "Download now" did nothing. We already confirmed THIS
+        # slug's bytes are absent via _model_downloaded above; force the modal.
+        self.app.after(0, lambda: self.app.download_model_now())
 
     def _save_and_close(self) -> None:
         cfg = self.app.app_config

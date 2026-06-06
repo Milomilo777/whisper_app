@@ -1633,6 +1633,22 @@ class App(tk.Tk):
         if self.model_ready:
             self.status_var.set("Model loaded")
             return True
+        return self._open_model_download_modal(mandatory=mandatory)
+
+    def download_model_now(self) -> bool:
+        """Force the model-download modal for the CONFIGURED slug.
+
+        Unlike ``ensure_model_with_modal``, this does NOT short-circuit on the
+        app-global ``model_ready`` flag. The Advanced "Download now" button
+        targets one specific model's bytes; once ANY model was loaded,
+        ``model_ready`` was True and the old gate made "Download now" a silent
+        no-op. ``ensure_model`` is idempotent (a fast MD5 check when the bytes
+        are already present), so opening the modal here is safe even if some
+        model is loaded.
+        """
+        return self._open_model_download_modal(mandatory=False)
+
+    def _open_model_download_modal(self, mandatory: bool = False) -> bool:
         if self.model_setup_running:
             return False
         self.model_setup_running = True
