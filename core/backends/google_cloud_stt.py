@@ -938,6 +938,11 @@ class GoogleCloudSttBackend(Backend):
         self._diarization = False
         self._client: Any = None
         self._lock = threading.Lock()
+        # Per-run usage-accounting state, populated by _run_standard /
+        # _run_batch and read by transcribe_to_segments: how many SECONDS of
+        # audio Google actually transcribed, and whether the user cancelled.
+        self._last_billable_seconds: float = 0.0
+        self._last_was_cancelled: bool = False
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -1099,6 +1104,15 @@ class GoogleCloudSttBackend(Backend):
         # Diarization needs word offsets to carry the speaker label.
         effective_words = bool(want_words) or self._diarization
 
+        # Reset the per-run accounting state these helpers populate. The run
+        # methods record how many SECONDS of audio Google actually
+        # transcribed and whether the user cancelled, so accounting bills
+        # only the processed audio (not the full file) and is skipped on
+        # cancel. Defaults are conservative: 0 billable, cancelled=True, so a
+        # run method that raises before recording leaves nothing to count.
+        self._last_billable_seconds = 0.0
+        self._last_was_cancelled = True
+
         if self._batch_mode:
             segments = self._run_batch(
                 audio_path, language_code, effective_words, duration,
@@ -1110,9 +1124,15 @@ class GoogleCloudSttBackend(Backend):
                 progress_cb, log_cb, cancelled, paused,
             )
 
-        # Local monthly minute accounting (free tier is 60 min/month and
-        # NOT readable from the key) — done on success only.
-        self._accumulate_usage(audio_path, duration, log_cb)
+        # Local monthly minute accounting (free tier is 60 min/month and NOT
+        # readable from the key). Count ONLY the audio Google actually
+        # transcribed (``_last_billable_seconds``), and SKIP accounting
+        # entirely on a user cancel — billing the full file duration when the
+        # user pressed Stop after one chunk (or the batch op was cancelled)
+        # over-counts the free tier and the cost estimate for audio Google
+        # never processed.
+        if not self._last_was_cancelled:
+            self._accumulate_usage(self._last_billable_seconds, log_cb)
 
         detected = language or ""
         return segments, LanguageInfo(
@@ -1132,6 +1152,14 @@ class GoogleCloudSttBackend(Backend):
         cancelled: Callable[[], bool] | None,
         paused: Callable[[], bool] | None,
     ) -> list[dict[str, Any]]:
+        """Run the chunked online recognize, returning the stitched segments.
+
+        Side effects for usage accounting (read by ``transcribe_to_segments``):
+        sets ``self._last_billable_seconds`` to the SECONDS of audio actually
+        sent to ``recognize`` (so a partial / cancelled run bills only what
+        Google processed, never the full file length) and
+        ``self._last_was_cancelled`` to whether the user pressed Stop.
+        """
         client = self._build_client()
         cloud_speech = self._cloud_speech_types()
         recognizer = recognizer_path(self._project_id, self._location)
@@ -1179,13 +1207,24 @@ class GoogleCloudSttBackend(Backend):
             )
 
         all_segments: list[dict[str, Any]] = []
+        transcribed_seconds = 0.0
+        was_cancelled = False
+        # A run that completes its planned chunks (or stops early at EOF) is a
+        # SUCCESS; only an explicit Stop sets was_cancelled.
+        self._last_was_cancelled = False
         for idx, (chunk_start, chunk_end) in enumerate(chunks):
             if cancelled and cancelled():
+                was_cancelled = True
                 if log_cb:
                     log_cb("Task cancelled")
                 break
             while paused and paused() and not (cancelled and cancelled()):
                 time.sleep(0.2)
+            if cancelled and cancelled():
+                was_cancelled = True
+                if log_cb:
+                    log_cb("Task cancelled")
+                break
 
             flac_path = _encode_chunk_flac(audio_path, chunk_start, chunk_end)
             try:
@@ -1219,6 +1258,18 @@ class GoogleCloudSttBackend(Backend):
                         )
                 except Exception as e:  # noqa: BLE001
                     raise RuntimeError(classify_google_error(e)) from e
+                # This chunk was actually sent to Google — count its audio
+                # toward billing. When the duration is known, clamp the last
+                # chunk to the real end of file so a window the slicer padded
+                # past EOF is not over-counted; when unknown, the planned
+                # window length is the best available estimate of audio sent
+                # (a window past EOF would have tripped the empty-FLAC break
+                # above before reaching here, so it is not counted).
+                if duration_unknown:
+                    transcribed_seconds += max(0.0, chunk_end - chunk_start)
+                else:
+                    upper = min(chunk_end, effective_duration)
+                    transcribed_seconds += max(0.0, upper - chunk_start)
             finally:
                 try:
                     os.unlink(flac_path)
@@ -1246,6 +1297,8 @@ class GoogleCloudSttBackend(Backend):
                     f"Google Cloud STT: chunk {idx + 1}/{total} -> "
                     f"{len(seg)} segment(s)."
                 )
+        self._last_billable_seconds = transcribed_seconds
+        self._last_was_cancelled = was_cancelled
         return all_segments
 
     # -- BATCH (GCS upload + long-running op + inline result) -------------
@@ -1260,6 +1313,14 @@ class GoogleCloudSttBackend(Backend):
         log_cb: Callable[[str], None] | None,
         cancelled: Callable[[], bool] | None,
     ) -> list[dict[str, Any]]:
+        """Run the batch (GCS) recognize, returning the stitched segments.
+
+        Side effects for usage accounting (read by ``transcribe_to_segments``):
+        batch processes the WHOLE file, so on success ``_last_billable_seconds``
+        is the full audio length and ``_last_was_cancelled`` is False; on a
+        user cancel there is no partial result, so billable seconds is 0 and
+        ``_last_was_cancelled`` is True (the caller then skips accounting).
+        """
         if not self._bucket:
             raise RuntimeError(
                 "Batch mode needs a Google Cloud Storage bucket. Set one in "
@@ -1333,9 +1394,13 @@ class GoogleCloudSttBackend(Backend):
         if was_cancelled:
             # User pressed Stop mid-batch. The standard path returns its
             # partial; batch has no partial, so return an empty list — the
-            # caller sees task.cancelled and treats it as a clean cancel.
+            # caller sees task.cancelled and treats it as a clean cancel. No
+            # billable audio (nothing transcribed) and _last_was_cancelled
+            # stays True so the caller skips usage accounting.
             if log_cb:
                 log_cb("Task cancelled")
+            self._last_billable_seconds = 0.0
+            self._last_was_cancelled = True
             return []
 
         segments = self._parse_batch_response(
@@ -1345,6 +1410,9 @@ class GoogleCloudSttBackend(Backend):
             progress_cb(100)
         if log_cb:
             log_cb(f"Google Cloud STT (batch): {len(segments)} segment(s).")
+        # Batch transcribed the whole file -> bill the full audio length.
+        self._last_billable_seconds = _seconds_for(audio_path, duration)
+        self._last_was_cancelled = False
         return segments
 
     def _await_batch_with_cancel(
@@ -1483,19 +1551,21 @@ class GoogleCloudSttBackend(Backend):
 
     def _accumulate_usage(
         self,
-        audio_path: str,
-        duration: float,
+        billable_seconds: float,
         log_cb: Callable[[str], None] | None,
     ) -> None:
-        """Add this run's minutes to the local monthly counter (rolls over).
+        """Add the actually-transcribed minutes to the local monthly counter.
 
-        Uses the passed ``duration`` (already in seconds) when known, else
-        probes the file. Persists via save_config so the UI can show
-        "minutes used this month". Never raises — accounting must not break
-        a successful transcription.
+        ``billable_seconds`` is the audio Google actually transcribed (the
+        sum of windows sent in STANDARD mode, or the whole file in BATCH) —
+        NOT necessarily the full input length, so a partial run is not
+        over-counted. The caller skips this entirely on a user cancel.
+        Persists via save_config so the UI can show "minutes used this
+        month". Never raises — accounting must not break a successful
+        transcription.
         """
         try:
-            minutes = _minutes_for(audio_path, duration)
+            minutes = max(0.0, float(billable_seconds or 0.0) / 60.0)
             if minutes <= 0:
                 return
             from ..config import save_config
@@ -1585,8 +1655,8 @@ class GoogleCloudSttBackend(Backend):
 # ---------------------------------------------------------------- helpers
 
 
-def _minutes_for(audio_path: str, duration: float = 0.0) -> float:
-    """Return the audio length in MINUTES (uses ``duration`` when > 0).
+def _seconds_for(audio_path: str, duration: float = 0.0) -> float:
+    """Return the audio length in SECONDS (uses ``duration`` when > 0).
 
     Pure-ish: falls back to ``core.transcriber.get_duration`` only when the
     caller didn't already know the length. Never raises — returns 0.0 on a
@@ -1599,7 +1669,15 @@ def _minutes_for(audio_path: str, duration: float = 0.0) -> float:
             seconds = float(get_duration(audio_path) or 0.0)
         except Exception:  # noqa: BLE001
             return 0.0
-    return max(0.0, seconds / 60.0)
+    return max(0.0, seconds)
+
+
+def _minutes_for(audio_path: str, duration: float = 0.0) -> float:
+    """Return the audio length in MINUTES (uses ``duration`` when > 0).
+
+    Thin wrapper over :func:`_seconds_for`. Never raises.
+    """
+    return _seconds_for(audio_path, duration) / 60.0
 
 
 def _encode_chunk_flac(
