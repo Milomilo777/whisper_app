@@ -44,6 +44,24 @@ from core.watcher import FolderWatcher
 logger = logging.getLogger(__name__)
 
 
+def _iids_for_tasks(
+    row_map: dict[str, Any], tasks: "list[Any]"
+) -> list[str]:
+    """Map task objects back to their (new) Treeview iids after a rebuild.
+
+    refresh() rebuilds the tree every tick with fresh iids, wiping the
+    selection. Given the freshly-built ``row_map`` (iid -> task) and the
+    tasks that were selected before the rebuild, return the iids that now
+    hold those same task objects (by identity), preserving tree order and
+    dropping any task that has since left the queue. Pure + Tk-free so the
+    selection-preservation contract can be unit-tested.
+    """
+    wanted = {id(t) for t in tasks}
+    if not wanted:
+        return []
+    return [iid for iid, t in row_map.items() if id(t) in wanted]
+
+
 def _resolve_theme(name: str) -> str:
     if name == "system":
         try:
@@ -2843,6 +2861,15 @@ class App(tk.Tk):
     def refresh(self) -> None:
         from app.widgets.tabs import status_label
 
+        # Snapshot the SELECTED tasks (by identity) before we tear the tree
+        # down: refresh() runs every 500ms via loop(), and a plain
+        # delete()+re-insert() assigns brand-new iids, wiping the Treeview
+        # selection. With the selection gone _update_queue_action_bar() below
+        # would see nothing selected and disable every Pause/Resume/Cancel/
+        # Re-run/Remove button ~0.5s after the user clicks a row — making the
+        # action bar unusable. We restore the selection onto the new iids so
+        # it survives the rebuild.
+        prev_selected = self._selected_tasks()
         self.tree.delete(*self.tree.get_children())
         self.row_map = {}
         for t in self.queue:
@@ -2861,6 +2888,11 @@ class App(tk.Tk):
                 ),
             )
             self.row_map[item_id] = t
+        # Re-select the same task objects on their new iids (no-op when the
+        # selection was empty or its tasks left the queue).
+        restore = _iids_for_tasks(self.row_map, prev_selected)
+        if restore:
+            self.tree.selection_set(restore)
         # Empty-state hint visibility — show when the queue is empty,
         # hide once there is at least one task. Kept here (rather than
         # in tabs.py) because refresh is the choke point for queue
@@ -2875,9 +2907,11 @@ class App(tk.Tk):
         # in their taskbar / Alt-Tab.
         self._refresh_window_title()
         self._ensure_animation()
-        # Recompute the action-bar enabled state: refresh rebuilds the tree
-        # every tick, so a row whose status flipped (e.g. running->finished)
-        # must not leave the buttons reflecting the old status.
+        # Recompute the action-bar enabled state AFTER the selection is
+        # restored: refresh rebuilds the tree every tick, so a row whose
+        # status flipped (e.g. running->finished) must not leave the buttons
+        # reflecting the old status, and a still-selected row must keep them
+        # enabled.
         self._update_queue_action_bar()
 
     def refresh_download_queue(self) -> None:
