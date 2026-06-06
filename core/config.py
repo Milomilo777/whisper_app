@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import math
 import os
 import shutil
 import sys
@@ -307,6 +309,26 @@ ONLINE_ALLOWED_KEYS: frozenset[str] = frozenset({
 })
 
 
+# Hard cap on the online-config response body. config_url defaults to a
+# third-party host; a compromised/MITM endpoint streaming a multi-GB body
+# would otherwise be buffered whole into memory at startup. 2 MB is far
+# above any legitimate app-config JSON, so an oversized body is treated as
+# hostile and we fall through to the cache instead of parsing it.
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
+
+
+def _reject_nonfinite(value: str) -> float:
+    """``json`` ``parse_constant`` hook that rejects Infinity/-Infinity/NaN.
+
+    Python's JSON parser accepts these non-standard literals by default,
+    which then poison numeric coercion downstream (``int(float('inf'))``
+    raises ``OverflowError``; NaN compares false to everything). Raising
+    here turns such a payload into a ``ValueError``, so the caller treats
+    the file as corrupt and reverts to defaults / the cache.
+    """
+    raise ValueError(f"non-finite JSON literal not allowed: {value!r}")
+
+
 def online_cache_path() -> Path:
     """Path of the cached last-good online config under the cache dir."""
     return user_cache_dir() / "app_config_cache.json"
@@ -445,7 +467,15 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     # with default_hub_folder() — now %LOCALAPPDATA%\...\Cache\models —
     # means "accept default" is a no-op for the model location.
     if not model_path or not _drive_is_mounted(model_path):
-        model_name = (config.get("model") or {}).get("name") or "whisper-model"
+        # Defensive coercion: the top-level type pass in load_config only
+        # validates that ``model`` is a dict, not the nested ``name``. A
+        # hand-edited / externally-produced config of ``{"model": {"name":
+        # 123}}`` would reach hub.model_folder_for, whose ``name.strip()``
+        # then raises AttributeError and crashes launch. Treat any non-string
+        # name as absent and fall back to the placeholder.
+        raw_name = (config.get("model") or {}).get("name")
+        model_name = (raw_name.strip() if isinstance(raw_name, str) else "") \
+            or "whisper-model"
         effective_hub = hub_folder or str(_hub.default_hub_folder())
         source = "hub_folder" if hub_folder else "default_hub_fallback"
         try:
@@ -568,8 +598,28 @@ def fetch_online_config(
                 url, headers={"User-Agent": "WhisperProject"}
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-            data = json.loads(raw.decode("utf-8"))
+                # Reject an oversized body BEFORE buffering it whole: a
+                # hostile/MITM host could stream multiple GB and exhaust
+                # memory on the launch path. The Content-Length (if sent)
+                # is an early-out; the capped read defends against a body
+                # that lies about or omits its length. ``getattr`` keeps
+                # this tolerant of a response object without ``.headers``.
+                headers = getattr(resp, "headers", None)
+                clen = headers.get("Content-Length") if headers is not None else None
+                if isinstance(clen, str) and clen.strip().isdigit():
+                    if int(clen) > MAX_CONFIG_BYTES:
+                        raise ValueError(
+                            f"online config Content-Length {clen} exceeds "
+                            f"{MAX_CONFIG_BYTES} bytes"
+                        )
+                raw = resp.read(MAX_CONFIG_BYTES + 1)
+            if len(raw) > MAX_CONFIG_BYTES:
+                raise ValueError(
+                    f"online config body exceeds {MAX_CONFIG_BYTES} bytes"
+                )
+            data = json.loads(
+                raw.decode("utf-8"), parse_constant=_reject_nonfinite
+            )
             if isinstance(data, dict):
                 try:
                     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -589,7 +639,10 @@ def fetch_online_config(
             )
 
     try:
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        cached = json.loads(
+            cache_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite,
+        )
         if isinstance(cached, dict):
             return cached
     except (OSError, ValueError):
@@ -608,7 +661,12 @@ def _read_local_config() -> dict[str, Any]:
     path = config_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+            # parse_constant rejects the non-standard Infinity/-Infinity/NaN
+            # literals (which json.load accepts by default). A non-finite
+            # numeric poisons int()/float() coercion downstream (e.g.
+            # int(float('inf')) raises OverflowError on an int-typed key),
+            # so treat such a file as corrupt and revert to defaults.
+            loaded = json.load(f, parse_constant=_reject_nonfinite)
     except FileNotFoundError:
         logger.warning("config.json not found at %s; using defaults", path)
         return {}
@@ -616,7 +674,8 @@ def _read_local_config() -> dict[str, Any]:
         # UnicodeDecodeError is a ValueError that escapes the OSError
         # branch (e.g. cp1252 bytes saved by an external editor); the
         # original try/except missed it and crashed launch. ValueError
-        # also catches any other JSON parser-internal raises.
+        # also catches any other JSON parser-internal raises (including the
+        # non-finite-literal rejection above).
         logger.error("Failed to read config.json (%s); using defaults", e)
         try:
             os.replace(path, path + ".corrupt")
@@ -646,9 +705,17 @@ def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
 
     # The online config URL itself can be overridden locally (an expert can
     # point at a staging URL); otherwise the hard-coded default is used.
+    # Distinguish "key absent" (use the default URL) from "key present and
+    # empty" (the user deliberately blanked it to opt out of the network
+    # fetch): an explicit "" must STAY empty so it short-circuits below,
+    # otherwise ``"" or default`` would silently restore the third-party URL
+    # and still phone home for a privacy/offline-conscious user.
     config_url = ""
     if fetch_online:
-        config_url = str(local.get("config_url") or DEFAULT_CONFIG["config_url"])
+        if "config_url" in local:
+            config_url = str(local["config_url"] or "")
+        else:
+            config_url = str(DEFAULT_CONFIG["config_url"])
     online: dict[str, Any] = {}
     if config_url:
         with _ONLINE_MEMO_LOCK:
@@ -679,6 +746,27 @@ def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
                 )
                 merged[k] = json.loads(json.dumps(default))
             continue
+        # Reject a non-finite numeric (inf / -inf / nan) for any key that
+        # ships a numeric default, even when its Python type already matches
+        # (e.g. a float-typed vad_threshold left as float('inf')). Such a
+        # value passes the isinstance check below but poisons everything
+        # downstream — int(inf) raises OverflowError, nan compares false to
+        # all bounds. ``bool`` is an int subclass but is always finite, so
+        # exclude it. _read_local_config already rejects these at parse time;
+        # this guards values arriving via the online layer or in-memory.
+        if (
+            isinstance(default, (int, float))
+            and not isinstance(default, bool)
+            and isinstance(merged[k], (int, float))
+            and not isinstance(merged[k], bool)
+            and not math.isfinite(merged[k])
+        ):
+            logger.warning(
+                "config key %r is non-finite (%r); reverting to default %r",
+                k, merged[k], default,
+            )
+            merged[k] = json.loads(json.dumps(default))
+            continue
         if not isinstance(merged[k], type(default)):
             # Special-case: bool defaults accept int (Python's bool is int).
             if isinstance(default, bool) and isinstance(merged[k], int):
@@ -688,10 +776,13 @@ def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
             if isinstance(default, (int, float)) and isinstance(
                 merged[k], (int, float)
             ):
+                # OverflowError guards int(float('inf')); a non-finite that
+                # somehow reaches here (the finiteness check above normally
+                # handles it) reverts to the default rather than crashing.
                 try:
                     merged[k] = type(default)(merged[k])
                     continue
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
             logger.warning(
                 "config key %r has wrong type %s (expected %s); "
@@ -727,7 +818,11 @@ def _persistable_model_path(config: dict[str, Any]) -> str:
     if not raw:
         return ""
     model = config.get("model")
-    model_name = (model.get("name") if isinstance(model, dict) else "") or "whisper-model"
+    raw_name = model.get("name") if isinstance(model, dict) else ""
+    # A non-string nested name (e.g. {"model": {"name": 123}}) must not reach
+    # hub.model_folder_for, whose name.strip() would raise AttributeError.
+    model_name = (raw_name.strip() if isinstance(raw_name, str) else "") \
+        or "whisper-model"
     hub_folder = (config.get("hub_folder") or "").strip()
 
     def _norm(p: str) -> str:
@@ -911,10 +1006,20 @@ def deep_merge_dicts(dest: dict[str, Any], src: dict[str, Any]) -> dict[str, Any
     Unlike ``dict.update``, nested dicts are walked depth-first so a
     project override of ``{"model": {"name": "tiny"}}`` keeps every
     other key under ``model`` (``url``, ``md5`, …) intact.
+
+    A mutable value (dict / list) that has no dict counterpart in ``dest``
+    is deep-COPIED in, never aliased. Otherwise a nested object from ``src``
+    (e.g. a ``model_catalog`` slug entry absent from ``dest``) would be
+    shared by reference; a later merge that recurses into it would then
+    mutate the original ``src`` object in place. Since ``merge_config_sources``
+    feeds the memoized ``_ONLINE_MEMO`` value as a merge source, that aliasing
+    let a local override permanently rewrite the process-wide online cache.
     """
     for k, v in src.items():
         if isinstance(v, dict) and isinstance(dest.get(k), dict):
             deep_merge_dicts(dest[k], v)
+        elif isinstance(v, (dict, list)):
+            dest[k] = copy.deepcopy(v)
         else:
             dest[k] = v
     return dest
