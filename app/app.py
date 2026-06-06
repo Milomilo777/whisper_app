@@ -911,20 +911,44 @@ class App(tk.Tk):
         """Open the transcript viewer with a file picker."""
         _open_transcript_viewer(self, None)
 
-    def open_transcript_viewer_for(self, file_path: str) -> None:
-        """Open the viewer for a transcript JSON found next to file_path.
+    def open_transcript_viewer_for(
+        self, file_path: str, json_path: str | None = None
+    ) -> None:
+        """Open the viewer for the transcript JSON belonging to a task.
 
-        Used by the Last Result card's "View transcript" button so a
-        user one click away from the just-finished output. If the
-        JSON isn't on disk for any reason, we fall back to the file
-        picker.
+        Used by the Last Result card's and queue menu's "View transcript"
+        button so the user is one click away from the just-finished output.
+
+        Prefer the ACTUAL .json the worker reported writing (``json_path``,
+        usually pulled from ``task.output_paths``): the basename can differ
+        from the source media when the output was templated or relocated, so
+        recomputing ``splitext(file_path)[0] + '.json'`` would miss it and
+        pop a confusing file picker even though a real transcript exists.
+        Only when no known JSON is on disk do we fall back to recomputing the
+        beside-input name, and finally to the picker.
         """
-        base, _ = os.path.splitext(file_path)
-        json_path = base + ".json"
-        if os.path.isfile(json_path):
+        if json_path and os.path.isfile(json_path):
             _open_transcript_viewer(self, json_path)
+            return
+        base, _ = os.path.splitext(file_path)
+        guessed = base + ".json"
+        if os.path.isfile(guessed):
+            _open_transcript_viewer(self, guessed)
         else:
             _open_transcript_viewer(self, None)
+
+    @staticmethod
+    def _task_json_output(task: Any) -> str | None:
+        """Return the .json path the task actually wrote, if known.
+
+        Reads ``task.output_paths`` (the exact files the worker reported)
+        and returns the first .json entry — the source of truth for the
+        viewer, robust to templated/relocated output names.
+        """
+        for p in getattr(task, "output_paths", None) or ():
+            if isinstance(p, str) and p.lower().endswith(".json"):
+                return p
+        return None
 
     def _open_recent(self, path: str) -> None:
         if not os.path.isfile(path):
@@ -1811,7 +1835,9 @@ class App(tk.Tk):
                 )
                 m.add_command(
                     label="View transcript",
-                    command=lambda: self.open_transcript_viewer_for(task.file_path),
+                    command=lambda: self.open_transcript_viewer_for(
+                        task.file_path, self._task_json_output(task)
+                    ),
                 )
                 m.add_command(
                     label="Open output folder",
@@ -2977,10 +3003,15 @@ class App(tk.Tk):
         # "View transcript" launches the in-app viewer with the JSON
         # next to the source media (or the file picker if no JSON
         # found). Discoverable single click into the new viewer.
-        if any(p.endswith(".json") for p in existing):
+        json_output = next(
+            (p for p in existing if p.lower().endswith(".json")), None
+        )
+        if json_output is not None:
             ttk.Button(
                 button_row, text="View transcript",
-                command=lambda: self.open_transcript_viewer_for(task.file_path),
+                command=lambda jp=json_output: self.open_transcript_viewer_for(
+                    task.file_path, jp
+                ),
             ).pack(side="left", padx=(8, 0))
 
         self.last_result_body.pack(fill="both", expand=True)

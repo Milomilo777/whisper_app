@@ -235,6 +235,14 @@ def _try_load_vlc() -> tuple[Any, str]:
         inst = vlc.Instance()
         if inst is None:
             raise RuntimeError("vlc.Instance() returned None")
+        # Release the probe instance immediately. Leaking it (and then
+        # creating a SECOND instance in _init_vlc_player) keeps two native
+        # libvlc instances alive at once, which worsens the native
+        # instability around the HWND bind on Windows.
+        try:
+            inst.release()
+        except Exception:  # noqa: BLE001
+            pass
         return vlc, ""
     except Exception:  # noqa: BLE001
         return None, (
@@ -443,7 +451,14 @@ class TranscriptViewer(tk.Toplevel):
             with open(self.json_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
             if not isinstance(payload, list):
-                raise ValueError("JSON root must be a list of segments")
+                # A transcript JSON is always a list of segment dicts. A dict
+                # root almost always means the user picked the wrong file
+                # (e.g. a credentials/config JSON), so say so plainly.
+                raise ValueError(
+                    "This looks like a credentials/config file, not a "
+                    "transcript JSON — pick the .json next to your "
+                    "audio/video."
+                )
             self.segments = payload
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
@@ -680,25 +695,83 @@ class TranscriptViewer(tk.Toplevel):
             self.vlc_player = self.vlc_instance.media_player_new()
             media = self.vlc_instance.media_new(self.media_path)
             self.vlc_player.set_media(media)
-            # Bind the player to the right-side canvas via its native window
-            # handle. The libvlc call differs per platform: HWND on Windows,
-            # an NSObject (NSView) on macOS, an X11 window id on Linux.
-            try:
-                handle = self.video_canvas.winfo_id()
-                if sys.platform == "darwin":
-                    self.vlc_player.set_nsobject(handle)
-                elif os.name == "nt":
-                    self.vlc_player.set_hwnd(handle)
-                else:
-                    self.vlc_player.set_xwindow(handle)
-            except Exception:  # noqa: BLE001
-                pass
-            # Position-update loop
-            self.after(250, self._update_position)
+            # CRITICAL: do NOT bind the native window handle here. This runs
+            # during __init__, before the Toplevel has been realized/mapped,
+            # so video_canvas.winfo_id() is either 0 or a not-yet-valid HWND.
+            # Calling libvlc set_hwnd() on an unrealized window triggers a
+            # native Windows access-violation that bypasses Python try/except
+            # and kills the whole process ("View transcript closes the app").
+            # Defer the bind until the window is actually mapped.
+            self.after(0, self._bind_vlc_window)
         except Exception as e:  # noqa: BLE001
             logger.warning("VLC init failed: %s", e)
             self.vlc_player = None
             self.play_btn.state(["disabled"])
+
+    def _bind_vlc_window(self) -> None:
+        """Bind libvlc to the video canvas — only once it is realized.
+
+        Must run AFTER the Toplevel is mapped: set_hwnd/set_xwindow/
+        set_nsobject on an unmapped window or a zero window id is a native
+        crash on Windows. We force a layout pass, then verify the canvas is
+        mapped and has a non-zero id; if not, we degrade to the "Open in
+        system player" button rather than risk the access-violation, and we
+        do NOT start the position loop (no embedded surface to track).
+        """
+        if self._closing or self.vlc_player is None:
+            return
+        try:
+            # Force the geometry manager to realize + map the canvas so its
+            # native handle is valid before we hand it to libvlc.
+            self.update_idletasks()
+            mapped = bool(self.video_canvas.winfo_ismapped())
+            handle = int(self.video_canvas.winfo_id())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("VLC window not ready: %s", e)
+            self._disable_embedded_playback()
+            return
+        if not mapped or handle == 0:
+            # Not realized yet / no valid surface — fall back to the system
+            # player button instead of calling set_hwnd on a dead handle.
+            logger.info(
+                "VLC video surface not mapped (mapped=%s, id=%s); using "
+                "system player fallback.", mapped, handle,
+            )
+            self._disable_embedded_playback()
+            return
+        try:
+            # The libvlc call differs per platform: HWND on Windows, an
+            # NSObject (NSView) on macOS, an X11 window id on Linux.
+            if sys.platform == "darwin":
+                self.vlc_player.set_nsobject(handle)
+            elif os.name == "nt":
+                self.vlc_player.set_hwnd(handle)
+            else:
+                self.vlc_player.set_xwindow(handle)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("VLC set window handle failed: %s", e)
+            self._disable_embedded_playback()
+            return
+        # Start the position-update loop ONLY after a successful bind.
+        self.after(250, self._update_position)
+
+    def _disable_embedded_playback(self) -> None:
+        """Tear down embedded playback so only the system-player path stays.
+
+        Called when the video surface can't be bound safely. Releases the
+        player and disables the Play button; "Open in system player" still
+        works, so the viewer keeps degrading gracefully.
+        """
+        try:
+            if self.vlc_player is not None:
+                self.vlc_player.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.vlc_player = None
+        try:
+            self.play_btn.state(["disabled"])
+        except Exception:  # noqa: BLE001
+            pass
 
     def _toggle_play(self) -> None:
         if self.vlc_player is None:

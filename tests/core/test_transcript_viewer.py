@@ -126,6 +126,37 @@ def test_viewer_invalid_json_shows_empty_list(tmp_path, monkeypatch):
         root.destroy()
 
 
+def test_viewer_dict_root_explains_wrong_file(tmp_path, monkeypatch):
+    """A dict-root JSON (e.g. a credentials/config file) must not crash;
+    it shows an empty list and surfaces a 'pick the .json' style error
+    rather than a raw 'root must be a list' message."""
+    from app.dialogs import transcript_viewer
+
+    cfg = tmp_path / "creds.json"
+    cfg.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    def _fake_showerror(title, message, **kw):
+        captured["title"] = title
+        captured["message"] = message
+
+    monkeypatch.setattr(transcript_viewer.messagebox, "showerror", _fake_showerror)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = transcript_viewer.TranscriptViewer(root, str(cfg))
+        viewer.withdraw()
+        try:
+            assert viewer.tree.get_children() == ()
+            assert "transcript JSON" in captured.get("message", "")
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
 # --- v0.7.0 enhancements (B1) ------------------------------------------------
 
 
