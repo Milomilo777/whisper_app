@@ -76,8 +76,16 @@ def test_read_project_id_no_project_id(tmp_path):
 
 
 def test_recognizer_path_global():
-    assert g.recognizer_path("p1") == (
+    assert g.recognizer_path("p1", "global") == (
         "projects/p1/locations/global/recognizers/_"
+    )
+
+
+def test_recognizer_path_uses_default_location():
+    # No explicit location -> the shipped regional default (chirp_2 lives
+    # there, not in "global").
+    assert g.recognizer_path("p1") == (
+        f"projects/p1/locations/{g.DEFAULT_LOCATION}/recognizers/_"
     )
 
 
@@ -307,11 +315,182 @@ def test_build_recognition_config_diarization_zero_speakers_omitted():
 # ---------------------------------------------------------------- language norm
 
 
-def test_normalize_language_code():
-    assert g.normalize_language_code("en") == "en"
-    assert g.normalize_language_code("EN-US") == "en-us"
+def test_normalize_language_code_auto_for_empty():
     assert g.normalize_language_code(None) == "auto"
     assert g.normalize_language_code("") == "auto"
+    assert g.normalize_language_code("   ") == "auto"
+    # The literal "auto" passes straight through (case-insensitive).
+    assert g.normalize_language_code("auto") == "auto"
+    assert g.normalize_language_code("AUTO") == "auto"
+
+
+def test_normalize_language_code_bare_iso_maps_to_bcp47():
+    # The v2 API rejects bare ISO codes — they must become full BCP-47 tags.
+    assert g.normalize_language_code("en") == "en-US"
+    assert g.normalize_language_code("EN") == "en-US"
+    assert g.normalize_language_code("fa") == "fa-IR"
+    assert g.normalize_language_code("ko") == "ko-KR"
+    assert g.normalize_language_code("es") == "es-ES"
+    assert g.normalize_language_code("pt") == "pt-BR"
+    assert g.normalize_language_code("zh") == "cmn-Hans-CN"
+
+
+def test_normalize_language_code_already_bcp47_canonical_case():
+    # Already-hyphenated codes pass through, re-cased to canonical form.
+    assert g.normalize_language_code("en-US") == "en-US"
+    assert g.normalize_language_code("en-us") == "en-US"
+    assert g.normalize_language_code("PT-br") == "pt-BR"
+    # Script subtag (4 letters) is Title-cased, region upper-cased.
+    assert g.normalize_language_code("cmn-hans-cn") == "cmn-Hans-CN"
+
+
+def test_normalize_language_code_unknown_passthrough():
+    # An unknown bare code is passed through (lower-cased) so Google can
+    # surface a clear, classify-able error rather than us guessing wrong.
+    assert g.normalize_language_code("xx") == "xx"
+    assert g.normalize_language_code("ZZ") == "zz"
+
+
+# ---------------------------------------------------------------- phrase grouping
+
+
+def _w(word, start, end, *, speaker="", prob=0.9):
+    d = {"word": word, "start": start, "end": end, "probability": prob}
+    if speaker:
+        d["speaker"] = speaker
+    return d
+
+
+def test_group_words_gap_split():
+    # A > 0.6s silent gap before "world" starts a new phrase.
+    words = [
+        _w("hello", 0.0, 0.4),
+        _w("there", 0.4, 0.8),
+        _w("world", 2.0, 2.4),  # gap 0.8 - 2.0 = 1.2s > 0.6
+    ]
+    segs = g.group_words_into_phrases(words)
+    assert len(segs) == 2
+    assert segs[0]["text"] == "hello there"
+    assert segs[0]["start"] == 0.0
+    assert segs[0]["end"] == 0.8
+    assert segs[1]["text"] == "world"
+    assert segs[1]["start"] == 2.0
+
+
+def test_group_words_no_split_small_gap():
+    # Gaps <= 0.6s stay in one phrase.
+    words = [_w("a", 0.0, 0.4), _w("b", 0.9, 1.2), _w("c", 1.5, 1.8)]
+    segs = g.group_words_into_phrases(words)
+    assert len(segs) == 1
+    assert segs[0]["text"] == "a b c"
+
+
+def test_group_words_max_length_split():
+    # No gaps, but the running phrase passes ~12s -> split.
+    words = [_w(f"w{i}", float(i), float(i) + 1.0) for i in range(20)]
+    segs = g.group_words_into_phrases(words, max_gap=100.0, max_duration=12.0)
+    assert len(segs) >= 2
+    for seg in segs:
+        assert (seg["end"] - seg["start"]) <= 12.0 + 1.0  # last word can spill
+
+
+def test_group_words_punctuation_split():
+    # A sentence-ending word forces the NEXT word into a new phrase.
+    words = [
+        _w("Hello", 0.0, 0.4),
+        _w("world.", 0.4, 0.8),
+        _w("Next", 0.9, 1.2),
+        _w("one", 1.2, 1.5),
+    ]
+    segs = g.group_words_into_phrases(words)
+    assert len(segs) == 2
+    assert segs[0]["text"] == "Hello world."
+    assert segs[1]["text"] == "Next one"
+
+
+def test_group_words_drops_empty_and_zero_length():
+    # The live "30->30 et" artifact: an empty token AND a zero-length word.
+    words = [
+        _w("real", 0.0, 0.5),
+        _w("", 0.5, 0.6),       # empty token -> dropped before grouping
+        _w("et", 30.0, 30.0),   # zero-length -> phrase has zero duration
+    ]
+    segs = g.group_words_into_phrases(words)
+    # "et" starts a new phrase (gap 0.5 -> 30.0) but is zero-length -> dropped.
+    assert len(segs) == 1
+    assert segs[0]["text"] == "real"
+
+
+def test_group_words_speaker_grouping():
+    # A speaker change starts a new phrase; the label rides onto the segment.
+    words = [
+        _w("hi", 0.0, 0.4, speaker="1"),
+        _w("there", 0.4, 0.8, speaker="1"),
+        _w("hello", 0.9, 1.3, speaker="2"),
+    ]
+    segs = g.group_words_into_phrases(words, want_speaker=True)
+    assert len(segs) == 2
+    assert segs[0]["speaker"] == "1"
+    assert segs[0]["text"] == "hi there"
+    assert segs[1]["speaker"] == "2"
+    assert segs[1]["text"] == "hello"
+
+
+def test_group_words_want_words_attaches_word_list():
+    words = [_w("hello", 0.0, 0.4), _w("world", 0.4, 0.8)]
+    segs = g.group_words_into_phrases(words, want_words=True)
+    assert len(segs) == 1
+    assert [w["word"] for w in segs[0]["words"]] == ["hello", "world"]
+    # Default (want_words False) carries no per-word list.
+    assert "words" not in g.group_words_into_phrases(words)[0]
+
+
+def test_group_words_empty_input():
+    assert g.group_words_into_phrases([]) == []
+    assert g.group_words_into_phrases([_w("", 0.0, 0.0)]) == []
+
+
+def test_parse_results_resegments_one_big_result_into_phrases():
+    # The live failure mode: ONE result holding the whole transcript as words,
+    # which must be re-segmented into multiple readable phrases (not 1 block).
+    words = [
+        _word("President", 0.0, 0.44),
+        _word("Trump", 0.44, 0.88),
+        _word("said.", 0.88, 1.3),       # sentence end -> split after
+        _word("Later", 3.0, 3.4),        # also a 1.7s gap -> split
+        _word("today", 3.4, 3.8),
+    ]
+    results = [_result("President Trump said. Later today", words=words)]
+    segs = g.parse_recognize_results(results, want_words=True)
+    assert len(segs) == 2
+    assert segs[0]["text"] == "President Trump said."
+    assert segs[0]["start"] == pytest.approx(0.0)
+    assert segs[1]["text"] == "Later today"
+    assert segs[1]["start"] == pytest.approx(3.0)
+
+
+def test_parse_results_no_words_fallback_preserved():
+    # A result with no words still yields one segment from result_end_offset.
+    results = [_result("plain transcript", result_end=3.0)]
+    segs = g.parse_recognize_results(results, want_words=False)
+    assert len(segs) == 1
+    assert segs[0]["text"] == "plain transcript"
+    assert segs[0]["start"] == 0.0
+    assert segs[0]["end"] == 3.0
+
+
+def test_parse_results_mixed_words_then_textonly_keeps_order():
+    # Words result re-segmented, then a text-only result appended after it.
+    words = [_word("hello", 0.0, 0.4), _word("world", 0.4, 0.8)]
+    results = [
+        _result("hello world", words=words),
+        _result("tail text", result_end=5.0),
+    ]
+    segs = g.parse_recognize_results(results, want_words=False)
+    assert [s["text"] for s in segs] == ["hello world", "tail text"]
+    # The text-only fallback advances from the word phrase's end.
+    assert segs[1]["start"] == pytest.approx(0.8)
+    assert segs[1]["end"] == pytest.approx(5.0)
 
 
 # ---------------------------------------------------------------- usage accumulator
