@@ -416,6 +416,7 @@ class App(tk.Tk):
     tiling_url_var: tk.StringVar
     tiling_divisions_var: tk.IntVar
     tiling_status_var: tk.StringVar
+    tiling_status_label: "ttk.Label"
     tiling_quality_var: tk.StringVar
     tiling_mute_var: tk.BooleanVar
     tiling_multi_monitor_var: tk.BooleanVar
@@ -2531,16 +2532,40 @@ class App(tk.Tk):
 
     def _tiling_status(self, message: str, color: str) -> None:
         """Status callback for the tiling engine (called from its worker
-        thread). Marshals the widget update onto the Tk main thread."""
-        self.post_to_main(
-            lambda: self.tiling_status_var.set(f"Tiling: {message}")
-        )
+        thread). Marshals the widget update onto the Tk main thread, applying
+        BOTH the text and the engine's state colour (green Playing / orange
+        Reconnecting / grey Stopped) so the status line reflects health at a
+        glance instead of a fixed grey."""
+        def _apply() -> None:
+            self.tiling_status_var.set(f"Tiling: {message}")
+            label = getattr(self, "tiling_status_label", None)
+            if label is not None:
+                try:
+                    label.configure(foreground=color or "#666")
+                except Exception:  # noqa: BLE001
+                    pass
+        self.post_to_main(_apply)
+
+    def _tiling_log(self, msg: str) -> None:
+        """Log callback for the tiling engine. The engine calls this from its
+        daemon worker thread (every stream drop / reconnect / self-heal), so
+        it must be marshalled onto the Tk main thread — App.log writes the
+        console Text widget directly and Tk is not thread-safe."""
+        self.post_to_main(lambda: self.log(msg))
 
     def start_tiling(self) -> None:
+        # A cleared / non-numeric Grid spinbox makes IntVar.get() raise
+        # tk.TclError ("expected floating-point number"), which would surface
+        # as a confusing "Could not start tiling" message. Default to 3 (the
+        # engine also clamps to 1–64); mirrors _save_server_prefs' guarded get.
+        try:
+            divisions = self.tiling_divisions_var.get()
+        except (tk.TclError, ValueError):
+            divisions = 3
         try:
             self.tiling.start(
                 self.tiling_url_var.get(),
-                self.tiling_divisions_var.get(),
+                divisions,
                 quality=self.tiling_quality_var.get(),
                 mute=bool(self.tiling_mute_var.get()),
                 multi_monitor=bool(self.tiling_multi_monitor_var.get()),
@@ -2548,7 +2573,7 @@ class App(tk.Tk):
                     getattr(self, "tiling_selected_monitors", [])
                 ),
                 auto_restart=bool(self.tiling_auto_restart_var.get()),
-                log=self.log,
+                log=self._tiling_log,
                 status=self._tiling_status,
             )
             self._save_tiling_prefs()

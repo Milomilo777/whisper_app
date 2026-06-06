@@ -854,9 +854,14 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     app.refresh_tiling_monitor_info()
 
     app.tiling_status_var = tk.StringVar(value="")
-    ttk.Label(
+    # Keep a handle on the label so _tiling_status can recolour it to match
+    # the engine's state colour (green Playing / orange Reconnecting / grey
+    # Stopped). Without the handle the colour the engine emits is discarded
+    # and the line stays a fixed grey.
+    app.tiling_status_label = ttk.Label(
         frame, textvariable=app.tiling_status_var, foreground="#666",
-    ).pack(anchor="w", pady=(6, 0))
+    )
+    app.tiling_status_label.pack(anchor="w", pady=(6, 0))
 
     if not ffplay_available():
         ffplay_name = "ffplay.exe" if os.name == "nt" else "ffplay"
