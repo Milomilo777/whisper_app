@@ -6,6 +6,11 @@ name: macOS app build
 # the .app/.dmg as a downloadable artifact.
 on:
   workflow_dispatch:
+  # Manual-only in practice: it fires solely on a push to the dedicated
+  # `macos-app-build` branch (NOT on macos-ci), so a normal macos-ci push never
+  # triggers this heavy build. To run it: push macos-ci's HEAD to macos-app-build.
+  push:
+    branches: [macos-app-build]
 
 jobs:
   build-app:
