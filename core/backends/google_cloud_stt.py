@@ -298,6 +298,56 @@ def offset_segments(
     return out
 
 
+def namespace_speaker_labels(
+    segments: list[dict[str, Any]], chunk_index: int
+) -> list[dict[str, Any]]:
+    """Make per-chunk diarization speaker labels globally distinct. PURE.
+
+    Google Cloud STT v2 assigns ``speaker_label`` values that are only
+    consistent WITHIN a single ``recognize`` request. In STANDARD (online)
+    mode we send each ~55 s chunk as an independent request, so "1" in chunk 0
+    and "1" in chunk 1 are UNRELATED people — yet both reach the SRT/VTT/PDF
+    writers verbatim, silently merging two physical speakers under one label
+    (and splitting one speaker across labels at every chunk boundary).
+
+    Cross-chunk speaker identity cannot be recovered without re-clustering the
+    audio (which this online path does not do), so the honest, lossless fix is
+    to NAMESPACE each chunk's labels with the chunk number. A label ``"1"`` in
+    chunk index 2 becomes ``"C3-1"`` (1-based chunk number), so the transcript
+    no longer falsely claims it is the same person as chunk 0's "1". Chunk 0
+    (``chunk_index == 0``) is left untouched so a short single-chunk job keeps
+    its clean ``"1" / "2"`` labels. Both the segment-level ``speaker`` and any
+    per-word ``speaker`` are rewritten. Does not mutate the input.
+    """
+    if chunk_index <= 0:
+        return [dict(seg) for seg in segments]
+    prefix = f"C{chunk_index + 1}-"
+
+    def _relabel(label: Any) -> str:
+        text = str(label or "").strip()
+        return f"{prefix}{text}" if text else text
+
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        new_seg = dict(seg)
+        if new_seg.get("speaker"):
+            new_seg["speaker"] = _relabel(new_seg["speaker"])
+        words = new_seg.get("words")
+        if isinstance(words, list):
+            new_words: list[dict[str, Any]] = []
+            for w in words:
+                if isinstance(w, dict):
+                    nw = dict(w)
+                    if nw.get("speaker"):
+                        nw["speaker"] = _relabel(nw["speaker"])
+                    new_words.append(nw)
+                else:
+                    new_words.append(w)
+            new_seg["words"] = new_words
+        out.append(new_seg)
+    return out
+
+
 def _offset_to_seconds(value: Any) -> float:
     """Convert a v2 word offset to float seconds.
 
@@ -1161,7 +1211,12 @@ class GoogleCloudSttBackend(Backend):
                     with liveness_tick(
                         log_cb, f"Google Cloud STT chunk {idx + 1}/{total}"
                     ):
-                        response = client.recognize(request=request)
+                        # Bounded RPC deadline: liveness_tick would otherwise
+                        # keep the parent watchdog from killing a worker wedged
+                        # on a half-open connection. timeout= caps the hang.
+                        response = client.recognize(
+                            request=request, timeout=self._recognize_timeout()
+                        )
                 except Exception as e:  # noqa: BLE001
                     raise RuntimeError(classify_google_error(e)) from e
             finally:
@@ -1175,6 +1230,12 @@ class GoogleCloudSttBackend(Backend):
                 want_words=want_words,
                 want_speaker=self._diarization,
             )
+            if self._diarization:
+                # v2 speaker labels are only consistent within one recognize
+                # request; namespace each chunk's labels so "1" in chunk 2 is
+                # not silently merged with "1" in chunk 1 (see
+                # namespace_speaker_labels). Chunk 0 is left untouched.
+                seg = namespace_speaker_labels(seg, idx)
             seg = offset_segments(seg, chunk_start)
             all_segments.extend(seg)
 
@@ -1238,6 +1299,8 @@ class GoogleCloudSttBackend(Backend):
             except OSError:
                 pass
 
+        response: Any = None
+        was_cancelled = False
         try:
             request = cloud_speech.BatchRecognizeRequest(
                 recognizer=recognizer,
@@ -1253,13 +1316,27 @@ class GoogleCloudSttBackend(Backend):
             )
             try:
                 with liveness_tick(log_cb, "Google Cloud STT batch"):
-                    operation = client.batch_recognize(request=request)
-                    response = operation.result(timeout=self._batch_timeout())
+                    # Bound the SUBMIT RPC too — a network blackhole at submit
+                    # time would otherwise hang the worker indefinitely.
+                    operation = client.batch_recognize(
+                        request=request, timeout=self._batch_submit_timeout()
+                    )
+                    response, was_cancelled = self._await_batch_with_cancel(
+                        operation, cancelled, log_cb
+                    )
             except Exception as e:  # noqa: BLE001
                 raise RuntimeError(classify_google_error(e)) from e
         finally:
             # Always delete the uploaded blob, success or failure.
             self._delete_gcs_blob(blob_name, log_cb)
+
+        if was_cancelled:
+            # User pressed Stop mid-batch. The standard path returns its
+            # partial; batch has no partial, so return an empty list — the
+            # caller sees task.cancelled and treats it as a clean cancel.
+            if log_cb:
+                log_cb("Task cancelled")
+            return []
 
         segments = self._parse_batch_response(
             response, gcs_uri, want_words
@@ -1269,6 +1346,47 @@ class GoogleCloudSttBackend(Backend):
         if log_cb:
             log_cb(f"Google Cloud STT (batch): {len(segments)} segment(s).")
         return segments
+
+    def _await_batch_with_cancel(
+        self,
+        operation: Any,
+        cancelled: Callable[[], bool] | None,
+        log_cb: Callable[[str], None] | None,
+    ) -> tuple[Any, bool]:
+        """Wait for the batch LRO, polling so a user Stop is honored promptly.
+
+        Repeatedly calls ``operation.result(timeout=<poll>)`` inside a try /
+        except for the LRO's timeout error. Between polls it checks
+        ``cancelled()``; on cancel it best-effort ``operation.cancel()``s the
+        long-running op and returns ``(None, True)`` so the worker isn't wedged
+        in ``result()`` for the whole (up to 1 h) batch turnaround. On normal
+        completion it returns ``(response, False)``. A genuine batch deadline
+        (no progress within ``_batch_timeout``) still raises.
+        """
+        import concurrent.futures as _futures
+
+        poll = self._batch_poll_seconds()
+        deadline = time.monotonic() + self._batch_timeout()
+        while True:
+            if cancelled and cancelled():
+                try:
+                    operation.cancel()
+                except Exception:  # noqa: BLE001 - best effort
+                    pass
+                return None, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # Exhausted the overall batch budget — surface a clean timeout.
+                raise _futures.TimeoutError(
+                    "Google Cloud batch operation did not finish within the "
+                    "configured timeout."
+                )
+            try:
+                response = operation.result(timeout=min(poll, remaining))
+                return response, False
+            except _futures.TimeoutError:
+                # Not done yet — loop to re-check the cancel flag.
+                continue
 
     def _parse_batch_response(
         self, response: Any, gcs_uri: str, want_words: bool
@@ -1419,6 +1537,49 @@ class GoogleCloudSttBackend(Backend):
             return float(self._cfg().get("gcloud_stt_batch_timeout_s") or 3600.0)
         except (TypeError, ValueError):
             return 3600.0
+
+    def _recognize_timeout(self) -> float:
+        """Per-request RPC deadline for the synchronous ``recognize`` call.
+
+        Without an application-level deadline a gRPC call wedged on a
+        half-open TCP connection (VPN flap, firewall blackhole) blocks
+        forever — and ``liveness_tick`` actively keeps the parent watchdog
+        from killing the worker. A bounded deadline lets ``classify_google_error``
+        surface a clean "could not reach Google" instead of an unkillable hang.
+        """
+        try:
+            return float(
+                self._cfg().get("gcloud_stt_recognize_timeout_s") or 300.0
+            )
+        except (TypeError, ValueError):
+            return 300.0
+
+    def _batch_submit_timeout(self) -> float:
+        """RPC deadline for SUBMITTING the long-running batch op.
+
+        The LRO *result* wait is bounded by ``_batch_timeout``; the initial
+        ``batch_recognize`` submit RPC needs its own (shorter) deadline so a
+        network blackhole at submit time cannot hang the worker forever.
+        """
+        try:
+            return float(
+                self._cfg().get("gcloud_stt_batch_submit_timeout_s") or 120.0
+            )
+        except (TypeError, ValueError):
+            return 120.0
+
+    def _batch_poll_seconds(self) -> float:
+        """Per-iteration wait while polling the batch LRO for cancellation.
+
+        Batch mode polls ``operation.result(timeout=<this>)`` in a loop so a
+        user Stop is honored within ~this many seconds instead of blocking for
+        the whole (up to 1 h) batch turnaround.
+        """
+        try:
+            val = float(self._cfg().get("gcloud_stt_batch_poll_s") or 5.0)
+        except (TypeError, ValueError):
+            val = 5.0
+        return val if val > 0 else 5.0
 
 
 # ---------------------------------------------------------------- helpers

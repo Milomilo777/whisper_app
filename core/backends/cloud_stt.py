@@ -80,9 +80,14 @@ API_VERSION = "v1beta"
 #: renamed / newer model needs no code change. See module docstring for
 #: why this is the current GA flash model.
 DEFAULT_MODEL = "gemini-3.5-flash"
-#: The Gemini inline-request hard cap is 20 MB *including* the prompt; we
-#: only inline well under it. Anything larger goes through the Files API.
-INLINE_LIMIT_BYTES = 18 * 1024 * 1024
+#: The Gemini inline-request hard cap is 20 MB *including* the prompt. Inline
+#: audio is base64-encoded in the JSON body, which inflates the RAW bytes by
+#: ~4/3, so the limit MUST be derived from the *post-base64* size, not the raw
+#: FLAC size. We size the raw-byte ceiling so that ceil(raw * 4 / 3) plus a
+#: 64 KiB headroom for the prompt + JSON envelope stays comfortably under
+#: 20 MB; anything larger goes through the Files API. (A raw ceiling of 18 MiB
+#: used to slip ~24 MiB of base64 into the body, which Google rejects HTTP 400.)
+INLINE_LIMIT_BYTES = int((20 * 1024 * 1024 - 64 * 1024) * 3 / 4)
 #: How long to wait for an uploaded file to reach state ACTIVE.
 FILE_ACTIVE_TIMEOUT_S = 120.0
 #: Per-request network timeout for the generateContent call.
@@ -91,6 +96,23 @@ GENERATE_TIMEOUT_S = 600.0
 #: FLAC is lossless, far smaller than WAV, and a Gemini-supported mime.
 CHUNK_MIME = "audio/flac"
 CHUNK_EXT = ".flac"
+
+#: When the duration cannot be determined (corrupt header, streamed source,
+#: ffprobe missing), the chunk planner must STILL slice into fixed-size windows
+#: rather than send the whole file as one request — a long file transcribed in
+#: one shot hits Gemini's output-token limit (the bulk of the transcript is
+#: lost / the run errors out). We plan this many back-to-back ``chunk_seconds``
+#: windows; the ffmpeg ``-ss/-t`` slicer naturally returns empty FLAC for
+#: windows past EOF (-> stops early), so the bound just caps wasted requests on
+#: a genuinely unknown-length file. 120 * 480 s ~= 16 h, longer than any
+#: realistic input. (Mirrors google_cloud_stt.MAX_UNKNOWN_DURATION_CHUNKS.)
+MAX_UNKNOWN_DURATION_CHUNKS = 120
+
+#: A FLAC slice that starts past the real end of file decodes to ~no audio,
+#: leaving only the container header (well under this). Used by the
+#: unknown-duration path to detect EOF and stop early. 1 s of 16 kHz mono FLAC
+#: is several KB, so this never trips on a real (non-empty) chunk.
+_EMPTY_FLAC_BYTES = 4096
 
 #: The transcription instruction. Asks for strict verbatim output with
 #: per-line timestamps we can parse back into segments. Kept terse so the
@@ -325,16 +347,39 @@ def offset_segments(
     return out
 
 
-def plan_chunks(duration: float, chunk_seconds: float) -> list[tuple[float, float]]:
+def plan_chunks(
+    duration: float,
+    chunk_seconds: float,
+    *,
+    chunk_when_unknown: bool = False,
+) -> list[tuple[float, float]]:
     """Split ``[0, duration]`` into (start, end) windows of ``chunk_seconds``.
 
-    Pure. Returns at least one chunk even for a zero / unknown duration so
-    a file with an unreadable duration still gets transcribed whole.
+    Pure. With a known ``duration`` this slices ``[0, duration]`` into
+    ``chunk_seconds`` windows. When the duration is unknown (``<= 0``):
+
+      * with ``chunk_when_unknown`` False (the default) it returns the legacy
+        single whole-file ``(0.0, 0.0)`` marker (``0.0`` end = "to end of
+        file" for the ffmpeg slicer);
+      * with ``chunk_when_unknown`` True (what ``transcribe_to_segments``
+        passes) it returns a bounded run of fixed ``chunk_seconds`` windows so
+        a long file with an unreadable header is still chunked instead of being
+        sent whole — sending the whole file as one request hits Gemini's
+        output-token limit and truncates / loses the bulk of a long
+        transcript. Windows past the real end of file produce empty slices,
+        which the caller detects (and stops on).
     """
     if chunk_seconds <= 0:
         chunk_seconds = 480.0
     if duration <= 0:
-        return [(0.0, 0.0)]  # 0.0 end = "to end of file" for the slicer
+        if not chunk_when_unknown:
+            return [(0.0, 0.0)]  # 0.0 end = "to end of file" for the slicer
+        unknown_chunks: list[tuple[float, float]] = []
+        start = 0.0
+        for _ in range(MAX_UNKNOWN_DURATION_CHUNKS):
+            unknown_chunks.append((start, start + chunk_seconds))
+            start += chunk_seconds
+        return unknown_chunks
     chunks: list[tuple[float, float]] = []
     start = 0.0
     while start < duration - 0.001:
@@ -509,11 +554,39 @@ class CloudSttBackend(Backend):
             )
 
         prompt = build_prompt(language)
-        chunks = plan_chunks(duration, self._chunk_seconds)
+
+        # Resolve a real duration before planning chunks. A 0 / unknown
+        # duration used to collapse the whole file into ONE generateContent
+        # request, which hits Gemini's output-token limit on a long clip and
+        # truncates / loses the bulk of the transcript. Probe with the bundled
+        # ffprobe first; only if that still fails do we fall back to the
+        # bounded unknown-length chunk plan (and stop early once we slice past
+        # EOF). Mirrors google_cloud_stt._run_standard.
+        effective_duration = duration
+        if effective_duration <= 0:
+            try:
+                from ..transcriber import get_duration
+                effective_duration = float(get_duration(audio_path) or 0.0)
+            except Exception:  # noqa: BLE001 - probe failure is non-fatal
+                effective_duration = 0.0
+            if log_cb and effective_duration > 0:
+                log_cb(
+                    f"Cloud STT: probed duration {effective_duration:.0f}s "
+                    "for chunk planning."
+                )
+
+        duration_unknown = effective_duration <= 0
+        chunks = plan_chunks(
+            effective_duration, self._chunk_seconds, chunk_when_unknown=True
+        )
         total = len(chunks)
         if log_cb:
+            count_text = (
+                "unknown length, chunking until end of file"
+                if duration_unknown else f"{total} chunk(s)"
+            )
             log_cb(
-                f"Cloud STT: uploading {total} chunk(s) to Google "
+                f"Cloud STT: uploading {count_text} to Google "
                 f"(model {self._model}). Audio leaves this machine."
             )
 
@@ -530,6 +603,21 @@ class CloudSttBackend(Backend):
                 audio_path, chunk_start, chunk_end
             )
             try:
+                # Unknown-length path: once a slice starting past EOF comes
+                # back essentially empty (just a FLAC header, no audio), we
+                # have reached the end of the file — stop instead of firing
+                # the rest of the bounded chunk plan at Google for nothing.
+                if (
+                    duration_unknown
+                    and idx > 0
+                    and os.path.getsize(flac_path) < _EMPTY_FLAC_BYTES
+                ):
+                    if log_cb:
+                        log_cb(
+                            "Cloud STT: reached end of file "
+                            f"after {idx} chunk(s)."
+                        )
+                    break
                 with liveness_tick(log_cb, f"Cloud STT chunk {idx + 1}/{total}"):
                     text = self._transcribe_one_chunk(flac_path, prompt)
             finally:
