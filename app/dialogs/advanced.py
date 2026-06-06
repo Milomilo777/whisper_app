@@ -876,12 +876,12 @@ class AdvancedDialog(tk.Toplevel):
 
         def _worker() -> None:
             try:
-                self.app.log("Downloading Qwen2.5-1.5B LLM model (~1 GB)…")
-                path = _llm.download_default_model(log=self.app.log)
-                self.app.log(f"LLM model ready at {path}")
+                self.app.log_threadsafe("Downloading Qwen2.5-1.5B LLM model (~1 GB)…")
+                path = _llm.download_default_model(log=self.app.log_threadsafe)
+                self.app.log_threadsafe(f"LLM model ready at {path}")
             except Exception as e:  # noqa: BLE001
                 logger.exception("LLM model download failed")
-                self.app.log(f"LLM model download failed: {e}")
+                self.app.log_threadsafe(f"LLM model download failed: {e}")
 
         from core._threads import safe_thread
         safe_thread(_worker, name="llm-model-download")
@@ -904,12 +904,12 @@ class AdvancedDialog(tk.Toplevel):
 
         def _worker() -> None:
             try:
-                self.app.log("Downloading whisper.cpp model (~1.1 GB)…")
-                path = _wc.download_default_model(log=self.app.log)
-                self.app.log(f"whisper.cpp model ready at {path}")
+                self.app.log_threadsafe("Downloading whisper.cpp model (~1.1 GB)…")
+                path = _wc.download_default_model(log=self.app.log_threadsafe)
+                self.app.log_threadsafe(f"whisper.cpp model ready at {path}")
             except Exception as e:  # noqa: BLE001
                 logger.exception("whisper.cpp model download failed")
-                self.app.log(f"whisper.cpp model download failed: {e}")
+                self.app.log_threadsafe(f"whisper.cpp model download failed: {e}")
 
         from core._threads import safe_thread
         safe_thread(_worker, name="whispercpp-model-download")
@@ -947,7 +947,7 @@ class AdvancedDialog(tk.Toplevel):
                 ok, msg = False, f"Key check failed: {e}"
             text = ("OK — " if ok else "FAILED — ") + msg
             self.app.post_to_main(lambda: _set_result(text))
-            self.app.log(f"Cloud STT key test: {text}")
+            self.app.log_threadsafe(f"Cloud STT key test: {text}")
 
         from core._threads import safe_thread
         safe_thread(_worker, name="cloud-stt-key-test")
@@ -1111,7 +1111,7 @@ class AdvancedDialog(tk.Toplevel):
                 if not _g.runtime_available():
                     _status("Installing Google Cloud libraries (one-time)...")
                     ok_install = optional_deps.install(
-                        "google_cloud_stt", log_cb=self.app.log
+                        "google_cloud_stt", log_cb=self.app.log_threadsafe
                     )
                     if not ok_install or not _g.runtime_available():
                         _status(

@@ -3800,6 +3800,16 @@ class App(tk.Tk):
             self.txt.insert("end", msg + "\n")
             self.txt.see("end")
 
+    def log_threadsafe(self, msg: str) -> None:
+        """Thread-safe wrapper around :meth:`log` for background threads.
+
+        log() writes the console Text widget directly, and Tk is not
+        thread-safe, so any background-thread caller (e.g. the Advanced
+        dialog's install / model-download / cloud-key / gcloud-test workers)
+        must marshal through here. Mirrors the post_to_main pattern already
+        used by _offer_optional_install and the tiling callbacks."""
+        self.post_to_main(lambda: self.log(msg))
+
     # Driver loops ------------------------------------------------------------
     def update_overall_progress(self) -> None:
         running = [t for t in self.queue if t.status == "running"]
