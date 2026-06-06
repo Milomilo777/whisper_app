@@ -775,7 +775,19 @@ class AdvancedDialog(tk.Toplevel):
         cfg["vad_threshold"] = round(float(self._vad_threshold.get()), 2)
         cfg["vad_speech_pad_ms"] = int(self._vad_speech_pad.get())
         cfg["output_formats"] = [name for name, v in self._format_vars.items() if v.get()] or ["srt"]
-        cfg["batch_size"] = max(1, int(self._batch_size.get()))
+        # The Batch-size Spinbox is free-text (no readonly/validatecommand),
+        # so the user can clear it or type a stray character. tk.IntVar.get()
+        # then raises TclError. Read it defensively so Save never crashes and
+        # none of the user's other edits are lost — fall back to the prior
+        # saved value (then the default).
+        try:
+            bs = int(self._batch_size.get())
+        except (tk.TclError, ValueError):
+            try:
+                bs = int(cfg.get("batch_size", 16))
+            except (TypeError, ValueError):
+                bs = 16
+        cfg["batch_size"] = max(1, bs)
         cfg["initial_prompt"] = self._initial_prompt.get().strip()
         cfg["hotwords"] = self._hotwords.get().strip()
         cfg["auto_transcribe_after_download"] = bool(self._auto_transcribe.get())
