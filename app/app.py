@@ -36,6 +36,7 @@ from core import __version__ as _APP_VERSION
 from core._proc import kill_process_tree
 from core.config import load_config, save_config
 from core.history import HistoryDB
+from core.hub import tiling_tab_enabled
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 from core.paths import bin_dir as _resource_bin_dir
 from core.paths import bundled_binary as _bundled_binary
@@ -1265,12 +1266,22 @@ class App(tk.Tk):
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
         self.nb.add(self.t3, text="Download Videos")
-        self.nb.add(self.t4, text="Video Tiling")
+        # Video Tiling is optional: the Standard installer can drop a
+        # no_tiling.flag marker into {app} when the user opts out at install
+        # time, in which case we don't add the tab at all. self.tiling (the
+        # controller) is still constructed in __init__, so on_exit's
+        # self.tiling.stop() stays safe; only the UI surface is hidden. All
+        # tiling_* vars + start/stop callbacks are reachable only through this
+        # tab's widgets, so skipping it leaves nothing dangling.
+        self._tiling_tab_visible = tiling_tab_enabled()
+        if self._tiling_tab_visible:
+            self.nb.add(self.t4, text="Video Tiling")
         self.nb.add(self.t5, text="Web / LAN access")
         build_transcribe_tab(self, self.t1)
         build_queue_tab(self, self.t2)
         build_download_tab(self, self.t3)
-        build_tiling_tab(self, self.t4)
+        if self._tiling_tab_visible:
+            build_tiling_tab(self, self.t4)
         build_server_tab(self, self.t5)
 
     def _save_auto_transcribe_pref(self) -> None:

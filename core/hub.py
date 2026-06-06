@@ -91,6 +91,31 @@ def resolve_app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# Marker file the Standard installer drops into the {app} directory when
+# the user ticks "do NOT include Video Tiling" at install time. Its mere
+# presence disables the in-app Video Tiling tab; it is never written by
+# the app itself. In a source / dev checkout the repo root won't contain
+# it, so tiling stays on for developers.
+NO_TILING_MARKER = "no_tiling.flag"
+
+
+def tiling_tab_enabled() -> bool:
+    """Whether the Video Tiling tab should be shown.
+
+    Returns ``True`` unless a ``no_tiling.flag`` marker file sits in the
+    install ``{app}`` directory (see :func:`resolve_app_dir`). The installer
+    creates that marker only when the user opted out of Video Tiling.
+
+    Any filesystem error is swallowed and treated as "enabled" so a quirky
+    path / permission problem can never block app startup — the feature
+    simply stays on, which is the safe default.
+    """
+    try:
+        return not (resolve_app_dir() / NO_TILING_MARKER).exists()
+    except OSError:
+        return True
+
+
 def default_hub_folder() -> Path:
     """The pre-filled value the first-run dialog shows.
 
