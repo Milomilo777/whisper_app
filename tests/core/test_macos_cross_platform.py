@@ -173,7 +173,8 @@ def test_download_ffplay_into_bin_on_mac(monkeypatch, tmp_path):
     """End-to-end (network stubbed): a mac .zip 'download' lands bin/ffplay."""
     _force_posix(monkeypatch, tiling)
     monkeypatch.setattr(tiling.sys, "platform", "darwin")
-    src_zip = _make_zip(tmp_path, {"ffmpeg/bin/ffplay": b"OK"})
+    # > 100 KB so the download size-guard accepts it as a real binary.
+    src_zip = _make_zip(tmp_path, {"ffmpeg/bin/ffplay": b"OK" + b"\x00" * (110 * 1024)})
     bindir = tmp_path / "appbin"
 
     class _FakeResp:

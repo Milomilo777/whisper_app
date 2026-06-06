@@ -123,7 +123,10 @@ def test_download_ffplay_extracts_local_zip(monkeypatch, tmp_path):
     """End-to-end with the network stubbed: a zip 'download' that contains
     ffplay lands in bin/. Stubs urlopen + bin_dir to stay hermetic."""
     exe = tiling._ffplay_exe_name()
-    src_zip = _make_zip(tmp_path, {"ffmpeg/bin/" + exe: b"FFPLAY-OK"})
+    # A real ffplay binary is several MB; the download guard rejects a
+    # < 100 KB extract as truncated, so the stub must be realistically sized.
+    payload = b"FFPLAY-OK" + b"\x00" * (110 * 1024)
+    src_zip = _make_zip(tmp_path, {"ffmpeg/bin/" + exe: payload})
     bindir = tmp_path / "appbin"
 
     class _FakeResp:
@@ -147,4 +150,39 @@ def test_download_ffplay_extracts_local_zip(monkeypatch, tmp_path):
     ok = tiling.download_ffplay(config=cfg)
     assert ok is True
     assert os.path.isfile(bindir / exe)
-    assert open(bindir / exe, "rb").read() == b"FFPLAY-OK"
+    assert open(bindir / exe, "rb").read() == payload
+
+
+def test_download_ffplay_rejects_truncated_member(monkeypatch, tmp_path):
+    """A truncated / near-empty ffplay member (a broken or partial zip
+    extract) must NOT be reported as ready, and the unusable stub must be
+    removed so bin/ stays 'missing' rather than leaving a broken file that
+    a later retry would skip over. Regression for the 0-byte ffplay guard.
+    """
+    exe = tiling._ffplay_exe_name()
+    # 50 bytes — extracts fine, but well under the 100 KB "real binary" floor.
+    src_zip = _make_zip(tmp_path, {"ffmpeg/bin/" + exe: b"x" * 50})
+    bindir = tmp_path / "appbin"
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._b = io.BytesIO(data)
+
+        def read(self, *a):
+            return self._b.read(*a)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    data = open(src_zip, "rb").read()
+    monkeypatch.setattr(tiling.urllib.request, "urlopen", lambda *a, **k: _FakeResp(data))
+    monkeypatch.setattr(tiling, "bin_dir", lambda: str(bindir))
+
+    cfg = {"ffplay_downloads": {tiling.ffplay_platform_key(): "https://x/build.zip"}}
+    ok = tiling.download_ffplay(config=cfg)
+    assert ok is False
+    # the broken stub must have been unlinked, not left behind
+    assert not os.path.isfile(bindir / exe)
