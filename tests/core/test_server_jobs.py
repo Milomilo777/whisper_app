@@ -51,6 +51,13 @@ def _make_manager(tmp_path, transcribe_fn, **kw) -> JobManager:
 def _writing_transcribe(formats=("srt", "txt")):
     """A fake transcribe that writes a dummy output per requested format."""
     def _fn(task, progress_cb=None, log_cb=None, language_cb=None):
+        # The real engine reads these bare off the task inside its segment
+        # loop; touch them here so a future missing attribute fails the
+        # hermetic suite instead of only crashing a live server job.
+        assert hasattr(task, "paused")
+        assert hasattr(task, "cancelled")
+        _ = task.paused
+        _ = task.cancelled
         if progress_cb:
             progress_cb(50)
         base, _ = os.path.splitext(task.file_path)
@@ -61,6 +68,39 @@ def _writing_transcribe(formats=("srt", "txt")):
         if progress_cb:
             progress_cb(100)
     return _fn
+
+
+# --- the server task object mirrors what the engine reads --------------------
+
+def test_server_task_mirrors_engine_read_attributes():
+    """Regression: _ServerTask must carry every attribute the engine reads.
+
+    The engine reads ``task.paused`` and ``task.cancelled`` bare inside its
+    segment loop (``while task.paused and not task.cancelled``). A missing
+    ``paused`` used to raise AttributeError on EVERY LAN/web job, swallowed
+    into job.error with no output. Assert the full duck-type here so a
+    dropped attribute fails the hermetic suite, not a live server job.
+    """
+    class _FakeJob:
+        media_path = "/tmp/x.mp4"
+        language = "en"
+        formats = ["srt", "txt"]
+        cancelled = False
+
+    task = jobs_mod._ServerTask(_FakeJob())  # type: ignore[arg-type]
+    for attr in (
+        "file_path", "language", "output_formats", "output_paths",
+        "detected_language", "language_probability", "paused", "cancelled",
+        "resume", "clip_start", "clip_end", "history_id",
+    ):
+        assert hasattr(task, attr), f"_ServerTask missing {attr!r}"
+    # paused must read as a real bool the loop can short-circuit on.
+    assert task.paused is False
+    assert task.cancelled is False
+    assert task.language_probability == 0.0
+    # cancelled is a property bridged to the job; it must round-trip.
+    task.cancelled = True
+    assert task.cancelled is True
 
 
 # --- upload happy path -------------------------------------------------------

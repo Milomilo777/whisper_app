@@ -116,14 +116,27 @@ class Job:
         }
 
 
-class _CancelledTask:
-    """Minimal stand-in object passed to ``transcribe_fn``.
+class _ServerTask:
+    """The task object passed to ``transcribe_fn`` for EVERY server job.
 
-    Carries only what ``core.transcriber.transcribe`` reads off a task:
-    ``file_path``, ``language``, ``output_formats`` and the cooperative
-    ``cancelled`` flag (read by the worker's control loop). Using a plain
-    object keeps this module free of any ``app/`` task import while still
-    satisfying the engine's duck-typed access.
+    Despite the lean shape, this is NOT a cancel-only helper: it is the one
+    task duck-type the engine sees for all LAN/web jobs. It MUST mirror every
+    attribute ``core.transcriber.transcribe`` (and ``resume_transcription``)
+    reads off a task, or the engine raises ``AttributeError`` mid-run and the
+    job dies with no output. Currently read by the engine:
+
+      * ``file_path``, ``language``, ``output_formats`` (inputs)
+      * ``output_paths``, ``detected_language``, ``language_probability``
+        (written back by the engine)
+      * ``resume``, ``clip_start``, ``clip_end``, ``history_id`` (inputs)
+      * the cooperative ``cancelled`` flag AND the ``paused`` flag, both read
+        bare inside the segment loop (``while task.paused and not
+        task.cancelled``). ``paused`` has no UI to flip it on the server, but
+        it must EXIST or the loop raises.
+
+    Using a plain object keeps this module free of any ``app/`` task import
+    while still satisfying the engine's duck-typed access. Keep this in sync
+    with the attributes ``core.transcriber.transcribe`` reads.
     """
 
     def __init__(self, job: Job) -> None:
@@ -132,6 +145,8 @@ class _CancelledTask:
         self.output_formats: list[str] | None = list(job.formats) or None
         self.output_paths: list[str] | None = None
         self.detected_language: str = ""
+        self.language_probability: float = 0.0
+        self.paused: bool = False
         self.resume: bool = False
         self.clip_start: float | None = None
         self.clip_end: float | None = None
@@ -364,7 +379,7 @@ class JobManager:
 
             history_db, history_id = self._open_history(job)
             self._set_status(job, STATUS_RUNNING)
-            task = _CancelledTask(job)
+            task = _ServerTask(job)
 
             def _progress(p: int) -> None:
                 job.progress = max(0, min(100, int(p)))

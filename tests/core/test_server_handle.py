@@ -17,6 +17,12 @@ from core.server import ServerHandle, find_available_port
 
 def _writing_transcribe(task, progress_cb=None, log_cb=None, language_cb=None):
     """Write a dummy output beside the input — never touches the model."""
+    # The real engine reads these bare off the task; touch them so a future
+    # missing attribute fails the hermetic suite, not only a live server job.
+    assert hasattr(task, "paused")
+    assert hasattr(task, "cancelled")
+    _ = task.paused
+    _ = task.cancelled
     base, _ = os.path.splitext(task.file_path)
     for fmt in (task.output_formats or ["srt"]):
         with open(f"{base}.{fmt}", "w", encoding="utf-8") as f:
