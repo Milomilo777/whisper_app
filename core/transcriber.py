@@ -697,6 +697,44 @@ def _indexed_path(path: str, index: int) -> str:
     return f"{root} ({index}){ext}"
 
 
+# Registry-key -> on-disk extension overrides. A format whose name is
+# not a valid file extension (or that a tool can't open under its raw
+# name) needs an entry here; everything else uses its own name.
+#   * json      -> json (historical: the key already equalled the ext,
+#                   listed for documentation symmetry)
+#   * smtv_docx -> docx (a ".smtv_docx" file is not a Word document)
+_FMT_EXTENSIONS: dict[str, str] = {
+    "json": "json",
+    "smtv_docx": "docx",
+}
+
+
+def _smtv_output_path(base: str, lang: str) -> str:
+    """Path for the SMTV team file: a fixed, recognisable filename.
+
+    ``<work title> -Transcription in <language> – Translation in
+    English.docx`` next to the source media. ``base`` carries the source
+    directory + stem; the language name comes from the core-side ISO map
+    (falls back to the raw code, or ``...`` when unknown — matching the
+    template's own placeholder). Filesystem-illegal characters in the
+    language label are stripped so the name is always writable.
+    """
+    from .writers.smtv_docx_writer import language_name
+
+    directory = os.path.dirname(base)
+    stem = os.path.basename(base)
+    label = language_name(lang) or "..."
+    # Strip characters Windows forbids in filenames from the language
+    # label (the stem is reused verbatim from the existing source name,
+    # so it is already a legal filename).
+    for bad in '<>:"/\\|?*':
+        label = label.replace(bad, "")
+    label = label.strip() or "..."
+    # en-dash (U+2013) matches the template title exactly.
+    filename = f"{stem} -Transcription in {label} – Translation in English.docx"
+    return os.path.join(directory, filename) if directory else filename
+
+
 def _write_outputs(
     base: str,
     segments_data: list[dict[str, Any]],
@@ -746,10 +784,22 @@ def _write_outputs(
     for fmt_name in formats:
         if fmt_name not in available:
             continue
-        ext = "json" if fmt_name == "json" else fmt_name
-        planned.append((fmt_name, _render_filename_template(
-            template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
-        )))
+        # Map the registry key to the on-disk extension. Most formats
+        # use their own name; a couple need an override so the file is
+        # one a downstream tool can actually open. ``json`` already used
+        # this; ``smtv_docx`` MUST become ``.docx`` (a ".smtv_docx" file
+        # is not a Word document).
+        ext = _FMT_EXTENSIONS.get(fmt_name, fmt_name)
+        if fmt_name == "smtv_docx":
+            # The transcription team's file uses a fixed, recognisable
+            # name rather than the user's output_filename_template, so
+            # it never collides with a normal ".docx" export.
+            rendered = _smtv_output_path(base, lang)
+        else:
+            rendered = _render_filename_template(
+                template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
+            )
+        planned.append((fmt_name, rendered))
     index = 0
     while index < 10000 and any(
         os.path.exists(_indexed_path(p, index)) for _, p in planned
@@ -779,7 +829,22 @@ def _write_outputs(
             f"{path}.{os.getpid()}-{threading.get_ident()}.part"
         )
         try:
-            if is_binary(fmt_name):
+            if fmt_name == "smtv_docx":
+                # Special case: the SMTV writer needs the detected
+                # language + work title beyond the frozen 2-arg writer
+                # contract, so call it directly (the registry's 2-arg
+                # adapter raises). work_title = source stem; language =
+                # the ISO code threaded in via ``lang``.
+                from .writers import smtv_docx_writer
+                payload_b = smtv_docx_writer.write_bytes(
+                    segments_data,
+                    audio_path,
+                    language=lang,
+                    work_title=os.path.basename(base),
+                )
+                with open(part_path, "wb") as fb:
+                    fb.write(payload_b)
+            elif is_binary(fmt_name):
                 payload_b = get_binary_writer(fmt_name)(segments_data, audio_path)
                 with open(part_path, "wb") as fb:
                     fb.write(payload_b)
