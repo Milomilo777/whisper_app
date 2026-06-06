@@ -150,6 +150,32 @@ def _split_dnd_paths(raw: str) -> list[str]:
     return out
 
 
+def _file_uri_to_path(uri: str) -> str:
+    """Convert a ``file://`` URI to a local filesystem path.
+
+    Handles the common shapes a drop target sees:
+    ``file:///C:/dir/clip.mp4`` (Windows), ``file:///home/u/clip.mp4``
+    (POSIX), and the UNC form ``file://server/share/clip.mp4``. Returns ""
+    when ``uri`` isn't a ``file://`` URI or can't be parsed, so the caller
+    can fall through to its unsupported-scheme path.
+    """
+    if not uri.startswith("file://"):
+        return ""
+    from urllib.parse import unquote, urlsplit
+    from urllib.request import url2pathname
+    try:
+        parts = urlsplit(uri)
+        # A non-empty netloc on file:// is a UNC host (file://server/share);
+        # localhost/empty is the ordinary local-file case.
+        netloc = parts.netloc
+        path = url2pathname(unquote(parts.path))
+        if netloc and netloc.lower() != "localhost":
+            return r"\\{}{}".format(netloc, path)
+        return path
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # --- About dialog content (pure, Tk-free, unit-testable) -------------------
 # The About dialog's text and links live in these two module-level helpers so
 # they can be unit-tested without ever building a tk.Tk() root. The dialog in
@@ -2242,11 +2268,43 @@ class App(tk.Tk):
                     pass
         return out
 
+    def _active_dup_in_queue(self, file_path: str) -> bool:
+        """True if a non-terminal queue task already targets ``file_path``.
+
+        Re-run / Resume re-enqueue a fresh task from a terminal (finished /
+        cancelled / error) row. Without this guard, double-clicking Re-run
+        (or re-running while a previous re-run of the same file is still
+        waiting / running) enqueues a SECOND concurrent transcription of the
+        same file — wasted work and confusing duplicate rows. Mirrors the
+        watched-folder dedup in :meth:`_enqueue_watched_file`: skip only when
+        a same-path task is still pending; a finished/cancelled/error row
+        does not block a fresh re-run.
+        """
+        try:
+            norm = os.path.normcase(os.path.abspath(file_path))
+        except Exception:  # noqa: BLE001
+            return False
+        for existing in self.queue:
+            try:
+                if (os.path.normcase(os.path.abspath(existing.file_path)) == norm
+                        and getattr(existing, "status", "")
+                        not in ("finished", "cancelled", "error")):
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
     def _bulk_rerun(self, tasks: list[Any]) -> None:
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Re-run cancelled: model load was cancelled")
             return
         for t in tasks:
+            if self._active_dup_in_queue(t.file_path):
+                self.log(
+                    f"Re-run skipped: {os.path.basename(t.file_path)} is "
+                    f"already in the queue."
+                )
+                continue
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
@@ -2263,6 +2321,12 @@ class App(tk.Tk):
             self.log("Resume cancelled: model load was cancelled")
             return
         for t in tasks:
+            if self._active_dup_in_queue(t.file_path):
+                self.log(
+                    f"Resume skipped: {os.path.basename(t.file_path)} is "
+                    f"already in the queue."
+                )
+                continue
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
@@ -2318,6 +2382,12 @@ class App(tk.Tk):
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Re-run cancelled: model load was cancelled")
             return
+        if self._active_dup_in_queue(task.file_path):
+            self.log(
+                f"Re-run skipped: {os.path.basename(task.file_path)} is "
+                f"already in the queue."
+            )
+            return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
@@ -2342,6 +2412,12 @@ class App(tk.Tk):
         # Interactive — surface the lazy-load modal if needed.
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Resume cancelled: model load was cancelled")
+            return
+        if self._active_dup_in_queue(task.file_path):
+            self.log(
+                f"Resume skipped: {os.path.basename(task.file_path)} is "
+                f"already in the queue."
+            )
             return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
@@ -3031,6 +3107,12 @@ class App(tk.Tk):
             port = int(self.server_port_var.get())
         except (tk.TclError, ValueError):
             port = int(self.app_config.get("server_port", 8765))
+        # Clamp an out-of-range typed port (0, >65535, negative) to the
+        # default, mirroring _save_server_prefs. _save_server_prefs only
+        # clamps app_config; it does NOT rewrite server_port_var, so without
+        # this the raw typed value would flow into find_available_port, which
+        # rejects it and silently binds a random ephemeral port instead.
+        port = port if 1 <= port <= 65535 else 8765
         share_lan = bool(self.server_share_lan_var.get())
         token = self.server_token_var.get().strip()
         max_upload_mb = int(self.app_config.get("server_max_upload_mb", 512))
@@ -3118,6 +3200,17 @@ class App(tk.Tk):
                 "Running. On this PC and on your network.")
             self.server_url_var.set(
                 f"This PC:  {urls[0]}\nNetwork:  {urls[1]}")
+        elif share_lan:
+            # LAN sharing was requested but the network address could not be
+            # determined (LAN-IP detection failed — no active network
+            # interface, VPN-only, etc.). The server is bound on all
+            # interfaces and IS reachable from the network if you know this
+            # PC's IP; we just can't display it. Say so distinctly instead of
+            # the misleading "Running on this computer." (local-only) line.
+            self.server_status_var.set(
+                "Running. Network sharing on, but your network address "
+                "couldn't be detected.")
+            self.server_url_var.set(primary)
         else:
             self.server_status_var.set("Running on this computer.")
             self.server_url_var.set(primary)
@@ -4151,19 +4244,42 @@ class App(tk.Tk):
                 items = [raw]
         paths: list[str] = []
         urls: list[str] = []
+        unsupported: list[str] = []
         for item in items:
             s = item.strip()
             if not s:
                 continue
             if s.startswith(("http://", "https://")):
                 urls.append(s)
+            elif s.startswith("file://"):
+                # A file:// URI (some apps / file managers hand these to a
+                # drop target) points at a local file. Convert it to a real
+                # path and treat it like any other local file rather than
+                # silently swallowing it.
+                local = _file_uri_to_path(s)
+                if local and os.path.isfile(local):
+                    paths.append(local)
+                else:
+                    unsupported.append(s)
             elif os.path.isfile(s):
                 paths.append(s)
+            elif "://" in s or s.split(":", 1)[0] in ("ftp", "magnet", "smb"):
+                # A recognised-but-unsupported scheme (ftp:, magnet:, smb:,
+                # …). Don't pretend it worked — note it so the drop isn't a
+                # silent no-op.
+                unsupported.append(s)
 
         if urls and hasattr(self, "download_url_var"):
             self.download_url_var.set(urls[0])
             self.nb.select(self.t3)
             self.log(f"Pasted URL into Download tab: {urls[0]}")
+            if len(urls) > 1:
+                # The Download tab takes one URL at a time; the rest of a
+                # multi-URL drop would otherwise vanish without a trace.
+                self.log(
+                    f"Only the first of {len(urls)} dropped URLs was used; "
+                    f"drop the others one at a time."
+                )
         if paths:
             if len(paths) == 1:
                 self.fv.set(paths[0])
@@ -4173,6 +4289,21 @@ class App(tk.Tk):
                 count = self._bulk_enqueue(paths)
                 if count:
                     self.log(f"Enqueued {count} files via drag-and-drop")
+        if unsupported:
+            self.log(
+                f"Ignored {len(unsupported)} dropped item(s) with an "
+                f"unsupported type (e.g. {unsupported[0]}). Drop a media file "
+                f"or an http(s) URL."
+            )
+        elif not paths and not urls and raw.strip():
+            # A non-empty payload that produced nothing actionable — a folder,
+            # a deleted/unreachable path, or an empty selection. Without this
+            # the drop is a silent no-op and the user can't tell what went
+            # wrong.
+            self.log(
+                "Nothing to do with that drop — drop a media FILE (not a "
+                "folder) or an http(s) URL."
+            )
 
     def _cancel_running(self) -> None:
         """Esc handler — cancel whichever single running task is most relevant."""
