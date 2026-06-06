@@ -67,6 +67,22 @@ class HardwareWizard(tk.Toplevel):
         self._tiers: list[_hw.Tier] = []
         self._selected_idx: int = -1
         self._benchmark_rtf: float | None = None
+        # Generation token: each _reprobe bumps it; a result from a superseded
+        # probe (stale token) is ignored.
+        self._probe_seq: int = 0
+        # Kept so tests / callers can join the in-flight probe before
+        # asserting on the populated tree (the probe runs off-thread).
+        self._probe_thread: threading.Thread | None = None
+        # The worker thread stashes (seq, tiers) here under the lock; a
+        # main-thread after()-poll picks it up. We deliberately do NOT call
+        # self.after() from the worker thread — on Python 3.14 that raises
+        # "main thread is not in main loop".
+        self._probe_lock = threading.Lock()
+        self._probe_result: tuple[int, list[_hw.Tier]] | None = None
+        # Re-entrancy guard: True while we programmatically set the tree
+        # selection so _on_select ignores the event we caused (see
+        # _select_index — otherwise it feedback-loops forever).
+        self._selecting: bool = False
 
         self._build()
         self._reprobe()
@@ -110,7 +126,8 @@ class HardwareWizard(tk.Toplevel):
 
         tools = ttk.Frame(body)
         tools.pack(fill="x", pady=(8, 4))
-        ttk.Button(tools, text="Re-probe", command=self._reprobe).pack(side="left")
+        self.reprobe_btn = ttk.Button(tools, text="Re-probe", command=self._reprobe)
+        self.reprobe_btn.pack(side="left")
         self.bench_btn = ttk.Button(
             tools, text=f"Run {_BENCHMARK_SECONDS} s benchmark",
             command=self._run_benchmark,
@@ -122,33 +139,128 @@ class HardwareWizard(tk.Toplevel):
         ttk.Button(actions, text="Cancel", command=self._on_close).pack(
             side="right", padx=(8, 0)
         )
-        ttk.Button(actions, text="Save and use", command=self._save_and_close).pack(
-            side="right"
+        self.save_btn = ttk.Button(
+            actions, text="Save and use", command=self._save_and_close
         )
+        self.save_btn.pack(side="right")
 
     # ---------- behaviour ----------------------------------------------
 
     def _reprobe(self) -> None:
-        """Re-run the probe and refresh the table."""
+        """Re-run the hardware probe OFF the Tk main thread.
+
+        ``probe_tiers()`` does seconds-long first imports (ctranslate2 /
+        onnxruntime / openvino / torch) and the cuDNN/cuBLAS ctypes dlopen
+        probe, which can BLOCK for many seconds on a broken CUDA stack.
+        Running that inline froze the UI ("Not Responding"). Mirror the
+        benchmark path: run on a daemon thread, then marshal the result back
+        to the Tk thread via App.post_to_main (with the no-app self.after(0)
+        fallback). A generation token guards against a stale probe landing
+        after a newer one (or after the wizard is destroyed).
+        """
+        self._probe_seq += 1
+        seq = self._probe_seq
+        self.status_var.set("Probing…")
+        self._set_buttons_enabled(False)
+        with self._probe_lock:
+            self._probe_result = None
+        self._probe_thread = threading.Thread(
+            target=self._reprobe_worker, args=(seq,), daemon=True,
+        )
+        self._probe_thread.start()
+        # Drain the result on the Tk main thread. Scheduling the poll here
+        # (we are on the main thread) is safe; scheduling self.after() from
+        # the worker thread is NOT (RuntimeError on Python 3.14: "main thread
+        # is not in main loop"). The worker only stashes the result.
+        self._schedule_probe_poll()
+
+    def _schedule_probe_poll(self) -> None:
         try:
-            self._tiers = _hw.probe_tiers()
+            self.after(50, self._poll_probe_result)
+        except Exception:  # noqa: BLE001
+            logger.exception("Probe poll failed to schedule")
+
+    def _poll_probe_result(self) -> None:
+        """Main-thread poll: apply the worker's result once it lands."""
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        with self._probe_lock:
+            pending = self._probe_result
+            self._probe_result = None
+        if pending is None:
+            # Still probing — re-arm unless a newer probe superseded us.
+            self._schedule_probe_poll()
+            return
+        seq, tiers = pending
+        self._reprobe_done(seq, tiers)
+
+    def _reprobe_worker(self, seq: int) -> None:
+        """Daemon-thread body: run the blocking probe, stash the result.
+
+        Must NOT touch Tk (no self.after / no widget calls) — the main-thread
+        _poll_probe_result picks the stashed result up.
+        """
+        try:
+            tiers = _hw.probe_tiers()
         except Exception as e:  # noqa: BLE001
             logger.exception("Hardware probe failed: %s", e)
-            self._tiers = _hw._probe_cpu()
+            try:
+                tiers = _hw._probe_cpu()
+            except Exception:  # noqa: BLE001
+                tiers = []
+        with self._probe_lock:
+            self._probe_result = (seq, tiers)
+
+    def _reprobe_done(self, seq: int, tiers: list[_hw.Tier]) -> None:
+        """Main-thread continuation: refresh the tree + re-enable buttons.
+
+        Ignores a stale result (an older probe finishing after a newer
+        _reprobe) or a destroyed wizard.
+        """
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        if seq != self._probe_seq:
+            return  # superseded by a newer probe
+        self._tiers = tiers
         self._refresh_tree()
+        self._set_buttons_enabled(True)
         if not self._tiers:
             self.status_var.set("No tier detected — falling back to CPU.")
             return
         recommended = _hw.first_supported_tier(self._tiers)
         # Pre-select the recommended tier so the user can just hit Save.
+        # set_widget_selection=False: we are inside an after()-driven refresh
+        # running under update()/mainloop(); a synchronous ttk selection_set
+        # here wedges. The ✓ column + _selected_idx convey the pick.
         for idx, t in enumerate(self._tiers):
             if t.slug == recommended.slug:
-                self._select_index(idx)
+                self._select_index(idx, set_widget_selection=False)
                 break
         self.status_var.set(
             f"Recommended: {recommended.label}  "
             f"(device={recommended.device}, compute_type={recommended.compute_type})"
         )
+
+    def _set_buttons_enabled(self, enabled: bool) -> None:
+        """Toggle Re-probe / Save / Benchmark while a probe is in flight."""
+        flag = "!disabled" if enabled else "disabled"
+        for btn in (
+            getattr(self, "reprobe_btn", None),
+            getattr(self, "save_btn", None),
+            getattr(self, "bench_btn", None),
+        ):
+            if btn is None:
+                continue
+            try:
+                btn.state([flag])
+            except tk.TclError:
+                pass
 
     def _refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -161,23 +273,46 @@ class HardwareWizard(tk.Toplevel):
                 values=("", tier.label, note), tags=tags,
             )
 
-    def _select_index(self, idx: int) -> None:
+    def _select_index(self, idx: int, *, set_widget_selection: bool = True) -> None:
+        """Mark tier ``idx`` as chosen (logical state + the ✓ column).
+
+        ``set_widget_selection`` also drives the Treeview's own selection +
+        focus. Skip it (pass False) when called from inside an after()-driven
+        refresh that itself runs under update()/mainloop(): calling ttk
+        ``selection_set`` from within the event dispatch wedges the ttk
+        ``_selection`` C call. The auto-pick after a re-probe therefore sets
+        only the logical state + checkmark; a real user click goes through
+        _on_select where the widget selection already happened.
+        """
         if not (0 <= idx < len(self._tiers)):
             return
         self._selected_idx = idx
-        for child in self.tree.get_children():
-            try:
-                self.tree.set(child, "pick", "")
-            except tk.TclError:
-                continue
+        # selection_set/focus below fire <<TreeviewSelect>>, which calls
+        # _on_select, which calls back into _select_index. Without this guard
+        # that is an infinite feedback loop once a Tk event pump is running.
+        # Suppress our own programmatic selection event.
+        self._selecting = True
         try:
-            self.tree.set(str(idx), "pick", "✓")
-            self.tree.selection_set(str(idx))
-            self.tree.focus(str(idx))
-        except tk.TclError:
-            pass
+            for child in self.tree.get_children():
+                try:
+                    self.tree.set(child, "pick", "")
+                except tk.TclError:
+                    continue
+            try:
+                self.tree.set(str(idx), "pick", "✓")
+                if set_widget_selection:
+                    self.tree.selection_set(str(idx))
+                    self.tree.focus(str(idx))
+            except tk.TclError:
+                pass
+        finally:
+            self._selecting = False
 
     def _on_select(self, _event: tk.Event) -> None:
+        # Ignore the <<TreeviewSelect>> we triggered ourselves from
+        # _select_index — otherwise the two re-enter each other forever.
+        if getattr(self, "_selecting", False):
+            return
         sel = self.tree.focus()
         if not sel:
             return

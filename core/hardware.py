@@ -83,13 +83,26 @@ _CUDA_RUNTIME_LIB_NAMES = (
 )
 
 
+# Worst-case wall-clock budget for the cuDNN/cuBLAS dlopen probe. ctypes.CDLL
+# is usually instant, but on a broken CUDA stack a single load can block for
+# many seconds inside the OS loader (DLL search across a wedged path / a
+# half-installed driver). We run the probe in a helper thread and treat a
+# timeout as "not loadable" so it can never freeze the caller (the Hardware
+# Wizard probe ran this on the Tk main thread).
+_CUDA_DLL_PROBE_TIMEOUT_S = 3.0
+
+
 def _cuda_runtime_dlls_loadable() -> bool:
     """True when at least one cuDNN AND one cuBLAS runtime lib dlopen cleanly.
 
-    Cheap: ``ctypes.CDLL`` just resolves + maps the shared library (no GPU
-    work, no model load). We only require *one* name from each family to load
-    because the exact soname/version varies across CUDA 11/12 and cuDNN 8/9.
-    Never raises — any failure means "treat as not loadable".
+    Cheap in the common case: ``ctypes.CDLL`` just resolves + maps the shared
+    library (no GPU work, no model load). We only require *one* name from each
+    family to load because the exact soname/version varies across CUDA 11/12
+    and cuDNN 8/9. The dlopen itself can stall for seconds on a broken CUDA
+    install, so the work runs in a helper thread bounded by
+    ``_CUDA_DLL_PROBE_TIMEOUT_S``; a timeout is treated as "not loadable" (the
+    safe CPU-fallback). Never raises — any failure means "treat as not
+    loadable".
     """
     try:
         import ctypes
@@ -109,7 +122,24 @@ def _cuda_runtime_dlls_loadable() -> bool:
 
     cudnn_names = tuple(n for n in _CUDA_RUNTIME_LIB_NAMES if "cudnn" in n)
     cublas_names = tuple(n for n in _CUDA_RUNTIME_LIB_NAMES if "cublas" in n)
-    return _any_loads(cudnn_names) and _any_loads(cublas_names)
+
+    result: dict[str, bool] = {}
+
+    def _probe() -> None:
+        try:
+            result["ok"] = _any_loads(cudnn_names) and _any_loads(cublas_names)
+        except Exception:  # noqa: BLE001
+            result["ok"] = False
+
+    import threading
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    t.join(_CUDA_DLL_PROBE_TIMEOUT_S)
+    if t.is_alive():
+        # Loader is wedged on a broken CUDA stack — don't wait on it.
+        # The daemon thread is abandoned; treat CUDA as unusable.
+        return False
+    return bool(result.get("ok", False))
 
 
 def cuda_load_ok() -> bool:
