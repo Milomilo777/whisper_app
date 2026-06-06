@@ -113,12 +113,15 @@ DEFAULT_CONFIG = {
     #   gcloud_stt_credentials_json: absolute path to the service-account
     #     JSON key file (empty = not configured; the backend reports a clear
     #     "pick your JSON file" error).
-    #   gcloud_stt_model: v2 model name ("long" is the long-form default;
-    #     "short"/"chirp_2"/"telephony" also valid). Configurable so a
-    #     renamed/new model needs no code change.
-    #   gcloud_stt_location: API location/region ("global" works for the
-    #     common models; some newer models are region-only, e.g.
-    #     "europe-west4" — the backend then uses that regional endpoint).
+    #   gcloud_stt_model: v2 model name. Default "chirp_2": the app's default
+    #     Transcribe language is "Auto", and chirp_2 supports BOTH auto
+    #     language detection AND explicit BCP-47 codes (the older "long" model
+    #     rejects "auto"). "short"/"long"/"telephony" also valid. Configurable
+    #     so a renamed/new model needs no code change.
+    #   gcloud_stt_location: API location/region. Default "us-central1":
+    #     chirp_2 is a REGIONAL model and does NOT exist in "global", so the
+    #     shipped default must be a region. "global" works for "long"/"short";
+    #     any non-"global" value uses the matching regional endpoint.
     #   gcloud_stt_batch_mode: False = STANDARD online chunked-inline recognise
     #     (~$0.016/min, no bucket needed, the default). True = cheaper GCS
     #     BATCH (~$0.004/min, slower) — REQUIRES gcloud_stt_bucket.
@@ -137,8 +140,8 @@ DEFAULT_CONFIG = {
     #     service-account key, so we track it here and reset on a new month;
     #     the UI displays it). The marker is a "YYYY-MM" string.
     "gcloud_stt_credentials_json": "",
-    "gcloud_stt_model": "long",
-    "gcloud_stt_location": "global",
+    "gcloud_stt_model": "chirp_2",
+    "gcloud_stt_location": "us-central1",
     "gcloud_stt_batch_mode": False,
     "gcloud_stt_bucket": "",
     "gcloud_stt_diarization": False,

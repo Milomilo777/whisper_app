@@ -79,13 +79,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------- constants
 
 #: Default v2 model. A CONFIG value (``gcloud_stt_model``) overrides it so
-#: a renamed / newer model needs no code change. ``long`` is Google's
-#: recommended general model for long-form audio.
-DEFAULT_MODEL = "long"
-#: Default location/region. ``global`` works for the common models
-#: (``long`` / ``short`` / ``chirp_2``). Some newer models are region-only;
-#: a config value (``gcloud_stt_location``) overrides this.
-DEFAULT_LOCATION = "global"
+#: a renamed / newer model needs no code change. ``chirp_2`` is chosen as
+#: the default because the app's default Transcribe language is "Auto" and
+#: ``chirp_2`` supports BOTH auto language detection (``["auto"]``) AND an
+#: explicit BCP-47 code. The older ``long`` model does NOT accept ``auto``
+#: (live-tested: ``400 ... "auto" is not supported by "long"``), so it would
+#: break the default Auto job. ``chirp_2`` also returns excellent per-word
+#: time offsets, which we always request for usable SRT/VTT timing.
+DEFAULT_MODEL = "chirp_2"
+#: Default location/region. ``chirp_2`` is a REGIONAL model — it does NOT
+#: exist in ``global`` (live-tested: a ``global`` recognize for ``chirp_2``
+#: 400s), so the default location must be a region. ``us-central1`` carries
+#: ``chirp_2``. A config value (``gcloud_stt_location``) overrides this; the
+#: client automatically targets the matching regional endpoint for any
+#: non-``global`` location.
+DEFAULT_LOCATION = "us-central1"
 #: STANDARD (online) recognize caps inline audio at ~1 min / ~10 MB. Keep
 #: chunks comfortably under the 1-minute wall so a chunk never gets
 #: rejected for length. A config value (``gcloud_stt_chunk_seconds``)
@@ -103,6 +111,16 @@ CHUNK_EXT = ".flac"
 #: so these are deliberately treated as round, honest estimates.
 RATE_STANDARD_USD_PER_MIN = 0.016
 RATE_BATCH_USD_PER_MIN = 0.004
+
+#: Phrase re-segmentation thresholds (see ``group_words_into_phrases``). The
+#: v2 service returns per-word offsets but only coarse result-level segments,
+#: so we rebuild readable subtitle-sized phrases from the word stream.
+#: Start a new phrase when the silent gap before a word exceeds this many
+#: seconds (a natural pause / sentence break).
+PHRASE_GAP_SECONDS = 0.6
+#: ...or when the running phrase would exceed this many seconds (keeps a
+#: subtitle cue from growing too long to read).
+PHRASE_MAX_SECONDS = 12.0
 #: The one-time new-customer credit Google grants ($300 / 90 days). Shown in
 #: the UI as the denominator of the local cost estimate.
 NEW_CUSTOMER_CREDIT_USD = 300.0
@@ -269,6 +287,117 @@ def _offset_to_seconds(value: Any) -> float:
         return 0.0
 
 
+def _ends_sentence(word_text: str) -> bool:
+    """True when ``word_text`` ends in sentence-final punctuation (. ? !).
+
+    Trailing quotes / brackets after the punctuation are tolerated
+    (``done."`` still counts). Pure.
+    """
+    stripped = (word_text or "").rstrip("\"')]}»”’ \t")
+    return bool(stripped) and stripped[-1] in ".?!"
+
+
+def group_words_into_phrases(
+    words: list[dict[str, Any]],
+    *,
+    max_gap: float = PHRASE_GAP_SECONDS,
+    max_duration: float = PHRASE_MAX_SECONDS,
+    want_words: bool = False,
+    want_speaker: bool = False,
+) -> list[dict[str, Any]]:
+    """Group a flat word list into readable phrase segments. PURE / testable.
+
+    Input: a list of ``{"word", "start", "end"[, "speaker", "probability"]}``
+    dicts (already on the global timeline). Output: a list of segment dicts
+    ``{"start", "end", "text"}`` (plus ``"words"`` when ``want_words`` and
+    ``"speaker"`` when ``want_speaker`` and a label is present).
+
+    A new phrase begins when ANY of these hold relative to the running phrase:
+
+      * the silent gap from the previous word's end to this word's start
+        exceeds ``max_gap`` seconds, OR
+      * adding this word would push the phrase past ``max_duration`` seconds,
+        OR
+      * the previous word ended a sentence (``.`` / ``?`` / ``!``), OR
+      * the speaker label changed (so diarization keeps one speaker per cue).
+
+    Empty / zero-length words are dropped, and any phrase that ends up with no
+    text or zero duration is discarded (this is what removes the live
+    ``30->30 "et"`` artifact). No network, no google import.
+    """
+    # Keep only words that carry a non-empty token (drop the degenerate
+    # zero-text fragments outright).
+    cleaned: list[dict[str, Any]] = []
+    for w in words or []:
+        if not isinstance(w, dict):
+            continue
+        token = str(w.get("word", "") or "").strip()
+        if not token:
+            continue
+        cleaned.append(w)
+
+    segments: list[dict[str, Any]] = []
+    cur: list[dict[str, Any]] = []
+
+    def _flush() -> None:
+        if not cur:
+            return
+        text = " ".join(str(w.get("word", "")).strip() for w in cur).strip()
+        seg_start = float(cur[0].get("start", 0.0) or 0.0)
+        seg_end = max(float(w.get("end", 0.0) or 0.0) for w in cur)
+        seg_end = max(seg_end, seg_start)
+        # Drop empties / zero-length phrases (the "et" 30->30 artifact).
+        if not text or seg_end <= seg_start:
+            return
+        seg: dict[str, Any] = {
+            "start": seg_start,
+            "end": seg_end,
+            "text": text,
+        }
+        if want_words:
+            seg["words"] = [dict(w) for w in cur]
+        if want_speaker:
+            for w in cur:
+                sp = str(w.get("speaker", "") or "")
+                if sp:
+                    seg["speaker"] = sp
+                    break
+        segments.append(seg)
+
+    prev_end: float | None = None
+    prev_speaker: str | None = None
+    prev_sentence_end = False
+    for w in cleaned:
+        w_start = float(w.get("start", 0.0) or 0.0)
+        w_end = max(float(w.get("end", 0.0) or 0.0), w_start)
+        w_speaker = str(w.get("speaker", "") or "") or None
+
+        start_new = False
+        if cur:
+            if prev_sentence_end:
+                start_new = True
+            elif prev_end is not None and (w_start - prev_end) > max_gap:
+                start_new = True
+            elif w_speaker != prev_speaker:
+                start_new = True
+            else:
+                phrase_start = float(cur[0].get("start", 0.0) or 0.0)
+                if (w_end - phrase_start) > max_duration:
+                    start_new = True
+
+        if start_new:
+            _flush()
+            cur = []
+
+        cur.append(w)
+        prev_end = w_end
+        prev_speaker = w_speaker
+        prev_sentence_end = _ends_sentence(str(w.get("word", "")))
+
+    _flush()
+    return segments
+
+
 def parse_recognize_results(
     results: Any,
     *,
@@ -277,18 +406,41 @@ def parse_recognize_results(
 ) -> list[dict[str, Any]]:
     """Convert v2 ``response.results`` into Whisper-shaped segment dicts.
 
-    Each ``SpeechRecognitionResult`` carries ``alternatives``; we take the
-    top alternative's ``transcript`` and (when requested) its per-word
-    timings + speaker labels. One result → one segment. The segment's
-    start/end come from the first/last word offsets when present, else
-    fall back to ``result_end_offset`` (the running end of the result) so
-    a words-disabled run still gets monotonically increasing timestamps.
+    The v2 service returns per-word offsets but groups them into only a
+    couple of coarse, result-level blocks — feeding those straight to the
+    SRT/VTT writer gives one giant 0->30s cue plus degenerate artifacts. So
+    when per-word offsets ARE present we collect ALL words across ALL results
+    and re-segment them into readable phrases via ``group_words_into_phrases``
+    (gap / max-length / sentence-punctuation / speaker-change splits, with
+    empty + zero-length phrases dropped).
+
+    A result that carries NO words (only a ``transcript`` string — e.g. a run
+    where the model returned no offsets) falls back to a single segment for
+    that result using its ``result_end_offset`` for timing, so nothing is
+    lost. Such a fallback segment also flushes the accumulated word stream
+    first, preserving overall ordering.
 
     Accepts any iterable of duck-typed result objects (real proto objects
     OR simple namespaces in tests). Pure: no google lib import, no network.
     """
     segments: list[dict[str, Any]] = []
+    pending_words: list[dict[str, Any]] = []
     prev_end = 0.0
+
+    def _flush_words() -> None:
+        nonlocal pending_words, prev_end
+        if not pending_words:
+            return
+        phrases = group_words_into_phrases(
+            pending_words,
+            want_words=want_words,
+            want_speaker=want_speaker,
+        )
+        for ph in phrases:
+            segments.append(ph)
+            prev_end = float(ph.get("end", prev_end) or prev_end)
+        pending_words = []
+
     for result in results or []:
         alternatives = getattr(result, "alternatives", None) or []
         if not alternatives:
@@ -298,7 +450,6 @@ def parse_recognize_results(
         words_raw = list(getattr(top, "words", None) or [])
 
         word_dicts: list[dict[str, Any]] = []
-        seg_speaker: str | None = None
         for w in words_raw:
             w_start = _offset_to_seconds(getattr(w, "start_offset", None))
             w_end = _offset_to_seconds(getattr(w, "end_offset", None))
@@ -311,50 +462,147 @@ def parse_recognize_results(
             speaker_label = getattr(w, "speaker_label", "") or ""
             if speaker_label:
                 wd["speaker"] = speaker_label
-                if seg_speaker is None:
-                    seg_speaker = speaker_label
             word_dicts.append(wd)
 
         if word_dicts:
-            seg_start = word_dicts[0]["start"]
-            seg_end = max(w["end"] for w in word_dicts)
-        else:
-            # No word timings (want_words off, or model returned none) —
-            # use the result-level end offset to advance the timeline.
-            seg_start = prev_end
-            seg_end = _offset_to_seconds(getattr(result, "result_end_offset", None))
-            if seg_end <= seg_start:
-                seg_end = seg_start
-
-        if not text and not word_dicts:
+            # Accumulate into the global word stream; phrase grouping happens
+            # once, across results, on flush.
+            pending_words.extend(word_dicts)
             continue
 
+        # No word timings for this result — flush any accumulated words first
+        # (to keep ordering), then emit one fallback segment from the
+        # result-level end offset so the transcript text is not lost.
+        if not text:
+            continue
+        _flush_words()
+        seg_start = prev_end
+        seg_end = _offset_to_seconds(getattr(result, "result_end_offset", None))
+        if seg_end <= seg_start:
+            seg_end = seg_start
         seg: dict[str, Any] = {
             "start": float(seg_start),
             "end": float(max(seg_end, seg_start)),
             "text": text,
         }
         if want_words:
-            seg["words"] = word_dicts
-        if want_speaker and seg_speaker:
-            seg["speaker"] = seg_speaker
+            seg["words"] = []
         segments.append(seg)
         prev_end = seg["end"]
+
+    _flush_words()
     return segments
+
+
+#: Bare ISO-639 code -> a sensible BCP-47 default for the v2 API. The v2
+#: service REJECTS bare ISO codes (live-tested: ``chirp_2`` and ``long`` both
+#: ``400 The language "en" is not supported`` for bare ``"en"``); it requires
+#: a full BCP-47 tag (``en-US``) or the literal ``"auto"``. This table covers
+#: every language the app's Transcribe-language menu offers, plus a few common
+#: extras. An unknown bare code is passed through as-is so Google surfaces a
+#: clear error that ``classify_google_error`` turns into an actionable message.
+_BCP47_DEFAULTS: dict[str, str] = {
+    "en": "en-US",
+    "fa": "fa-IR",
+    "ar": "ar-XA",
+    "ko": "ko-KR",
+    "ja": "ja-JP",
+    "zh": "cmn-Hans-CN",
+    "vi": "vi-VN",
+    "es": "es-ES",
+    "fr": "fr-FR",
+    "de": "de-DE",
+    "it": "it-IT",
+    "pt": "pt-BR",
+    "ru": "ru-RU",
+    "tr": "tr-TR",
+    "hi": "hi-IN",
+    "nl": "nl-NL",
+    "pl": "pl-PL",
+    "id": "id-ID",
+    "th": "th-TH",
+    "uk": "uk-UA",
+    # A few more common ones beyond the UI menu.
+    "sv": "sv-SE",
+    "da": "da-DK",
+    "fi": "fi-FI",
+    "no": "nb-NO",
+    "nb": "nb-NO",
+    "cs": "cs-CZ",
+    "el": "el-GR",
+    "he": "iw-IL",
+    "iw": "iw-IL",
+    "hu": "hu-HU",
+    "ro": "ro-RO",
+    "sk": "sk-SK",
+    "bg": "bg-BG",
+    "hr": "hr-HR",
+    "ca": "ca-ES",
+    "ms": "ms-MY",
+    "fil": "fil-PH",
+    "ta": "ta-IN",
+    "te": "te-IN",
+    "bn": "bn-IN",
+    "ur": "ur-IN",
+    "gu": "gu-IN",
+    "kn": "kn-IN",
+    "ml": "ml-IN",
+    "mr": "mr-IN",
+}
+
+
+def _canonical_bcp47(code: str) -> str:
+    """Return a hyphenated tag in canonical case: lang lower, region UPPER.
+
+    ``en-us`` -> ``en-US``; ``cmn-hans-cn`` -> ``cmn-Hans-CN`` (the middle
+    script subtag is Title-cased, a 4-letter ISO-15924 form). Pure.
+    """
+    parts = code.split("-")
+    out: list[str] = []
+    for i, part in enumerate(parts):
+        if i == 0:
+            out.append(part.lower())
+        elif len(part) == 4:
+            # Script subtag (ISO 15924) — Title case (e.g. "Hans").
+            out.append(part[:1].upper() + part[1:].lower())
+        else:
+            # Region / variant subtag — upper case (e.g. "US", "CN").
+            out.append(part.upper())
+    return "-".join(out)
 
 
 def normalize_language_code(code: str | None) -> str:
     """Map a Whisper-style code (``en`` / ``fa``) to a v2 ``language_codes``
     entry, or ``"auto"`` for auto-detect.
 
-    The v2 API accepts BCP-47 (``en-US``); a bare ISO code (``en``) is also
-    accepted by the common models, and ``["auto"]`` requests language
-    detection. We keep it simple: pass the code through (lower-cased base),
-    or ``"auto"`` when none is given. Pure.
+    The v2 API REJECTS bare ISO codes — it needs a full BCP-47 tag
+    (``en-US``) or the literal ``"auto"`` (live-tested). So:
+
+      * empty / None -> ``"auto"`` (the app's default Transcribe language);
+      * an already-BCP-47 code (contains ``-``) is returned in canonical case
+        (``en-us`` -> ``en-US``, ``cmn-hans-cn`` -> ``cmn-Hans-CN``);
+      * the literal ``"auto"`` passes through;
+      * a bare ISO code maps to a sensible BCP-47 default via ``_BCP47_DEFAULTS``;
+      * an unknown bare code passes through as-is (best effort) so Google
+        surfaces a clear error that ``classify_google_error`` makes actionable.
+
+    Pure + unit-testable.
     """
     if not code:
         return "auto"
-    return code.strip().lower() or "auto"
+    raw = code.strip()
+    if not raw:
+        return "auto"
+    if raw.lower() == "auto":
+        return "auto"
+    if "-" in raw:
+        return _canonical_bcp47(raw)
+    bare = raw.lower()
+    mapped = _BCP47_DEFAULTS.get(bare)
+    if mapped:
+        return mapped
+    # Unknown bare code — best effort, let Google surface a clear error.
+    return bare
 
 
 def build_recognition_config(
@@ -375,9 +623,18 @@ def build_recognition_config(
     ``auto_decoding_config`` so the recogniser detects the FLAC encoding;
     enables word time offsets and (optionally) speaker diarization via
     ``RecognitionFeatures``.
+
+    ``enable_word_time_offsets`` is ALWAYS on (not gated on ``want_words`` /
+    diarization): per-word offsets are the only way to get usable SRT/VTT
+    timing. A live Auto run without them returned a single 0->30s block
+    plus a degenerate ``30->30`` fragment because only coarse result-level
+    timing came back. ``enable_word_confidence`` stays gated on ``want_words``
+    (only useful when callers actually consume per-word probabilities).
     """
     features_kwargs: dict[str, Any] = {
-        "enable_word_time_offsets": bool(want_words),
+        # Always request word offsets — re-segmentation into phrases (and
+        # therefore usable subtitle timing) depends on them.
+        "enable_word_time_offsets": True,
         "enable_word_confidence": bool(want_words),
     }
     if diarization:
@@ -389,8 +646,6 @@ def build_recognition_config(
         features_kwargs["diarization_config"] = cloud_speech.SpeakerDiarizationConfig(
             **diar_kwargs
         )
-        # Diarization needs the word stream to carry speaker_label.
-        features_kwargs["enable_word_time_offsets"] = True
     features = cloud_speech.RecognitionFeatures(**features_kwargs)
     return cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
