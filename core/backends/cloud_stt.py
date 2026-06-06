@@ -76,6 +76,12 @@ logger = logging.getLogger(__name__)
 
 API_HOST = "https://generativelanguage.googleapis.com"
 API_VERSION = "v1beta"
+#: Gemini accepts the API key either as a ``?key=`` query param or in this
+#: request header. We use the HEADER so the secret never lands in urllib
+#: exception text, server access logs, HTTP redirects, or proxy logs (a URL
+#: query string is logged everywhere; a header is not). Same value, safer
+#: transport. (https://ai.google.dev/gemini-api/docs/api-key)
+API_KEY_HEADER = "x-goog-api-key"
 #: Default model. A CONFIG value (``cloud_stt_model``) overrides it so a
 #: renamed / newer model needs no code change. See module docstring for
 #: why this is the current GA flash model.
@@ -144,8 +150,9 @@ def build_generate_request(
 
     Exactly one of ``file_uri`` (Files API reference) or ``inline_b64``
     (inline base64 audio) must be given. Returns the endpoint URL WITHOUT
-    the ``?key=`` query (the key is appended by the caller so it never
-    appears in logs / test fixtures) and the request body dict.
+    any ``?key=`` query (the key travels in the ``x-goog-api-key`` request
+    header so it never appears in logs / redirects / test fixtures) and the
+    request body dict.
 
     The field names match the Gemini REST docs: ``contents`` -> ``parts``
     with a ``text`` part plus either a ``file_data`` part
@@ -510,8 +517,10 @@ class CloudSttBackend(Backend):
         """
         if not self._api_key:
             return False, "No API key set."
-        url = f"{API_HOST}/{API_VERSION}/models?key={self._api_key}&pageSize=1"
-        req = urllib.request.Request(url, method="GET")
+        url = f"{API_HOST}/{API_VERSION}/models?pageSize=1"
+        req = urllib.request.Request(
+            url, method="GET", headers={API_KEY_HEADER: self._api_key}
+        )
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310
                 _ = resp.read(1)
@@ -664,29 +673,40 @@ class CloudSttBackend(Backend):
                 model=self._model, prompt=prompt,
                 inline_b64=b64, inline_mime=CHUNK_MIME,
             )
-        else:
-            file_uri = self._upload_file(flac_path, num_bytes)
+            resp = self._post_json(url, body, GENERATE_TIMEOUT_S)
+            return extract_text_from_response(resp)
+        # Files-API path: the audio now sits on Google's servers. Always
+        # delete that uploaded blob after we are done with it — success or
+        # failure — so the user's audio is not left on Google indefinitely.
+        # (Inline audio is never persisted, so only this branch needs it.)
+        file_uri, file_name = self._upload_file(flac_path, num_bytes)
+        try:
             url, body = build_generate_request(
                 model=self._model, prompt=prompt,
                 file_uri=file_uri, file_mime=CHUNK_MIME,
             )
-        resp = self._post_json(f"{url}?key={self._api_key}", body, GENERATE_TIMEOUT_S)
-        return extract_text_from_response(resp)
+            resp = self._post_json(url, body, GENERATE_TIMEOUT_S)
+            return extract_text_from_response(resp)
+        finally:
+            self._delete_file(file_name)
 
     # -- Files API resumable upload ---------------------------------------
 
-    def _upload_file(self, path: str, num_bytes: int) -> str:
-        """Upload ``path`` via the Files API, return its file_uri.
+    def _upload_file(self, path: str, num_bytes: int) -> tuple[str, str]:
+        """Upload ``path`` via the Files API, return ``(file_uri, file_name)``.
 
         Resumable two-step protocol: start (get an upload URL) then
         upload+finalize, then poll the file until ``state == "ACTIVE"``.
+        ``file_name`` (the ``files/<id>`` resource id) is returned so the
+        caller can DELETE the blob once transcription is done.
         """
-        start_url = f"{API_HOST}/upload/{API_VERSION}/files?key={self._api_key}"
+        start_url = f"{API_HOST}/upload/{API_VERSION}/files"
         start_req = urllib.request.Request(
             start_url,
             data=json.dumps({"file": {"display_name": os.path.basename(path)}}).encode("utf-8"),
             method="POST",
             headers={
+                API_KEY_HEADER: self._api_key,
                 "X-Goog-Upload-Protocol": "resumable",
                 "X-Goog-Upload-Command": "start",
                 "X-Goog-Upload-Header-Content-Length": str(num_bytes),
@@ -742,14 +762,16 @@ class CloudSttBackend(Backend):
             raise RuntimeError("Gemini Files API response missing file uri/name.")
         if state != "ACTIVE":
             self._wait_for_active(str(file_name))
-        return str(file_uri)
+        return str(file_uri), str(file_name)
 
     def _wait_for_active(self, file_name: str) -> None:
         """Poll GET /files/{name} until state==ACTIVE (or FAILED/timeout)."""
-        url = f"{API_HOST}/{API_VERSION}/{file_name}?key={self._api_key}"
+        url = f"{API_HOST}/{API_VERSION}/{file_name}"
         deadline = time.time() + FILE_ACTIVE_TIMEOUT_S
         while time.time() < deadline:
-            req = urllib.request.Request(url, method="GET")
+            req = urllib.request.Request(
+                url, method="GET", headers={API_KEY_HEADER: self._api_key}
+            )
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
                     meta = json.loads(resp.read().decode("utf-8"))
@@ -769,6 +791,30 @@ class CloudSttBackend(Backend):
             "Timed out waiting for Google to process the uploaded audio."
         )
 
+    # -- Files API delete (privacy: don't leave audio on Google) ----------
+
+    def _delete_file(self, file_name: str | None) -> None:
+        """Best-effort DELETE of an uploaded Files-API blob.
+
+        Removes the user's audio from Google's servers as soon as the
+        chunk is transcribed. Never raises: a failed cleanup must not
+        abort an otherwise-successful transcription (Google also expires
+        Files-API blobs automatically after ~48 h, so this is the
+        primary, not the only, line of defence). ``file_name`` is the
+        ``files/<id>`` resource id from the upload response.
+        """
+        if not file_name or not self._api_key:
+            return
+        url = f"{API_HOST}/{API_VERSION}/{file_name}"
+        req = urllib.request.Request(
+            url, method="DELETE", headers={API_KEY_HEADER: self._api_key}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                resp.read()
+        except Exception as e:  # noqa: BLE001 - cleanup is best-effort
+            logger.debug("Could not delete uploaded Gemini file %s: %s", file_name, e)
+
     # -- POST + JSON helper ------------------------------------------------
 
     def _post_json(
@@ -778,7 +824,10 @@ class CloudSttBackend(Backend):
             url,
             data=json.dumps(body).encode("utf-8"),
             method="POST",
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                API_KEY_HEADER: self._api_key,
+            },
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
