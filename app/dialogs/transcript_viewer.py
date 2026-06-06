@@ -613,7 +613,20 @@ class TranscriptViewer(tk.Toplevel):
                     "transcript JSON — pick the .json next to your "
                     "audio/video."
                 )
-            self.segments = payload
+            # The root is a list, but it may be a list of NON-dict elements
+            # (e.g. ``[1, 2, 3]`` or ``["a", "b"]`` from an unrelated JSON
+            # array). Downstream code calls ``.get(...)`` on each segment, so
+            # keep only the dict entries. If nothing qualifies, the file isn't
+            # a transcript at all — surface the same "pick the .json" guidance
+            # instead of crashing with an AttributeError in _populate_listbox.
+            segments = [item for item in payload if isinstance(item, dict)]
+            if payload and not segments:
+                raise ValueError(
+                    "This JSON is a list, but none of its entries look like "
+                    "transcript segments — pick the .json next to your "
+                    "audio/video."
+                )
+            self.segments = segments
         except Exception as e:  # noqa: BLE001
             messagebox.showerror(
                 "Failed to load transcript",
