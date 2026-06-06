@@ -70,6 +70,49 @@ per-user under `%LOCALAPPDATA%\WhisperProject` and is not encrypted).
 | `cloud_stt_free_minutes_cap` | int | `60` | Informational free-tier figure shown in the Advanced dialog. Not enforced — it does not block transcription. |
 | `cloud_stt_chunk_seconds` | int | `480` | Window size (seconds, ~8 min) the audio is split into before upload. Smaller windows give finer progress/cancel granularity and smaller uploads; larger windows mean fewer requests. |
 
+### Google Cloud Speech-to-Text (optional, service-account)
+
+A second, more capable cloud option, selected by setting
+`transcribe_backend` to `google_cloud_stt` (in **Advanced > Backend** —
+labelled "Google Cloud Speech-to-Text"). Unlike the Gemini backend above,
+it authenticates with a **service-account JSON key file** (not a pasted
+API key) and uses the official `google-cloud-speech` **v2** client, which
+is installed **on demand on first use** (it is not bundled). Like every
+cloud option it **uploads your audio to Google** and breaks the offline
+guarantee. Full setup, the Standard-vs-Batch trade-off, and the honest
+usage note are in [`CLOUD_STT_GOOGLE.md`](CLOUD_STT_GOOGLE.md).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `gcloud_stt_credentials_json` | string | `""` | Absolute path to the service-account JSON key file downloaded from the Google Cloud console. Empty = the backend reports a clear "pick your JSON file" error. The `project_id` is read out of this file. |
+| `gcloud_stt_model` | string | `"long"` | The v2 recognizer model. `"long"` is the long-form default; `"short"` / `"chirp_2"` / `"telephony"` are also valid. A config value so a renamed/newer model needs no code change; an unavailable model surfaces a clear error, not a crash. |
+| `gcloud_stt_location` | string | `"global"` | API location/region. `"global"` works for the common models; some newer models are region-only (e.g. `"europe-west4"`), in which case the backend talks to that regional endpoint. |
+| `gcloud_stt_batch_mode` | bool | `false` | `false` = **Standard / online** chunked-inline `recognize()` (~$0.016/min, no bucket needed — the default). `true` = the cheaper GCS **Batch** path (`BatchRecognize`, ~$0.004/min, ~75 % cheaper) at the cost of up to ~24 h turnaround. Batch **requires** `gcloud_stt_bucket`. |
+| `gcloud_stt_bucket` | string | `""` | A Google Cloud Storage bucket name the service account can write to (the `gs://` target). Required **only** for batch mode — the decoded audio is uploaded there, transcribed, then the blob is deleted. The service account needs **Storage Object Admin** on it. |
+| `gcloud_stt_diarization` | bool | `false` | Enable speaker diarization (adds a per-segment `speaker` label). |
+| `gcloud_stt_min_speakers` | int | `0` | Lower bound on the diarized speaker count. `0` = let Google decide. |
+| `gcloud_stt_max_speakers` | int | `0` | Upper bound on the diarized speaker count. `0` = let Google decide. |
+| `gcloud_stt_chunk_seconds` | int | `55` | Standard-mode chunk length (seconds). Kept under the ~1-minute online-`recognize()` inline cap; each chunk's timestamps are offset and stitched back into one timeline. |
+| `gcloud_stt_batch_timeout_s` | int | `3600` | How long (seconds) to wait on the batch long-running operation before giving up. Batch turnaround can be long; raise this if a large job times out. |
+| `gcloud_stt_minutes_used` | float | `0.0` | Minutes of audio transcribed via this backend **this calendar month**, accumulated locally after each successful run. Resets when `gcloud_stt_minutes_month` rolls over. The real $300-credit balance is NOT readable from a service-account key, so this local counter (and its cost estimate) is the only usage signal shown. |
+| `gcloud_stt_minutes_month` | string | `""` | The `"YYYY-MM"` marker for the month `gcloud_stt_minutes_used` belongs to. When the current month differs, the counter resets to 0 before the run is added. |
+| `gcloud_stt_free_minutes_cap` | int | `60` | Informational free-tier figure (60 min/month) shown in the live usage display. Not enforced — it does not block transcription. |
+
+### Web / LAN access (optional local HTTP job server)
+
+Backs both the `gui.py serve` CLI and the one-click **Web / LAN access**
+tab. The server is a stdlib-only HTTP server (no new dependency) that lets
+a phone or another PC send a file or a URL to transcribe from a browser.
+It binds **loopback (`127.0.0.1`) by default** — no Windows firewall prompt
+— and LAN sharing is an explicit opt-in. See [`SERVER.md`](SERVER.md).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `server_port` | int | `8765` | Default listen port for the server. If the port is busy when started from the tab, a free-port fallback picks another and shows the actual URL. |
+| `server_max_upload_mb` | int | `512` | Caps a single browser upload (MB). The worker's ~1 MB command guard does NOT cover browser uploads, so this is the upload size limit for the web path. |
+| `server_share_lan` | bool | `false` | When `true`, the tab's Start binds `0.0.0.0` (all interfaces — other devices on the network can reach it) instead of `127.0.0.1` (this machine only). Persisted from the **Share on local network** checkbox; this is the path that triggers the Windows firewall prompt. The CLI uses `--lan` instead of this key. |
+| `server_token` | string | `""` | Optional shared-secret password. When non-empty, every request must present it (`X-Auth-Token` header or `?token=` query). Stored in **cleartext** here, consistent with cookies / API keys (the file is per-user under `%LOCALAPPDATA%\WhisperProject` and is not encrypted). |
+
 ## Coming in later phases
 
 | Field | Type | Default | Description |
