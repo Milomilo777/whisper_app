@@ -28,6 +28,7 @@ never the real model.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import queue
@@ -38,7 +39,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from core.config import user_cache_dir
+from core.config import PROJECT_FILE_NAME, user_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,18 @@ class Job:
     finished_at: float = 0.0
     # Cooperative-cancel flag; the transcribe task object mirrors this.
     cancelled: bool = False
+    # Cooperative-pause flag; the transcribe task object mirrors this so the
+    # engine's ``while task.paused`` loop stalls the segment loop. The web
+    # gets the same per-task pause/resume the desktop Queue has.
+    paused: bool = False
+    # Optional clip window (seconds) applied to the task; map onto the
+    # _ServerTask.clip_start / clip_end attributes the engine already reads.
+    clip_start: float | None = None
+    clip_end: float | None = None
+    # Validated per-job advanced options (vad/diarization/etc.). Written into
+    # ``work_dir/.whisperproject.json`` before transcribe so they take effect
+    # for THIS job only via the audited per-folder override mechanism.
+    options: dict[str, Any] = field(default_factory=dict)
 
     def public_dict(self) -> dict[str, Any]:
         """The JSON shape returned by ``GET /api/jobs/<id>``."""
@@ -111,8 +124,21 @@ class Job:
             "status": self.status,
             "progress": self.progress,
             "error": self.error,
+            "paused": self.paused,
             "outputs": [{"fmt": fmt, "name": os.path.basename(p)}
                         for fmt, p in self.outputs],
+        }
+
+    def list_dict(self) -> dict[str, Any]:
+        """The compact JSON shape returned by ``GET /api/jobs`` (list)."""
+        return {
+            "job_id": self.job_id,
+            "status": self.status,
+            "progress": self.progress,
+            "paused": self.paused,
+            "source": self.source,
+            "formats": list(self.formats),
+            "created_at": self.created_at,
         }
 
 
@@ -131,8 +157,10 @@ class _ServerTask:
       * ``resume``, ``clip_start``, ``clip_end``, ``history_id`` (inputs)
       * the cooperative ``cancelled`` flag AND the ``paused`` flag, both read
         bare inside the segment loop (``while task.paused and not
-        task.cancelled``). ``paused`` has no UI to flip it on the server, but
-        it must EXIST or the loop raises.
+        task.cancelled``). Both are bridged to the owning ``Job`` so the
+        web's pause/resume/cancel routes flip the live task: setting
+        ``job.paused`` stalls the engine's segment loop, ``job.cancelled``
+        ends it. They must EXIST or the loop raises.
 
     Using a plain object keeps this module free of any ``app/`` task import
     while still satisfying the engine's duck-typed access. Keep this in sync
@@ -146,10 +174,11 @@ class _ServerTask:
         self.output_paths: list[str] | None = None
         self.detected_language: str = ""
         self.language_probability: float = 0.0
-        self.paused: bool = False
         self.resume: bool = False
-        self.clip_start: float | None = None
-        self.clip_end: float | None = None
+        # Clip window is set from the job (validated on submit); the engine
+        # reads clip_start/clip_end off the task via getattr.
+        self.clip_start: float | None = job.clip_start
+        self.clip_end: float | None = job.clip_end
         self.history_id: int = 0
         self._job = job
 
@@ -160,6 +189,14 @@ class _ServerTask:
     @cancelled.setter
     def cancelled(self, value: bool) -> None:
         self._job.cancelled = bool(value)
+
+    @property
+    def paused(self) -> bool:
+        return self._job.paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        self._job.paused = bool(value)
 
 
 class JobManager:
@@ -222,7 +259,9 @@ class JobManager:
     # --- submission ----------------------------------------------------------
 
     def _new_job(self, kind: str, formats: list[str], language: str,
-                 source: str) -> Job:
+                 source: str, *, options: dict[str, Any] | None = None,
+                 clip_start: float | None = None,
+                 clip_end: float | None = None) -> Job:
         """Create + register a job, enforcing the total-jobs cap.
 
         Caller must hold ``self._lock``.
@@ -240,17 +279,24 @@ class JobManager:
         job = Job(
             job_id=job_id, kind=kind, formats=list(formats),
             language=language, source=source, work_dir=work_dir,
+            options=dict(options or {}),
+            clip_start=clip_start, clip_end=clip_end,
         )
         self._jobs[job_id] = job
         self._order.append(job_id)
         return job
 
     def submit_upload(self, filename: str, data: bytes, formats: list[str],
-                      language: str = "") -> str:
+                      language: str = "", *,
+                      options: dict[str, Any] | None = None,
+                      clip_start: float | None = None,
+                      clip_end: float | None = None) -> str:
         """Register an upload job from already-read bytes; return job_id."""
         safe = _safe_filename(filename)
         with self._lock:
-            job = self._new_job("upload", formats, language, safe)
+            job = self._new_job("upload", formats, language, safe,
+                                options=options, clip_start=clip_start,
+                                clip_end=clip_end)
             media_path = os.path.join(job.work_dir, safe)
             with open(media_path, "wb") as f:
                 f.write(data)
@@ -259,17 +305,23 @@ class JobManager:
             return job.job_id
 
     def submit_upload_stream(
-        self, filename: str, formats: list[str], language: str = "",
+        self, filename: str, formats: list[str], language: str = "", *,
+        options: dict[str, Any] | None = None,
+        clip_start: float | None = None,
+        clip_end: float | None = None,
     ) -> tuple[str, str]:
         """Register an upload job and return ``(job_id, media_path)``.
 
         The handler writes the streamed bytes to ``media_path`` itself
         (so a large file never has to sit fully in RAM) and then calls
-        :meth:`enqueue_upload` to start processing.
+        :meth:`enqueue_upload` to start processing. This is the LIVE upload
+        path the request handler uses — bytes never sit whole in RAM.
         """
         safe = _safe_filename(filename)
         with self._lock:
-            job = self._new_job("upload", formats, language, safe)
+            job = self._new_job("upload", formats, language, safe,
+                                options=options, clip_start=clip_start,
+                                clip_end=clip_end)
             job.media_path = os.path.join(job.work_dir, safe)
             return job.job_id, job.media_path
 
@@ -280,13 +332,33 @@ class JobManager:
                 raise KeyError(job_id)
         self._queue.put(job_id)
 
+    def discard(self, job_id: str) -> None:
+        """Remove a never-enqueued job + its dir (streamed upload failed).
+
+        Used by the handler when a streamed upload aborts before it could be
+        enqueued, so a half-written work dir doesn't linger.
+        """
+        with self._lock:
+            job = self._jobs.pop(job_id, None)
+            if job is None:
+                return
+            if job_id in self._order:
+                self._order.remove(job_id)
+        if job is not None:
+            _rmtree_quiet(job.work_dir)
+
     def submit_url(self, url: str, formats: list[str],
-                   language: str = "") -> str:
+                   language: str = "", *,
+                   options: dict[str, Any] | None = None,
+                   clip_start: float | None = None,
+                   clip_end: float | None = None) -> str:
         """Register a URL job; return job_id. Scheme is validated here."""
         if not is_safe_url(url):
             raise ValueError("only http(s) URLs are accepted")
         with self._lock:
-            job = self._new_job("url", formats, language, url)
+            job = self._new_job("url", formats, language, url,
+                                options=options, clip_start=clip_start,
+                                clip_end=clip_end)
             job.media_path = ""  # filled in after the download
             self._queue.put(job.job_id)
             return job.job_id
@@ -308,6 +380,18 @@ class JobManager:
                     return p
         return None
 
+    def list(self) -> list[dict[str, Any]]:
+        """Snapshot of every job for ``GET /api/jobs``, newest first.
+
+        Reads under the lock so a concurrent worker mutation can't tear a
+        row. Returns the compact :meth:`Job.list_dict` shape.
+        """
+        with self._lock:
+            jobs = [self._jobs[jid] for jid in self._order
+                    if jid in self._jobs]
+        jobs.sort(key=lambda j: j.created_at, reverse=True)
+        return [j.list_dict() for j in jobs]
+
     def cancel(self, job_id: str) -> bool:
         """Flag a job for cooperative cancellation. Returns True if found."""
         with self._lock:
@@ -317,6 +401,31 @@ class JobManager:
             if job.status in _TERMINAL:
                 return False
             job.cancelled = True
+            # A paused job must un-pause so the engine's segment loop can see
+            # the cancel and exit instead of spinning on ``while task.paused``.
+            job.paused = False
+            return True
+
+    def pause(self, job_id: str) -> bool:
+        """Flag a non-terminal job paused. Returns True if it was flippable.
+
+        The owning :class:`_ServerTask` bridges ``paused`` to the job, so the
+        engine's ``while task.paused`` loop stalls the live segment loop.
+        """
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status in _TERMINAL:
+                return False
+            job.paused = True
+            return True
+
+    def resume(self, job_id: str) -> bool:
+        """Clear a job's paused flag. Returns True if it was flippable."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status in _TERMINAL:
+                return False
+            job.paused = False
             return True
 
     def _queued_ids(self) -> list[str]:
@@ -378,6 +487,14 @@ class JobManager:
                 raise RuntimeError("no media file to transcribe")
 
             history_db, history_id = self._open_history(job)
+            # Write the per-job advanced options into a .whisperproject.json
+            # in the job's work_dir BEFORE transcribe. The engine's
+            # _runtime_overrides_scope calls load_project_overrides(
+            # task.file_path) at the start of each transcribe() and restores
+            # config after, so these options apply to THIS job only and the
+            # single-threaded worker stays race-free. The media lives in the
+            # SAME work_dir, so find_project_file walks up to this file.
+            self._write_override_file(job)
             self._set_status(job, STATUS_RUNNING)
             task = _ServerTask(job)
 
@@ -389,7 +506,7 @@ class JobManager:
             if job.cancelled:
                 self._set_status(job, STATUS_CANCELLED)
             else:
-                job.outputs = self._collect_outputs(job)
+                job.outputs = self._collect_outputs(job, task)
                 job.progress = 100
                 self._set_status(job, STATUS_FINISHED)
             self._finish_history(
@@ -405,12 +522,63 @@ class JobManager:
                 job.language, error=str(e),
             )
 
-    def _collect_outputs(self, job: Job) -> list[tuple[str, str]]:
-        """Find the files the engine wrote in the per-job dir.
+    def _write_override_file(self, job: Job) -> None:
+        """Drop the job's validated options into ``work_dir/.whisperproject.json``.
 
-        ``transcribe`` writes outputs beside the input, so they all live in
-        ``job.work_dir``. Match by extension against the requested formats;
-        the de-dupe "(1)" suffix is handled by globbing the dir.
+        The engine's per-folder override mechanism
+        (``core.config.load_project_overrides`` →
+        ``core.transcriber._runtime_overrides_scope``) reads this file at the
+        start of transcribe() and restores ``config`` after, so the options
+        apply to THIS job only. The media file lives in the same work_dir, so
+        ``find_project_file`` walks up from ``task.file_path`` and finds it.
+        Never fatal: a write failure just means the job runs with the
+        server-level config (a worse result, not a crash).
+        """
+        if not job.options or not job.work_dir:
+            return
+        path = os.path.join(job.work_dir, PROJECT_FILE_NAME)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(job.options, f)
+        except OSError as e:
+            logger.warning("could not write override file for job %s: %s",
+                           job.job_id, e)
+
+    def _collect_outputs(self, job: Job, task: Any) -> list[tuple[str, str]]:
+        """Map the files the engine wrote to their formats.
+
+        The engine records every written path on ``task.output_paths`` (the
+        authoritative list). We map each path's extension back to a requested
+        format — far more reliable than re-globbing ``work_dir`` by mtime,
+        which can mis-pick the ``.chapters.json`` / partial-checkpoint ``.json``
+        a newer write left behind. Falls back to the legacy dir-scan only when
+        the engine recorded nothing (e.g. an alt path that didn't set it).
+        """
+        written = getattr(task, "output_paths", None)
+        if written:
+            out: list[tuple[str, str]] = []
+            requested = {f.lower() for f in job.formats}
+            seen_fmts: set[str] = set()
+            for p in written:
+                if not p:
+                    continue
+                ext = os.path.splitext(p)[1].lstrip(".").lower()
+                # Only surface formats the caller asked for, so the
+                # auto-chapters ``.chapters.json`` sidecar is not offered as
+                # the "json" download when json wasn't requested.
+                if ext in requested and ext not in seen_fmts and os.path.isfile(p):
+                    out.append((ext, p))
+                    seen_fmts.add(ext)
+            if out:
+                return out
+        return self._collect_outputs_by_scan(job)
+
+    def _collect_outputs_by_scan(self, job: Job) -> list[tuple[str, str]]:
+        """Legacy fallback: find outputs by globbing the per-job dir.
+
+        Used only when the engine recorded no ``task.output_paths``. Match by
+        extension against the requested formats; newest by mtime wins (the
+        "(1)" re-run case).
         """
         out: list[tuple[str, str]] = []
         try:
@@ -424,7 +592,6 @@ class JobManager:
                        if n.lower().endswith(ext) and n != media_name]
             if not matches:
                 continue
-            # Newest by mtime wins (handles the "(1)" re-run case).
             matches.sort(
                 key=lambda n: os.path.getmtime(os.path.join(job.work_dir, n)),
                 reverse=True,
@@ -510,6 +677,17 @@ def is_safe_url(url: str) -> bool:
     Rejects ``file://``, ``ftp://``, bare paths, and anything without a
     network location. yt-dlp performs its own resolution beyond this, but
     the scheme gate stops the obvious local-file / SSRF-scheme attempts.
+
+    SECURITY NOTE (SSRF surface): this is only a SCHEME gate. It does NOT
+    block http(s) URLs whose host resolves to a private/loopback/link-local
+    address (e.g. ``http://169.254.169.254/`` cloud metadata,
+    ``http://127.0.0.1:.../`` or RFC-1918 hosts). A URL job is therefore a
+    request-forgery surface: only enable URL jobs on a trusted LAN, and
+    prefer NOT exposing the server to untrusted clients. Hardening this
+    fully (resolve the host, reject private ranges, re-check on redirect)
+    is intentionally deferred — yt-dlp also follows its own redirects, so a
+    complete fix has to live at the fetch layer, not this gate. The static
+    page carries the same warning for operators.
     """
     import urllib.parse as _up
     try:
