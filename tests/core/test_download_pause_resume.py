@@ -90,6 +90,19 @@ def test_pause_download_ignores_terminal_status():
         assert task.paused is False
 
 
+def test_pause_download_ignores_waiting():
+    # A not-yet-started "waiting" download has no process to stop-and-continue;
+    # pausing it would only strand it in "paused" (the action bar offers Cancel
+    # for waiting rows, not Pause). Only a RUNNING download can be paused.
+    task = _dl_task("waiting")
+    task.process = None
+    app = _fake_app(task)
+    App.pause_download(app, task)  # type: ignore[arg-type]
+    assert task.status == "waiting"
+    assert task.paused is False
+    assert app._calls["process_queue"] == 0
+
+
 def test_pause_download_refuses_smtv():
     task = _dl_task("running", smtv=True)
     task.process = None

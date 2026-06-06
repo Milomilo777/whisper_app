@@ -2172,7 +2172,11 @@ class App(tk.Tk):
         the action bar disables Pause for them; this method also guards.
         """
         from app.services.download_service import _is_smtv_task
-        if task.status not in ("waiting", "running"):
+        # Only a RUNNING download can be paused. A not-yet-started "waiting"
+        # download has no process to stop-and-continue, and pausing it would
+        # just strand it in "paused" (the action bar offers Cancel for waiting
+        # rows, not Pause). Mirrors download_button_states_for_status.
+        if task.status != "running":
             return
         if _is_smtv_task(task):
             self.log("Pause is unavailable for SMTV downloads (no resume point).")
