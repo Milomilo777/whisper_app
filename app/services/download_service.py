@@ -965,9 +965,21 @@ class DownloadService:
         else:
             episode = smtv_mod.fetch_episode(task.url, timeout=30.0)
 
-        basename = _smtv_basename_from_url(cdn_url) or smtv_mod.filename_for(
-            episode, chosen.get("mode", "video-best")
-        )
+        raw_basename = _smtv_basename_from_url(cdn_url)
+        if raw_basename:
+            # The CDN basename comes from the page's ?file= value, which is
+            # attacker-influenceable; an NTFS ADS colon ("a:b") or a Windows
+            # reserved device stem (CON/PRN/NUL/COM1...) would otherwise reach
+            # os.path.join and yield a zero-byte / redirected file or an
+            # OSError on write. Run it through the same sanitiser smtv.py
+            # already applies in filename_for()/transcript_filename(), and
+            # fall back to a safe default if it sanitises down to nothing.
+            basename = smtv_mod._sanitise_filename(raw_basename) or "smtv_episode"
+        else:
+            # filename_for() already sanitises its CDN/title-derived name.
+            basename = smtv_mod.filename_for(
+                episode, chosen.get("mode", "video-best")
+            )
         target_path = os.path.join(task.folder, basename)
         part_path = target_path + ".part"
 
