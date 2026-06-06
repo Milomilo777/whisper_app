@@ -222,6 +222,16 @@ DEFAULT_CONFIG = {
     "server_max_upload_mb": 512,
     "server_share_lan": False,
     "server_token": "",
+    # Window / privacy toggles set on the Advanced dialog's General tab and
+    # read at runtime. Defaulted here (both OFF) so reads are always a plain
+    # bool and they get the same merge + type-coercion protection as every
+    # other key:
+    #   minimise_to_tray  — when True the window's X button hides to the system
+    #     tray instead of exiting (app.py close handler + widgets.tray).
+    #   telemetry_opt_in  — when True an anonymous launch ping is sent
+    #     (app.observability); OFF means the telemetry module is inert.
+    "minimise_to_tray": False,
+    "telemetry_opt_in": False,
 }
 
 

@@ -314,6 +314,36 @@ def test_load_config_coerces_wrong_type(isolated_dirs, monkeypatch):
     assert config["chime_on_complete"] is True
 
 
+def test_tray_and_telemetry_keys_have_bool_defaults():
+    # BUG H: minimise_to_tray + telemetry_opt_in are read at runtime (app.py,
+    # tray.py, observability.py) and written by the Advanced dialog, so they
+    # must be declared in DEFAULT_CONFIG (both OFF) to get merge + coercion.
+    assert cfg.DEFAULT_CONFIG["minimise_to_tray"] is False
+    assert cfg.DEFAULT_CONFIG["telemetry_opt_in"] is False
+
+
+def test_tray_and_telemetry_merged_into_old_config(isolated_dirs, monkeypatch):
+    # An older config.json predating these keys must still load them at their
+    # bool defaults (not KeyError) so the runtime .get() calls are typed bools.
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    Path(cfg.config_path()).write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    config = cfg.load_config()
+    assert config["minimise_to_tray"] is False
+    assert config["telemetry_opt_in"] is False
+
+
+def test_tray_and_telemetry_wrong_type_coerced(isolated_dirs, monkeypatch):
+    # A hand-edited STRING value (no sane bool coercion) is rejected back to
+    # the default; an INT is coerced to bool (Python bool is int) — the same
+    # rules every other bool key gets now that these are declared (BUG H).
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = {"minimise_to_tray": "yes", "telemetry_opt_in": 1}
+    Path(cfg.config_path()).write_text(json.dumps(payload), encoding="utf-8")
+    config = cfg.load_config()
+    assert config["minimise_to_tray"] is False   # string rejected -> default
+    assert config["telemetry_opt_in"] is True    # int 1 coerced to bool
+
+
 def test_save_config_lock_serialises_concurrent_calls(isolated_dirs, monkeypatch):
     """Two threads calling save_config concurrently must not crash
     or corrupt the destination on Windows. The _SAVE_LOCK serialises
