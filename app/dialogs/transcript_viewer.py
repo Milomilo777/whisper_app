@@ -66,6 +66,75 @@ def _fmt_hms(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
+# Resolution of the transport-bar seek slider. The slider runs 0..N and
+# we map that to libvlc's 0.0..1.0 fractional position. A higher number
+# = finer scrubbing granularity.
+_SEEK_SLIDER_MAX = 1000
+
+
+def _fmt_mmss(ms: float) -> str:
+    """``MM:SS`` (or ``H:MM:SS`` past an hour) from a millisecond count.
+
+    Used by the transport-bar time readout. libvlc returns ``-1`` for an
+    unknown time/length (no media loaded yet, or a stream with no
+    duration), so anything <= 0 collapses to ``00:00`` rather than a
+    bogus negative clock.
+    """
+    total_s = int(ms // 1000) if ms and ms > 0 else 0
+    h, rem = divmod(total_s, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h:d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def _slider_to_fraction(value: float) -> float:
+    """Map a transport-slider value (0.._SEEK_SLIDER_MAX) → 0.0..1.0.
+
+    Clamped so a stray out-of-range value from the Tk scale can never
+    drive libvlc ``set_position`` outside its valid domain.
+    """
+    frac = value / float(_SEEK_SLIDER_MAX)
+    if frac < 0.0:
+        return 0.0
+    if frac > 1.0:
+        return 1.0
+    return frac
+
+
+def _fraction_to_slider(fraction: float) -> float:
+    """Map a libvlc position (0.0..1.0) → transport-slider value.
+
+    Inverse of :func:`_slider_to_fraction`; clamped to the slider's
+    range so a transient out-of-bounds ``get_position`` (libvlc returns
+    values slightly past 1.0 near end-of-media) can't overshoot the
+    widget.
+    """
+    if fraction < 0.0:
+        fraction = 0.0
+    elif fraction > 1.0:
+        fraction = 1.0
+    return fraction * _SEEK_SLIDER_MAX
+
+
+def _clamp_time_ms(current_ms: float, delta_ms: float, total_ms: float) -> int:
+    """Skip-button arithmetic: ``current + delta`` clamped to the media.
+
+    Never returns < 0. When ``total_ms`` is known (> 0) the result is
+    also capped just below the end (``total - 1``) so a forward skip
+    past the end doesn't drive libvlc to a position it rejects; when the
+    length is unknown (libvlc ``-1``/``0``) only the lower bound applies.
+    """
+    target = int(current_ms) + int(delta_ms)
+    if target < 0:
+        target = 0
+    if total_ms and total_ms > 0 and target > total_ms - 1:
+        target = int(total_ms) - 1
+        if target < 0:
+            target = 0
+    return target
+
+
 def _filler_regex() -> re.Pattern[str]:
     """Build a single regex that matches any filler with optional
     trailing punctuation + one trailing space. Whole-word match,
@@ -308,6 +377,11 @@ class TranscriptViewer(tk.Toplevel):
         self.vlc_instance: Any = None
         self.vlc_player: Any = None
         self.vlc_seek_after: str | None = None
+        # True while the user is dragging the transport seek slider. The
+        # position loop checks this and skips updating the slider so its
+        # thumb doesn't snap back to the playhead mid-drag (see
+        # _update_position / _on_seek_*).
+        self._seeking = False
 
         self._build_widgets()
         self._load_segments()
@@ -320,6 +394,15 @@ class TranscriptViewer(tk.Toplevel):
         self.bind("<Control-F>", lambda _e: self._open_find_replace())
         self.bind("<Control-s>", lambda _e: self._save_changes())
         self.bind("<Control-S>", lambda _e: self._save_changes())
+
+        # Transport keyboard niceties — bound to THIS Toplevel only (not
+        # bind_all) so they don't leak into the main app window. Left /
+        # Right scrub ∓5s; Space toggles play/pause. All call guarded
+        # player methods, so they're harmless when there's no embedded
+        # player.
+        self.bind("<Left>", self._on_key_skip_back)
+        self.bind("<Right>", self._on_key_skip_fwd)
+        self.bind("<space>", self._on_key_toggle_play)
 
     # -- widgets ---------------------------------------------------------
 
@@ -421,8 +504,54 @@ class TranscriptViewer(tk.Toplevel):
         ttk.Button(controls, text="Open in system player",
                    command=self._open_in_system_player).pack(side="right")
 
+        # -- transport bar: draggable seek slider + skip + readout ------
+        # A horizontal scale the user drags to scrub. The position loop
+        # writes the playhead into it, EXCEPT while the user is dragging
+        # (self._seeking) so the thumb doesn't fight the drag. On release
+        # we jump the player to the slider's fraction.
+        self._transport = ttk.Frame(parent)
+        self._transport.pack(fill="x", pady=(8, 0))
+
+        self.seek_var = tk.DoubleVar(value=0.0)
+        self.seek_scale = ttk.Scale(
+            self._transport,
+            from_=0.0,
+            to=float(_SEEK_SLIDER_MAX),
+            orient="horizontal",
+            variable=self.seek_var,
+            command=self._on_seek_drag,
+        )
+        self.seek_scale.pack(fill="x")
+        # Drag lifecycle: press → suppress auto-update; release → commit
+        # the seek to the player and resume auto-update.
+        self.seek_scale.bind("<ButtonPress-1>", self._on_seek_press)
+        self.seek_scale.bind("<ButtonRelease-1>", self._on_seek_release)
+
+        skips = ttk.Frame(self._transport)
+        skips.pack(fill="x", pady=(4, 0))
+        self._skip_btns: list[ttk.Button] = []
+        for label, delta in (
+            ("⏪ -10s", -10000),
+            ("◀ -5s", -5000),
+            ("+5s ▶", 5000),
+            ("+10s ⏩", 10000),
+        ):
+            b = ttk.Button(
+                skips, text=label, width=8,
+                command=lambda d=delta: self._skip(d),
+            )
+            b.pack(side="left", padx=(0, 4))
+            self._skip_btns.append(b)
+
+        # MM:SS / MM:SS readout. Kept in its own var (separate from the
+        # legacy HH:MM:SS position_var used elsewhere) so the transport
+        # bar shows the compact clock the spec asks for.
+        self.time_var = tk.StringVar(value="00:00 / 00:00")
+        ttk.Label(skips, textvariable=self.time_var).pack(side="right")
+
+        # Retained for backwards compatibility — some callers/tests refer
+        # to position_var. The loop keeps it updated alongside time_var.
         self.position_var = tk.StringVar(value="00:00:00 / 00:00:00")
-        ttk.Label(parent, textvariable=self.position_var).pack(anchor="w", pady=(6, 0))
 
         # Karaoke word panel — shows the active segment's words with
         # the current one highlighted. When the segment has no word
@@ -443,6 +572,31 @@ class TranscriptViewer(tk.Toplevel):
             )
             note.pack(anchor="w", pady=(8, 0))
             self.play_btn.state(["disabled"])
+            # No embedded player → the transport bar can't control
+            # anything, so grey it out. "Open in system player" stays.
+            self._set_transport_enabled(False)
+
+    def _set_transport_enabled(self, enabled: bool) -> None:
+        """Enable/disable every transport-bar control as a group.
+
+        Used both when VLC is absent at build time and when the deferred
+        HWND bind fails at runtime (_disable_embedded_playback). All
+        lookups are guarded so this is safe even before the widgets
+        exist or after they're destroyed.
+        """
+        state = ["!disabled"] if enabled else ["disabled"]
+        for attr in ("seek_scale",):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                try:
+                    widget.state(state)
+                except Exception:  # noqa: BLE001
+                    pass
+        for b in getattr(self, "_skip_btns", []):
+            try:
+                b.state(state)
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- loading ---------------------------------------------------------
 
@@ -772,6 +926,8 @@ class TranscriptViewer(tk.Toplevel):
             self.play_btn.state(["disabled"])
         except Exception:  # noqa: BLE001
             pass
+        # Nothing left to scrub — grey out the seek slider + skip buttons.
+        self._set_transport_enabled(False)
 
     def _toggle_play(self) -> None:
         if self.vlc_player is None:
@@ -799,6 +955,123 @@ class TranscriptViewer(tk.Toplevel):
         except Exception:  # noqa: BLE001
             pass
 
+    # -- transport bar: skip + drag-to-seek ------------------------------
+
+    def _skip(self, delta_ms: int) -> None:
+        """Jump the playhead by ``delta_ms`` (negative = back), clamped.
+
+        Wired to the ⏪/⏩ buttons and the Left/Right keys. Fully guarded:
+        a None / not-yet-bound / VLC-absent player is a silent no-op so
+        no exception escapes into the Tk event loop.
+        """
+        if self.vlc_player is None:
+            return
+        try:
+            cur_ms = self.vlc_player.get_time() or 0
+            total_ms = self.vlc_player.get_length() or 0
+            target = _clamp_time_ms(cur_ms, delta_ms, total_ms)
+            self.vlc_player.set_time(target)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _typing_in_entry(self) -> bool:
+        """True when keyboard focus is inside a text-entry widget.
+
+        The transport hotkeys are bound on the Toplevel, so they'd
+        otherwise hijack Space / arrow keys while the user types in the
+        Search box or the Find-and-replace fields. Skip the hotkey then
+        and let the keystroke reach the entry normally.
+        """
+        try:
+            focused = self.focus_get()
+        except Exception:  # noqa: BLE001
+            return False
+        if focused is None:
+            return False
+        return isinstance(focused, (tk.Entry, ttk.Entry))
+
+    def _focus_on_tree(self) -> bool:
+        """True when the segment Treeview holds keyboard focus.
+
+        Left/Right normally drive the tree's own column scroll and Up/Down
+        its row navigation; we don't want the video-skip hotkey to fight
+        that, so the arrow hotkeys defer to the tree when it's focused.
+        """
+        try:
+            return self.focus_get() is self.tree
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _on_key_skip_back(self, _event: tk.Event) -> str | None:
+        # Defer to a focused entry/tree so we don't hijack their arrows.
+        if self._typing_in_entry() or self._focus_on_tree():
+            return None
+        self._skip(-5000)
+        return "break"
+
+    def _on_key_skip_fwd(self, _event: tk.Event) -> str | None:
+        if self._typing_in_entry() or self._focus_on_tree():
+            return None
+        self._skip(5000)
+        return "break"
+
+    def _on_key_toggle_play(self, _event: tk.Event) -> str | None:
+        # Space in an entry types a space; elsewhere (including the tree,
+        # where Space has no useful default) it toggles play/pause.
+        if self._typing_in_entry():
+            return None
+        self._toggle_play()
+        return "break"
+
+    def _on_seek_press(self, _event: tk.Event) -> None:
+        """User grabbed the slider — suppress the auto-update so the
+        position loop stops writing the playhead into the thumb and
+        fighting the drag."""
+        self._seeking = True
+
+    def _on_seek_drag(self, _value: str) -> None:
+        """Fires continuously while the slider moves (ttk.Scale command).
+
+        We don't seek the player on every motion event (that would
+        stutter the decoder); we only keep the MM:SS readout live so the
+        user sees where they're scrubbing to. The actual seek happens on
+        button release. Only acts while a drag is in progress.
+        """
+        if not self._seeking or self.vlc_player is None:
+            return
+        try:
+            total_ms = self.vlc_player.get_length() or 0
+            if total_ms and total_ms > 0:
+                frac = _slider_to_fraction(self.seek_var.get())
+                preview_ms = frac * total_ms
+                self.time_var.set(
+                    f"{_fmt_mmss(preview_ms)} / {_fmt_mmss(total_ms)}"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_seek_release(self, _event: tk.Event) -> None:
+        """User let go of the slider — commit the seek, then resume the
+        auto-update. We prefer set_time(fraction*duration) when the
+        length is known (frame-accurate); otherwise fall back to
+        set_position(fraction) for streams with no duration."""
+        if self.vlc_player is None:
+            self._seeking = False
+            return
+        try:
+            frac = _slider_to_fraction(self.seek_var.get())
+            total_ms = self.vlc_player.get_length() or 0
+            if total_ms and total_ms > 0:
+                self.vlc_player.set_time(int(frac * total_ms))
+            else:
+                self.vlc_player.set_position(frac)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            # Always clear the flag so a failed seek doesn't freeze the
+            # slider's auto-update forever.
+            self._seeking = False
+
     def _update_position(self) -> None:
         # Guard against ticks that fire after the viewer's been
         # destroyed. _on_close sets _closing BEFORE destroy() so a
@@ -812,6 +1085,19 @@ class TranscriptViewer(tk.Toplevel):
             self.position_var.set(
                 f"{_fmt_hms(cur_ms / 1000.0)} / {_fmt_hms(total_ms / 1000.0)}"
             )
+            # Transport bar: compact MM:SS readout + slider position.
+            # Skip BOTH while the user is dragging the slider — updating
+            # time_var would be harmless but updating the thumb would
+            # yank it back to the playhead (the "snap-back" the spec
+            # warns against). _on_seek_drag keeps the readout live during
+            # the drag instead.
+            if not self._seeking:
+                self.time_var.set(
+                    f"{_fmt_mmss(cur_ms)} / {_fmt_mmss(total_ms)}"
+                )
+                pos = self.vlc_player.get_position()
+                if pos is not None and pos >= 0.0:
+                    self.seek_var.set(_fraction_to_slider(float(pos)))
             self._update_karaoke(cur_ms / 1000.0)
         except Exception:  # noqa: BLE001
             pass
