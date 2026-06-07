@@ -5,6 +5,35 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ CURRENT STATE (2026-06-07, end of the completeness push) — read this first
+
+- **Unified branch is `macos-ci`** (tip ~`5a632c3`). It carries EVERYTHING: this
+  session's Windows-side work + the macOS session's commits (convert/config/spec/CI/QA
+  + their tiny-model E2E). Local `master` was reset to equal `origin/macos-ci`, so they
+  are reconverged — future commits go on `master` and push as a fast-forward to `macos-ci`.
+  `origin/master` is still `53fc8b2` ON PURPOSE (never pushed — it fires the costly ci.yml
+  matrix; the macos-ci → master merge + the v1.3.8 release are the OWNER's call).
+- **Bug state:** a find-until-dry adversarial sweep ran to convergence — 6 rounds fixed
+  ~20 real bugs (5+4+3+3+3+2), severity collapsing HIGH/security/data-loss → all-LOW → dry.
+  Plus the earlier 44-bug fixpack + the macОS 88-candidate triage. Every fix has a hermetic
+  regression test. pyright `app/ core/` = 0/0/0. Hermetic suite green (the only non-green is a
+  Python-3.14 multi-Tk-root dev-env flake that passes in isolation; the shipped 3.11 runtime +
+  the macOS CI 3.11/3.12 don't have it). **macOS CI build is GREEN on real hardware.**
+- **Artifacts:** `dist_installer/WhisperProject-v1.3.8-Setup-Standard.exe` + `-Portable.zip`,
+  rebuilt from the unified tree, launch-smoke verified (window "Whisper Project v1.3.8").
+- **Bundled Google Cloud key (owner-authorized, trusted-distribution):** both Windows builds
+  bundle the service-account JSON at `creds/gcloud_stt.json`; the backend
+  (`bundled_credentials_path()` in `core/backends/google_cloud_stt.py`) auto-uses it when no
+  user key is set, so a friend can pick "Google Cloud STT" without pasting a key. Default
+  backend stays **offline** (faster_whisper). **SECURITY: the key file is NEVER committed**
+  (gitignored: `creds/` + `gcloud_stt.json`); it lives ONLY in the local build tree
+  `embed_build/creds/`. So the macOS `.app` built on CI does NOT carry the key (the CI checkout
+  has no `creds/`) — if friends need cloud STT on macOS too, the macOS session must drop the
+  same JSON into its build. The key is revocable: rotate the SA in GCP if any build leaks; scope
+  the SA to Speech-to-Text only + set a GCP budget cap.
+
+---
+
 ## 0b. Post-1.3.8 fixes (2026-06-07) — found by live end-to-end testing, on `macos-ci`
 
 Two real defects surfaced by a real offline+online+network E2E run on a 30s clip, a 3-hour
