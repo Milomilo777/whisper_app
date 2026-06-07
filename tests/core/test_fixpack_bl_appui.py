@@ -21,6 +21,7 @@ Covered:
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 
@@ -315,6 +316,11 @@ def test_drop_magnet_scheme_flagged(App, monkeypatch):
     assert any("unsupported type" in m for m in a.logs)
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="file:///C:/... resolves to a Windows path only on Windows; on POSIX "
+    "url2pathname yields '/C:/...', which is not a real local file.",
+)
 def test_drop_file_uri_resolves_to_local_path(App, monkeypatch):
     real = r"C:\videos\clip.mp4"
     monkeypatch.setattr("app.app.os.path.isfile", lambda s: s == real)
@@ -327,6 +333,10 @@ def test_drop_file_uri_resolves_to_local_path(App, monkeypatch):
 
 # --- _file_uri_to_path -------------------------------------------------------
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="url2pathname maps file:///C:/... to a Windows path only on Windows.",
+)
 def test_file_uri_to_path_windows():
     from app.app import _file_uri_to_path
     assert _file_uri_to_path("file:///C:/videos/my%20clip.mp4") == \
