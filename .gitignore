@@ -104,9 +104,9 @@ htmlcov/
 .AppleDouble
 .LSOverride
 
-# Claude Code worktrees and per-machine permission settings (local, ephemeral)
-.claude/worktrees/
-.claude/settings.local.json
+# Claude Code session scratch — worktrees, briefs, rebuild logs, e2e drivers
+# (local, ephemeral; per-machine permission settings too)
+.claude/
 
 # Local notes that should not be committed
 New Text Document.txt
