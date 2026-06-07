@@ -1157,12 +1157,20 @@ class AdvancedDialog(tk.Toplevel):
         path = (self._gcloud_credentials.get() or "").strip()
         batch = bool(self._gcloud_batch_mode.get())
         bucket = (self._gcloud_bucket.get() or "").strip()
+        using_bundled = False
         if not path:
-            self._gcloud_test_result.set(
-                "Pick your service-account JSON file first (Browse...)."
-            )
-            return
-        self._gcloud_test_result.set("Testing connection...")
+            from core.backends.google_cloud_stt import bundled_credentials_path
+            path = bundled_credentials_path()
+            if not path:
+                self._gcloud_test_result.set(
+                    "Pick your service-account JSON file first (Browse...)."
+                )
+                return
+            using_bundled = True
+        self._gcloud_test_result.set(
+            "Testing connection (using the build-bundled key)..."
+            if using_bundled else "Testing connection..."
+        )
 
         def _set_result(msg: str) -> None:
             try:
@@ -1213,8 +1221,13 @@ class AdvancedDialog(tk.Toplevel):
                     _status("FAILED — " + str(e))
                     return
                 _status(
-                    "OK — service account accepted and the Speech-to-Text "
-                    "client initialised. You can transcribe with this backend."
+                    (
+                        "OK — the build-bundled service account works. "
+                        if using_bundled else
+                        "OK — service account accepted. "
+                    )
+                    + "The Speech-to-Text client initialised — "
+                    "you can transcribe with this backend."
                 )
             except Exception as e:  # noqa: BLE001
                 logger.exception("Google Cloud STT connection test failed")
