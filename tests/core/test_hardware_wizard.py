@@ -107,6 +107,11 @@ def test_probe_cuda_returns_both_compute_types_when_supported(monkeypatch):
     }
     monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
     monkeypatch.setattr(hw, "_gpu_name", lambda: "RTX 9999")
+    # R3: a device alone is no longer enough — the cuDNN/cuBLAS runtime must
+    # also load. Stub the runtime gate True so this test still exercises the
+    # compute-type ordering (the broken-runtime case is covered separately in
+    # test_hardware_cuda_gate.py).
+    monkeypatch.setattr(hw, "_cuda_runtime_dlls_loadable", lambda: True)
     tiers = hw._probe_cuda()
     slugs = [t.slug for t in tiers]
     assert "cuda_float16" in slugs
@@ -213,6 +218,9 @@ def test_device_choice_honours_cuda_when_still_present(tmp_path, monkeypatch):
     fake_ct2 = types.ModuleType("ctranslate2")
     fake_ct2.contains_cuda_device = lambda: True  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ctranslate2", fake_ct2)
+    # R3: the persisted CUDA choice is only honoured if the runtime libs also
+    # load now; stub the gate True for this "still present" path.
+    monkeypatch.setattr(hw, "_cuda_runtime_dlls_loadable", lambda: True)
     assert hw.device_choice_from_hardware_file() == ("cuda", "float16")
 
 
@@ -264,6 +272,21 @@ def test_hardware_wizard_constructs_without_crashing(monkeypatch, tmp_path):
         wiz = HardwareWizard(root)
         wiz.withdraw()
         try:
+            # The probe now runs OFF the Tk main thread to avoid freezing
+            # the UI (BUG 3). Join the probe thread, then pump the Tk loop so
+            # the main-thread poll (_poll_probe_result, scheduled via after())
+            # applies the stashed result and populates the tree before we
+            # assert.
+            import time as _time
+
+            probe = wiz._probe_thread
+            if probe is not None:
+                probe.join(timeout=10.0)
+                assert not probe.is_alive(), "hardware probe did not finish"
+            deadline = _time.time() + 5.0
+            while _time.time() < deadline and not wiz.tree.get_children():
+                wiz.update()
+                _time.sleep(0.02)
             children = wiz.tree.get_children()
             assert len(children) == 1
             assert wiz._selected_idx == 0
@@ -272,3 +295,49 @@ def test_hardware_wizard_constructs_without_crashing(monkeypatch, tmp_path):
             wiz._on_close()
     finally:
         root.destroy()
+
+
+# ---------- cuDNN/cuBLAS dlopen probe is timeout-bounded -----------------------
+
+
+def test_cuda_dll_probe_returns_false_on_wedged_loader(monkeypatch):
+    """A wedged ctypes.CDLL must not freeze the probe.
+
+    On a broken CUDA stack a single dlopen can block for many seconds inside
+    the OS loader. _cuda_runtime_dlls_loadable now runs the dlopen probe in a
+    helper thread with a bounded join; a timeout is treated as 'not loadable'
+    (the safe CPU fallback) and the helper must return quickly.
+    """
+    import ctypes
+    import threading as _threading
+    import time as _time
+
+    started = _threading.Event()
+
+    def _hang(_name):
+        started.set()
+        _time.sleep(30)  # simulate a wedged loader
+        raise OSError("never reached")
+
+    monkeypatch.setattr(ctypes, "CDLL", _hang)
+    monkeypatch.setattr(hw, "_CUDA_DLL_PROBE_TIMEOUT_S", 0.2)
+
+    t0 = _time.time()
+    result = hw._cuda_runtime_dlls_loadable()
+    elapsed = _time.time() - t0
+
+    assert result is False
+    # Must return on the timeout budget, not wait out the 30 s sleep.
+    assert elapsed < 5.0
+    assert started.is_set()
+
+
+def test_cuda_dll_probe_true_when_libs_load(monkeypatch):
+    """When a cuDNN and a cuBLAS name both load, the probe reports True."""
+    import ctypes
+
+    def _loads(name):
+        return object()  # any non-raising load counts
+
+    monkeypatch.setattr(ctypes, "CDLL", _loads)
+    assert hw._cuda_runtime_dlls_loadable() is True

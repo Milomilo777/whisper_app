@@ -80,7 +80,7 @@ def test_ensure_hub_configured_returns_default_when_unset_and_opens_dialog(tmp_p
     """
     from unittest.mock import MagicMock, patch
 
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {}
     fake_master = MagicMock()
     fake_save = MagicMock()
@@ -102,7 +102,7 @@ def test_ensure_hub_configured_returns_default_when_unset_and_opens_dialog(tmp_p
 
 
 def test_dialog_ok_writes_hub_folder_and_invokes_save(tk_root, tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {}
     saved_payloads: list[dict] = []
     dlg = HubSetupDialog(tk_root, cfg, save=saved_payloads.append)
@@ -118,7 +118,7 @@ def test_dialog_ok_writes_hub_folder_and_invokes_save(tk_root, tmp_path, monkeyp
 
 
 def test_dialog_use_default_resets_entry_and_saves(tk_root, tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {"hub_folder": ""}
     saved_payloads: list[dict] = []
     dlg = HubSetupDialog(tk_root, cfg, save=saved_payloads.append)
@@ -133,7 +133,7 @@ def test_dialog_use_default_resets_entry_and_saves(tk_root, tmp_path, monkeypatc
 
 
 def test_dialog_cancel_does_not_save(tk_root, tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {"hub_folder": ""}
     saved_payloads: list[dict] = []
     dlg = HubSetupDialog(tk_root, cfg, save=saved_payloads.append)
@@ -151,7 +151,7 @@ def test_dialog_cancel_does_not_save(tk_root, tmp_path, monkeypatch):
 
 
 def test_on_done_callback_receives_saved_path(tk_root, tmp_path, monkeypatch):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {"hub_folder": ""}
     received: list[str] = []
     dlg = HubSetupDialog(
@@ -169,7 +169,7 @@ def test_on_done_callback_swallows_exceptions(tk_root, tmp_path, monkeypatch):
     """A broken on_done callback must not crash the dialog flow —
     the user has already committed; subsequent failures are logged
     but the dialog must still close cleanly."""
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {"hub_folder": ""}
 
     def _boom(_p):
@@ -191,7 +191,7 @@ def test_on_done_callback_swallows_exceptions(tk_root, tmp_path, monkeypatch):
 def test_dialog_save_failure_still_closes_cleanly(tk_root, tmp_path, monkeypatch):
     """A save failure (disk-full, permissions) must not leave the
     dialog open. saved must read False so the caller can retry."""
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
 
     def _broken_save(_c):
         raise OSError("disk full")

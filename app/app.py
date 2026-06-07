@@ -27,6 +27,7 @@ from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import (
     build_download_tab,
     build_queue_tab,
+    build_server_tab,
     build_tiling_tab,
     build_transcribe_tab,
 )
@@ -35,12 +36,31 @@ from core import __version__ as _APP_VERSION
 from core._proc import kill_process_tree
 from core.config import load_config, save_config
 from core.history import HistoryDB
+from core.hub import tiling_tab_enabled
 from core.logging_setup import get_ui_logger, open_log_folder, setup_logging
 from core.paths import bin_dir as _resource_bin_dir
 from core.paths import bundled_binary as _bundled_binary
 from core.watcher import FolderWatcher
 
 logger = logging.getLogger(__name__)
+
+
+def _iids_for_tasks(
+    row_map: dict[str, Any], tasks: "list[Any]"
+) -> list[str]:
+    """Map task objects back to their (new) Treeview iids after a rebuild.
+
+    refresh() rebuilds the tree every tick with fresh iids, wiping the
+    selection. Given the freshly-built ``row_map`` (iid -> task) and the
+    tasks that were selected before the rebuild, return the iids that now
+    hold those same task objects (by identity), preserving tree order and
+    dropping any task that has since left the queue. Pure + Tk-free so the
+    selection-preservation contract can be unit-tested.
+    """
+    wanted = {id(t) for t in tasks}
+    if not wanted:
+        return []
+    return [iid for iid, t in row_map.items() if id(t) in wanted]
 
 
 def _resolve_theme(name: str) -> str:
@@ -61,6 +81,372 @@ def _resolve_entry_file() -> str:
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "gui.py",
     )
+
+
+def _split_dnd_paths(raw: str) -> list[str]:
+    """Split a tkdnd ``<<Drop>>`` payload into individual paths.
+
+    tkdnd packs all dropped items into one string: space-separated
+    tokens, with any token that contains a space wrapped in ``{...}``.
+    We intentionally do NOT use ``Tk.splitlist`` here: Tcl's list
+    parser treats a leading ``\\\\`` as an escaped backslash and
+    collapses it to a single one, so a UNC path like
+    ``{\\\\server\\share\\my file.mp4}`` comes back as
+    ``\\server\\share\\my file.mp4`` — no longer a valid UNC path, and
+    the dropped network file is then silently dropped by the later
+    ``os.path.isfile`` gate. This brace/space splitter preserves the
+    backslashes verbatim so UNC drops survive (local ``C:\\`` and mapped
+    ``Z:\\`` paths were never affected, having no leading ``\\\\``).
+    """
+    raw = raw.strip()
+    out: list[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        while i < n and raw[i] == " ":
+            i += 1
+        if i >= n:
+            break
+        if raw[i] == "{":
+            # Scan for the CLOSING brace of this token. '{' and '}' are legal
+            # filename characters, so a naive raw.find('}') split a real file
+            # like 'my clip {v2}.mp4' at the inner '}', producing two bogus
+            # tokens that both fail the later os.path.isfile gate (the file
+            # is then silently not enqueued). Honour brace nesting AND only
+            # accept a '}' as the token delimiter when it is followed by
+            # end-of-string or a space (i.e. it really ends the token), so
+            # embedded literal braces inside a filename survive. Backslashes
+            # are NOT treated as escapes here: tkdnd's <<Drop>> payload keeps
+            # them literal (UNC paths like \\server\share rely on that).
+            j = i + 1
+            depth = 1
+            close = -1
+            while j < n:
+                c = raw[j]
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    if depth == 1 and (j + 1 >= n or raw[j + 1] == " "):
+                        # The real end of the brace-wrapped token.
+                        close = j
+                        break
+                    if depth > 1:
+                        depth -= 1
+                    # else: a depth-1 '}' NOT at a token boundary is a
+                    # literal brace inside the filename — leave depth alone
+                    # and keep scanning for the true close.
+                j += 1
+            if close == -1:
+                # Unbalanced brace — take the rest as one token.
+                out.append(raw[i + 1:])
+                break
+            out.append(raw[i + 1:close])
+            i = close + 1
+        else:
+            j = i
+            while j < n and raw[j] != " ":
+                j += 1
+            out.append(raw[i:j])
+            i = j
+    return out
+
+
+def _file_uri_to_path(uri: str) -> str:
+    """Convert a ``file://`` URI to a local filesystem path.
+
+    Handles the common shapes a drop target sees:
+    ``file:///C:/dir/clip.mp4`` (Windows), ``file:///home/u/clip.mp4``
+    (POSIX), and the UNC form ``file://server/share/clip.mp4``. Returns ""
+    when ``uri`` isn't a ``file://`` URI or can't be parsed, so the caller
+    can fall through to its unsupported-scheme path.
+    """
+    if not uri.startswith("file://"):
+        return ""
+    from urllib.parse import unquote, urlsplit
+    from urllib.request import url2pathname
+    try:
+        parts = urlsplit(uri)
+        # A non-empty netloc on file:// is a UNC host (file://server/share);
+        # localhost/empty is the ordinary local-file case.
+        netloc = parts.netloc
+        path = url2pathname(unquote(parts.path))
+        if netloc and netloc.lower() != "localhost":
+            return r"\\{}{}".format(netloc, path)
+        return path
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+# --- About dialog content (pure, Tk-free, unit-testable) -------------------
+# The About dialog's text and links live in these two module-level helpers so
+# they can be unit-tested without ever building a tk.Tk() root. The dialog in
+# App._show_about only walks the returned data structures into widgets.
+
+# A section is (title, [(subsection_title, [bullet, ...]), ...]).
+AboutSection = tuple[str, list[tuple[str, list[str]]]]
+
+
+def build_about_sections() -> list[AboutSection]:
+    """Return the full, plain-language feature inventory for the About dialog.
+
+    Many capabilities ship enabled-by-default but live behind the Advanced
+    dialog or have no surface in the main UI, so this is the canonical
+    "what does this app actually do" reference and is intentionally
+    exhaustive. Pure data: no Tk, no I/O — safe to call from a test.
+    """
+    return [
+        ("What's new in this version", [
+            ("Highlights", [
+                "Cloud transcription you can opt into: Google Gemini "
+                "(paste one free key) and Google Cloud Speech-to-Text "
+                "(service-account file, with a cheaper Batch mode)",
+                "Web / LAN access — one click to let a browser on this PC "
+                "or another device transcribe, with nothing to install",
+                "Per-task buttons on every queue item: Pause, Resume, "
+                "Cancel, Re-run, Remove",
+                "Video Tiling — a multi-monitor video wall that "
+                "auto-reconnects if a stream drops",
+                "Built-in update check (opt-in); the installer upgrades "
+                "in place over the old version — no need to uninstall first",
+            ]),
+        ]),
+        ("Transcription engine", [
+            ("Input", [
+                "Any audio or video file ffmpeg can read",
+                "Drag-and-drop one or many files onto the window",
+                "Browse… (Ctrl+O) for single or multi-select",
+                "Recent-files submenu (last 10 from history)",
+            ]),
+            ("Models", [
+                "Whisper Large v3 (default, ~3 GB)",
+                "Whisper Large v3 Turbo (~5× faster, ~1.6 GB)",
+                "Distil Large v3.5 (fastest English-only, ~1.5 GB)",
+                "Picker lives in the Advanced dialog",
+            ]),
+            ("Backends (pluggable)", [
+                "Local Whisper via faster-whisper — the default, fully "
+                "offline, nothing leaves your computer",
+                "whisper.cpp via pywhispercpp — optional, quantised, "
+                "kinder to weak CPUs",
+                "Parakeet TDT v3 via sherpa-onnx — optional, also offline",
+                "Switch in the Advanced dialog under Backend",
+            ]),
+            ("Cloud transcription (optional, uploads your audio)", [
+                "Off by default. These send your audio to Google, so they "
+                "break the offline guarantee — only use them on purpose.",
+                "Gemini (simple API key): paste one free key from "
+                "aistudio.google.com and it just works. Free tier is about "
+                "60 minutes a month.",
+                "Google Cloud Speech-to-Text (service account): a "
+                "purpose-built transcription service with real word "
+                "timestamps and speaker labels. New accounts get 60 free "
+                "minutes a month plus a $300 / 90-day credit.",
+                "It needs a service-account JSON file — set it under "
+                "Advanced › Backend, where a \"How do I get this file?\" "
+                "button walks you through it step by step.",
+                "Batch mode (Cloud Speech-to-Text): about 75% cheaper but "
+                "slower (up to ~24 hours) and needs a Cloud Storage bucket. "
+                "Good for large jobs you are not waiting on.",
+            ]),
+            ("Hardware", [
+                "Autodetect at first launch (CUDA / NPU / DirectML / CPU)",
+                "Choice persisted in hardware.json",
+                "Manual override in the Advanced dialog",
+            ]),
+            ("Quality controls", [
+                "Voice Activity Detection (Silero VAD), tunable",
+                "Word-level timestamps (opt-in)",
+                "Optional stable-ts word-alignment refinement",
+                "Optional Demucs vocal-separation pre-processing",
+            ]),
+        ]),
+        ("Output formats", [
+            ("Files written next to your source", [
+                "SubRip — .srt",
+                "WebVTT — .vtt",
+                "Whisper JSON — .json (segments + word-level data)",
+                "Plain text — .txt",
+                "Tab-separated — .tsv",
+                "LRC lyrics — .lrc",
+                "Markdown — .md",
+                "Microsoft Word — .docx",
+                "PDF — via reportlab",
+            ]),
+            ("Round-trip", [
+                "oTranscribe import (.otr → .srt)",
+                "oTranscribe export (.srt → .otr) for manual editing",
+            ]),
+            ("Templating", [
+                "output_filename_template config key with tokens "
+                "{base} {ext} {lang} {date} {speaker_count}",
+                "Sibling subdirectories created on the fly",
+            ]),
+        ]),
+        ("Post-processing", [
+            ("Per-file extras", [
+                "Speaker diarisation (sherpa-onnx, no HF token)",
+                "Auto-chapter markers (long-silence heuristic)",
+                "Hallucination detector — flags suspect segments "
+                "in the viewer (red rows)",
+            ]),
+            ("Optional local LLM", [
+                "Qwen2.5-1.5B-Instruct, download-on-first-use",
+                "Summaries, Q&A, AI-generated chapter titles",
+                "Off by default; opt in from the Advanced dialog",
+            ]),
+        ]),
+        ("Video download", [
+            ("Sources", [
+                "Any URL yt-dlp supports (YouTube, Vimeo, …)",
+                "Supreme Master TV episode pages "
+                "(multi-quality + article text + series parts)",
+            ]),
+            ("Pipeline options", [
+                "Format/quality picker per URL",
+                "Audio-only mode (MP3 / m4a / opus)",
+                "Subtitle download + burn-in to video",
+                "SponsorBlock category skipping",
+                "Auto-transcribe after download",
+                "Cookies from browser — download login-walled / "
+                "age-gated content (Facebook / Instagram / TikTok, "
+                "some YouTube Shorts)",
+            ]),
+        ]),
+        ("Video Tiling (video wall)", [
+            ("What it does", [
+                "Plays one live stream as a full-screen N×N grid",
+                "Can spread the wall across several monitors",
+                "Auto-reconnects if the stream drops, so the wall "
+                "keeps running unattended",
+                "Lives on its own \"Video Tiling\" tab",
+            ]),
+        ]),
+        ("Web / LAN access", [
+            ("Share transcription from a browser", [
+                "One click on the \"Web / LAN access\" tab opens a simple "
+                "web page served by this app — no app to install on the "
+                "other devices",
+                "Loopback by default: only this computer can reach it "
+                "(no firewall prompt)",
+                "Optional \"Share on local network\" so phones and other "
+                "PCs can use it (Windows may ask to allow the firewall — "
+                "click Allow)",
+                "Optional access password if you want to limit who can use it",
+                "Use it only on a network you trust — it is not encrypted",
+            ]),
+        ]),
+        ("Transcript viewer", [
+            ("Open via", [
+                "Help → Open transcript viewer…",
+                "Last-Result card → View transcript",
+            ]),
+            ("Editing", [
+                "Find / replace (Ctrl+F), case-insensitive default",
+                "Speaker rename — rewrites every same-labelled segment",
+                "Remove fillers — strips uh/um/er… with whole-word regex",
+                "Atomic save (Ctrl+S)",
+            ]),
+            ("Playback", [
+                "Embedded VLC when python-vlc + libvlc are installed",
+                "Click-to-seek on any segment",
+                "Karaoke — active word wrapped in [brackets] as VLC plays",
+            ]),
+            ("Display", [
+                "Word-confidence colour coding "
+                "(green ≥ 0.85, amber ≥ 0.6, red below)",
+                "Type-as-you-search filter",
+            ]),
+        ]),
+        ("Workflow + system integration", [
+            ("Queue", [
+                "Multi-file batch with per-file progress",
+                "Parallel workers (configurable, default 2)",
+                "Right-click any item for Pause, Resume, Cancel, "
+                "Re-run, and Remove — per task",
+                "Cancel a running job (Esc)",
+            ]),
+            ("Automation", [
+                "Watched folder — auto-enqueue files dropped in",
+                "Windows Explorer right-click "
+                "\"Transcribe with Whisper Project\" (optional install task)",
+                "Per-folder .whisperproject.json overrides",
+            ]),
+            ("Desktop", [
+                "System tray + minimise-to-tray (opt-in)",
+                "Native Windows toast on completion + chime",
+                "High-DPI scaling",
+                "Light / dark / system theme",
+            ]),
+            ("Reliability", [
+                "Crash-auto-resume — re-enqueues interrupted files",
+                "Worker subprocess with 5 s heartbeat + 30 s watchdog",
+                "history.db opens in WAL mode + integrity check",
+                "--safe-mode CLI flag backs up config and re-runs first-run",
+            ]),
+        ]),
+        ("Updates", [
+            ("Staying current", [
+                "Opt-in check against GitHub for a newer version — it only "
+                "tells you; it never downloads or installs on its own",
+                "Run it any time from Help → Check for updates…",
+                "When you install the newer Setup it upgrades in place over "
+                "the old version — you do NOT need to uninstall first",
+            ]),
+        ]),
+        ("Search + statistics", [
+            ("History", [
+                "Every finished job recorded in SQLite history.db",
+                "File → Recent files (last 10)",
+                "File → Statistics… — total minutes transcribed, etc.",
+            ]),
+        ]),
+        ("Keyboard shortcuts", [
+            ("Global", [
+                "Ctrl+O — Browse for files",
+                "Ctrl+Enter — Transcribe selected",
+                "Esc — Cancel running job",
+                "Ctrl+Q — Exit (bypasses minimise-to-tray)",
+            ]),
+            ("Viewer", [
+                "Ctrl+F — Find / replace",
+                "Ctrl+S — Save edits",
+            ]),
+        ]),
+        ("Privacy", [
+            ("Default", [
+                "Everything runs locally; no network call without your action",
+                "The cloud backends above are the exception — they upload "
+                "audio only when you choose one and start a job",
+            ]),
+            ("Opt-in telemetry", [
+                "Anonymous launch ping (config: telemetry_opt_in)",
+                "Sentry crash reporting (env: SENTRY_DSN + opt-in)",
+            ]),
+        ]),
+    ]
+
+
+def build_about_links() -> list[tuple[str, str]]:
+    """Return (label, url) pairs of helpful links for the About dialog.
+
+    Pure data: the dialog binds each to ``webbrowser.open``. The releases
+    URL is sourced from ``core.updates`` so it tracks the repo move note
+    there (single source of truth for the GitHub coordinates).
+    """
+    from core.updates import RELEASES_PAGE_URL
+
+    return [
+        ("Downloads & new versions (GitHub releases)", RELEASES_PAGE_URL),
+        ("Get a free Gemini API key — aistudio.google.com",
+         "https://aistudio.google.com/apikey"),
+        ("Google Cloud console (service account, billing)",
+         "https://console.cloud.google.com"),
+        ("Cloud setup guide — Gemini (paste a key)",
+         "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+         "/blob/master/docs/CLOUD_STT.md"),
+        ("Cloud setup guide — Google Cloud Speech-to-Text",
+         "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+         "/blob/master/docs/CLOUD_STT_GOOGLE.md"),
+    ]
 
 
 class App(tk.Tk):
@@ -85,6 +471,8 @@ class App(tk.Tk):
     tree: "ttk.Treeview"
     pb: "ttk.Progressbar"
     row_map: dict[str, Any]
+    # R2 per-task action bar (assigned in tabs.build_queue_tab).
+    queue_action_buttons: dict[str, "ttk.Button"]
     # Download tab
     download_url_var: tk.StringVar
     download_folder_var: tk.StringVar
@@ -100,6 +488,26 @@ class App(tk.Tk):
     tiling_url_var: tk.StringVar
     tiling_divisions_var: tk.IntVar
     tiling_status_var: tk.StringVar
+    tiling_status_label: "ttk.Label"
+    tiling_quality_var: tk.StringVar
+    tiling_mute_var: tk.BooleanVar
+    tiling_multi_monitor_var: tk.BooleanVar
+    tiling_auto_restart_var: tk.BooleanVar
+    tiling_monitors_info_var: tk.StringVar
+    # Spatial monitor indices (core.monitors) ticked for multi-monitor.
+    tiling_selected_monitors: list[int]
+    # ffplay auto-download notice + button (only when ffplay is absent and a
+    # download URL is configured; see tabs.build_tiling_tab).
+    tiling_ffplay_notice: "ttk.Frame"
+    tiling_download_ffplay_btn: "ttk.Button"
+    # Web / LAN access tab (created by tabs.build_server_tab).
+    server_port_var: tk.IntVar
+    server_share_lan_var: tk.BooleanVar
+    server_token_var: tk.StringVar
+    server_status_var: tk.StringVar
+    server_url_var: tk.StringVar
+    server_toggle_btn: "ttk.Button"
+    server_open_btn: "ttk.Button"
     # Download-tab position sliders (created by tabs.build_download_tab).
     download_start_scale: "ttk.Scale"
     download_end_scale: "ttk.Scale"
@@ -124,10 +532,18 @@ class App(tk.Tk):
     transcribe_lang_var: tk.StringVar
     device_var: tk.StringVar
     compute_type_var: tk.StringVar
+    # R3: GPU/CPU device badge. The text var is set in update_model_state();
+    # the two Labels (Transcribe-tab header + Queue-tab status line) are built
+    # in tabs.py and registered here so apply_device_badge can recolour them.
+    device_badge_var: tk.StringVar
+    device_badge_labels: "list[ttk.Label]"
+    device_badge_tip: str
     hotwords_var: tk.StringVar
     format_status_var: tk.StringVar
     download_tree: "ttk.Treeview"
     download_row_map: dict[str, Any]
+    # R2 per-download action bar (assigned in tabs.build_download_tab).
+    download_action_buttons: dict[str, "ttk.Button"]
     # Set by format_service.lookup_formats / _apply_smtv_formats
     _smtv_episode: Any | None
     # Set by tabs.build_download_tab — toggles the series checkbox.
@@ -194,6 +610,12 @@ class App(tk.Tk):
         self.download_current: VideoDownloadTask | None = None
 
         self.status_var = tk.StringVar(value="Initializing...")
+        # R3: device badge state created up-front so a worker "ready" event
+        # firing before the tabs are built can't AttributeError. The Labels
+        # register themselves in tabs.py; apply_device_badge recolours them.
+        self.device_badge_var = tk.StringVar(value="")
+        self.device_badge_labels: list[ttk.Label] = []
+        self.device_badge_tip = ""
         self.model_ready = False
         self.model_loading = False
         self.model_setup_running = False
@@ -231,6 +653,13 @@ class App(tk.Tk):
         from core.tiling import TilingController
         self.tiling = TilingController()
         self.integrations_service = IntegrationsService(self)
+        # Optional in-process web / LAN server (built lazily on first
+        # Start so importing core.server — and its model load — is paid
+        # only when the user actually turns it on). None = never started.
+        self._server_handle: Any = None
+        # True while a start/stop worker thread is in flight, so the
+        # toggle button can't be double-fired into a half-built state.
+        self._server_busy = False
 
         # SQLite history (Phase 3a). Mark any pre-crash row as interrupted on launch.
         try:
@@ -313,6 +742,15 @@ class App(tk.Tk):
         self.after(100, self._on_start)
         self.after(300, self.loop)
 
+        # Optional, opt-in GitHub update check. Fired ~4 s after launch
+        # so it never competes with first-paint / model-setup work. The
+        # check runs on a daemon thread; it is gated by
+        # update_check_enabled AND a once-per-day throttle, and it stays
+        # SILENT unless an update is actually available (no nagging when
+        # up to date, offline, or on a private repo). See
+        # _run_update_check / core.updates.
+        self.after(4000, self._maybe_quiet_update_check)
+
     def _sweep_partials_at_startup(self) -> None:
         """Off-thread best-effort cleanup of the partials/ checkpoint dir."""
         import threading as _t
@@ -383,6 +821,8 @@ class App(tk.Tk):
         self._recent_menu = tk.Menu(f, tearoff=0, postcommand=self._populate_recent_menu)
         f.add_cascade(label="Recent files", menu=self._recent_menu)
         f.add_separator()
+        f.add_command(label="Convert transcript...", command=self.convert_transcript)
+        f.add_separator()
         f.add_command(label="Statistics...", command=self.show_statistics)
         f.add_separator()
         # File→Exit bypasses the minimise-to-tray redirect. When the
@@ -423,6 +863,13 @@ class App(tk.Tk):
                       command=self.integrations_service.open_otranscribe)
         h.add_separator()
         h.add_command(label="Open log folder", command=self.open_log_folder)
+        h.add_separator()
+        # Manual update check — always runs (ignores the once-per-day
+        # throttle the quiet launch check obeys) and DOES report the
+        # "you're up to date" / "couldn't reach the server" cases, unlike
+        # the silent launch check. Never downloads/installs anything.
+        h.add_command(label="Check for updates...",
+                      command=self._check_for_updates_manual)
         m.add_cascade(label="File", menu=f)
         m.add_cascade(label="View", menu=v)
         m.add_cascade(label="Help", menu=h)
@@ -450,6 +897,10 @@ class App(tk.Tk):
                 rows = history.list_transcriptions(limit=10) or []
             except Exception:  # noqa: BLE001
                 rows = []
+        # Paths the user cleared via "Clear list" are hidden until a new
+        # transcription re-adds them. Stored in config.json (the storage
+        # this app manages) because HistoryDB has no clear method.
+        dismissed: set[str] = set(self.app_config.get("recent_files_dismissed") or [])
         if not rows:
             menu.add_command(label="(no recent files)", state="disabled")
             return
@@ -457,7 +908,7 @@ class App(tk.Tk):
         added = 0
         for row in rows:
             path = row.get("file_path") if isinstance(row, dict) else None
-            if not path or path in seen:
+            if not path or path in seen or path in dismissed:
                 continue
             seen.add(path)
             label = f"{os.path.basename(path)}  —  {os.path.dirname(path)[:48]}"
@@ -468,6 +919,12 @@ class App(tk.Tk):
             added += 1
             if added >= 10:
                 break
+        if added == 0:
+            # Every history row is currently dismissed (the user clicked
+            # "Clear list"); show the empty placeholder instead of a lone
+            # "Clear list" that has nothing to clear.
+            menu.add_command(label="(no recent files)", state="disabled")
+            return
         menu.add_separator()
         menu.add_command(label="Clear list", command=self._clear_recent)
 
@@ -543,20 +1000,44 @@ class App(tk.Tk):
         """Open the transcript viewer with a file picker."""
         _open_transcript_viewer(self, None)
 
-    def open_transcript_viewer_for(self, file_path: str) -> None:
-        """Open the viewer for a transcript JSON found next to file_path.
+    def open_transcript_viewer_for(
+        self, file_path: str, json_path: str | None = None
+    ) -> None:
+        """Open the viewer for the transcript JSON belonging to a task.
 
-        Used by the Last Result card's "View transcript" button so a
-        user one click away from the just-finished output. If the
-        JSON isn't on disk for any reason, we fall back to the file
-        picker.
+        Used by the Last Result card's and queue menu's "View transcript"
+        button so the user is one click away from the just-finished output.
+
+        Prefer the ACTUAL .json the worker reported writing (``json_path``,
+        usually pulled from ``task.output_paths``): the basename can differ
+        from the source media when the output was templated or relocated, so
+        recomputing ``splitext(file_path)[0] + '.json'`` would miss it and
+        pop a confusing file picker even though a real transcript exists.
+        Only when no known JSON is on disk do we fall back to recomputing the
+        beside-input name, and finally to the picker.
         """
-        base, _ = os.path.splitext(file_path)
-        json_path = base + ".json"
-        if os.path.isfile(json_path):
+        if json_path and os.path.isfile(json_path):
             _open_transcript_viewer(self, json_path)
+            return
+        base, _ = os.path.splitext(file_path)
+        guessed = base + ".json"
+        if os.path.isfile(guessed):
+            _open_transcript_viewer(self, guessed)
         else:
             _open_transcript_viewer(self, None)
+
+    @staticmethod
+    def _task_json_output(task: Any) -> str | None:
+        """Return the .json path the task actually wrote, if known.
+
+        Reads ``task.output_paths`` (the exact files the worker reported)
+        and returns the first .json entry — the source of truth for the
+        viewer, robust to templated/relocated output names.
+        """
+        for p in getattr(task, "output_paths", None) or ():
+            if isinstance(p, str) and p.lower().endswith(".json"):
+                return p
+        return None
 
     def _open_recent(self, path: str) -> None:
         if not os.path.isfile(path):
@@ -570,18 +1051,37 @@ class App(tk.Tk):
         self.nb.select(self.t1)
 
     def _clear_recent(self) -> None:
-        """Best-effort clear — only present in history if the DB exposes it."""
+        """Clear the File > Recent files list.
+
+        HistoryDB has no clear method (and core/history.py is owned
+        elsewhere), so instead of deleting history rows we hide the
+        currently-listed paths via a dismissed-set persisted in config.json
+        — the storage this app already manages. _populate_recent_menu
+        filters these out, so the submenu shows "(no recent files)" until
+        new transcriptions arrive. This is a true clear of the *list* the
+        user sees, without touching the underlying history DB.
+        """
         history = getattr(self, "history", None)
-        if history is None:
-            return
-        clearer = getattr(history, "clear_recent", None) or getattr(
-            history, "delete_old_transcriptions", None
-        )
-        if callable(clearer):
+        # Snapshot whatever the menu would currently show and add it to the
+        # dismissed set. New transcriptions (paths not in the set) reappear.
+        paths: list[str] = []
+        if history is not None:
             try:
-                clearer()
+                rows = history.list_transcriptions(limit=10) or []
             except Exception:  # noqa: BLE001
-                pass
+                rows = []
+            for row in rows:
+                p = row.get("file_path") if isinstance(row, dict) else None
+                if isinstance(p, str) and p:
+                    paths.append(p)
+        dismissed = set(self.app_config.get("recent_files_dismissed") or [])
+        dismissed.update(paths)
+        self.app_config["recent_files_dismissed"] = sorted(dismissed)
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to persist cleared recent-files list")
+            self.log(f"Could not save cleared recent list: {e}")
 
     def _save_chime_pref(self) -> None:
         self.app_config["chime_on_complete"] = bool(self.chime_on_complete_var.get())
@@ -648,166 +1148,7 @@ class App(tk.Tk):
             "bullet", lmargin1=28, lmargin2=42, spacing1=1, spacing3=1,
         )
 
-        sections: list[tuple[str, list[tuple[str, list[str]]]]] = [
-            ("Transcription engine", [
-                ("Input", [
-                    "Any audio or video file ffmpeg can read",
-                    "Drag-and-drop one or many files onto the window",
-                    "Browse… (Ctrl+O) for single or multi-select",
-                    "Recent-files submenu (last 10 from history)",
-                ]),
-                ("Models", [
-                    "Whisper Large v3 (default, ~3 GB)",
-                    "Whisper Large v3 Turbo (~5× faster, ~1.6 GB)",
-                    "Distil Large v3.5 (fastest English-only, ~1.5 GB)",
-                    "Picker lives in the Advanced dialog",
-                ]),
-                ("Backends (pluggable)", [
-                    "faster-whisper (CTranslate2, default)",
-                    "whisper.cpp via pywhispercpp (quantised ggml)",
-                    "Parakeet TDT v3 via sherpa-onnx",
-                    "Switch in the Advanced dialog",
-                ]),
-                ("Hardware", [
-                    "Autodetect at first launch (CUDA / NPU / DirectML / CPU)",
-                    "Choice persisted in hardware.json",
-                    "Manual override in the Advanced dialog",
-                ]),
-                ("Quality controls", [
-                    "Voice Activity Detection (Silero VAD), tunable",
-                    "Word-level timestamps (opt-in)",
-                    "Optional stable-ts word-alignment refinement",
-                    "Optional Demucs vocal-separation pre-processing",
-                ]),
-            ]),
-            ("Output formats", [
-                ("Files written next to your source", [
-                    "SubRip — .srt",
-                    "WebVTT — .vtt",
-                    "Whisper JSON — .json (segments + word-level data)",
-                    "Plain text — .txt",
-                    "Tab-separated — .tsv",
-                    "LRC lyrics — .lrc",
-                    "Markdown — .md",
-                    "Microsoft Word — .docx",
-                    "PDF — via reportlab",
-                ]),
-                ("Round-trip", [
-                    "oTranscribe import (.otr → .srt)",
-                    "oTranscribe export (.srt → .otr) for manual editing",
-                ]),
-                ("Templating", [
-                    "output_filename_template config key with tokens "
-                    "{base} {ext} {lang} {date} {speaker_count}",
-                    "Sibling subdirectories created on the fly",
-                ]),
-            ]),
-            ("Post-processing", [
-                ("Per-file extras", [
-                    "Speaker diarisation (sherpa-onnx, no HF token)",
-                    "Auto-chapter markers (long-silence heuristic)",
-                    "Hallucination detector — flags suspect segments "
-                    "in the viewer (red rows)",
-                ]),
-                ("Optional local LLM", [
-                    "Qwen2.5-1.5B-Instruct, download-on-first-use",
-                    "Summaries, Q&A, AI-generated chapter titles",
-                    "Off by default; opt in from the Advanced dialog",
-                ]),
-            ]),
-            ("Video download", [
-                ("Sources", [
-                    "Any URL yt-dlp supports (YouTube, Vimeo, …)",
-                    "Supreme Master TV episode pages "
-                    "(multi-quality + article text + series parts)",
-                ]),
-                ("Pipeline options", [
-                    "Format/quality picker per URL",
-                    "Audio-only mode (MP3 / m4a / opus)",
-                    "Subtitle download + burn-in to video",
-                    "SponsorBlock category skipping",
-                    "Auto-transcribe after download",
-                    "Cookies from browser — download login-walled / "
-                    "age-gated content (Facebook / Instagram / TikTok, "
-                    "some YouTube Shorts)",
-                ]),
-            ]),
-            ("Transcript viewer", [
-                ("Open via", [
-                    "Help → Open transcript viewer…",
-                    "Last-Result card → View transcript",
-                ]),
-                ("Editing", [
-                    "Find / replace (Ctrl+F), case-insensitive default",
-                    "Speaker rename — rewrites every same-labelled segment",
-                    "Remove fillers — strips uh/um/er… with whole-word regex",
-                    "Atomic save (Ctrl+S)",
-                ]),
-                ("Playback", [
-                    "Embedded VLC when python-vlc + libvlc are installed",
-                    "Click-to-seek on any segment",
-                    "Karaoke — active word wrapped in [brackets] as VLC plays",
-                ]),
-                ("Display", [
-                    "Word-confidence colour coding "
-                    "(green ≥ 0.85, amber ≥ 0.6, red below)",
-                    "Type-as-you-search filter",
-                ]),
-            ]),
-            ("Workflow + system integration", [
-                ("Queue", [
-                    "Multi-file batch with per-file progress",
-                    "Parallel workers (configurable, default 2)",
-                    "Cancel a running job (Esc)",
-                ]),
-                ("Automation", [
-                    "Watched folder — auto-enqueue files dropped in",
-                    "Windows Explorer right-click "
-                    "\"Transcribe with Whisper Project\" (optional install task)",
-                    "Per-folder .whisperproject.json overrides",
-                ]),
-                ("Desktop", [
-                    "System tray + minimise-to-tray (opt-in)",
-                    "Native Windows toast on completion + chime",
-                    "High-DPI scaling",
-                    "Light / dark / system theme",
-                ]),
-                ("Reliability", [
-                    "Crash-auto-resume — re-enqueues interrupted files",
-                    "Worker subprocess with 5 s heartbeat + 30 s watchdog",
-                    "history.db opens in WAL mode + integrity check",
-                    "--safe-mode CLI flag backs up config and re-runs first-run",
-                ]),
-            ]),
-            ("Search + statistics", [
-                ("History", [
-                    "Every finished job recorded in SQLite history.db",
-                    "File → Recent files (last 10)",
-                    "File → Statistics… — total minutes transcribed, etc.",
-                ]),
-            ]),
-            ("Keyboard shortcuts", [
-                ("Global", [
-                    "Ctrl+O — Browse for files",
-                    "Ctrl+Enter — Transcribe selected",
-                    "Esc — Cancel running job",
-                    "Ctrl+Q — Exit (bypasses minimise-to-tray)",
-                ]),
-                ("Viewer", [
-                    "Ctrl+F — Find / replace",
-                    "Ctrl+S — Save edits",
-                ]),
-            ]),
-            ("Privacy", [
-                ("Default", [
-                    "Everything runs locally; no network call without your action",
-                ]),
-                ("Opt-in telemetry", [
-                    "Anonymous launch ping (config: telemetry_opt_in)",
-                    "Sentry crash reporting (env: SENTRY_DSN + opt-in)",
-                ]),
-            ]),
-        ]
+        sections = build_about_sections()
 
         for section_title, subsections in sections:
             text.insert("end", section_title + "\n", "section")
@@ -815,6 +1156,34 @@ class App(tk.Tk):
                 text.insert("end", sub_title + "\n", "subsection")
                 for line in bullets:
                     text.insert("end", "• " + line + "\n", "bullet")
+
+        # Helpful links — each rendered as a clickable, underlined row that
+        # opens in the default browser. A per-link Text tag carries the URL
+        # so one bound handler can serve them all.
+        import webbrowser
+
+        text.tag_configure(
+            "link", foreground="#1a6fb5", underline=True,
+            lmargin1=28, lmargin2=42, spacing1=1, spacing3=1,
+        )
+        text.insert("end", "Helpful links\n", "section")
+        for idx, (label, url) in enumerate(build_about_links()):
+            tag = f"link-{idx}"
+            text.tag_configure(tag)
+
+            def _open(_e: object, _u: str = url) -> None:
+                webbrowser.open(_u)
+
+            text.tag_bind(tag, "<Button-1>", _open)
+            text.tag_bind(
+                tag, "<Enter>",
+                lambda _e: text.configure(cursor="hand2"),
+            )
+            text.tag_bind(
+                tag, "<Leave>",
+                lambda _e: text.configure(cursor=""),
+            )
+            text.insert("end", "• " + label + "\n", ("link", tag))
 
         text.configure(state="disabled")
 
@@ -845,6 +1214,115 @@ class App(tk.Tk):
     def show_statistics(self) -> None:
         _show_stats(self)
 
+    def convert_transcript(self) -> None:
+        """File → Convert transcript: parse a transcript file and re-emit it
+        in another text format, written beside the input.
+
+        Keeps the UI minimal: an open dialog for the source, a small themed
+        format chooser, then a synchronous write (parsing a subtitle file is
+        instant — no worker thread needed). All errors surface in a messagebox;
+        nothing here can raise out of the Tk event loop.
+        """
+        from core import convert as _convert
+
+        in_path = filedialog.askopenfilename(
+            parent=self,
+            title="Convert transcript — pick the source file",
+            filetypes=[
+                ("Transcripts", "*.json *.srt *.vtt *.tsv *.otr"),
+                ("SubRip", "*.srt"),
+                ("WebVTT", "*.vtt"),
+                ("TSV", "*.tsv"),
+                ("Whisper JSON", "*.json"),
+                ("oTranscribe", "*.otr"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not in_path:
+            return
+
+        fmt = self._ask_convert_format(in_path)
+        if not fmt:
+            return
+
+        try:
+            out_path = _convert.convert_file(in_path, fmt)
+        except _convert.ConvertError as e:
+            messagebox.showerror("Convert transcript", str(e), parent=self)
+            return
+        except OSError as e:
+            messagebox.showerror(
+                "Convert transcript",
+                f"Could not write the output file: {e}",
+                parent=self,
+            )
+            return
+
+        self.log(f"Converted {os.path.basename(in_path)} -> {out_path}")
+        if messagebox.askyesno(
+            "Convert transcript",
+            f"Wrote:\n{out_path}\n\nOpen its folder?",
+            parent=self,
+        ):
+            try:
+                _open_folder_helper(os.path.dirname(out_path) or ".")
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Could not open output folder: {e}")
+
+    def _ask_convert_format(self, in_path: str) -> str | None:
+        """Small themed modal: pick the target format. Returns it or None.
+
+        Defaults to ``srt`` unless the source already is ``.srt`` (then
+        ``json``), so the common one-click case never re-emits the same format.
+        """
+        from core import convert as _convert
+
+        src_ext = os.path.splitext(in_path)[1].lower().lstrip(".")
+        choices = list(_convert.OUTPUT_FORMATS)
+        default = "json" if src_ext == "srt" else "srt"
+        if default not in choices:
+            default = choices[0]
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Convert transcript")
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        result: dict[str, str | None] = {"fmt": None}
+
+        body = ttk.Frame(dlg, padding=16)
+        body.pack(fill="both", expand=True)
+        ttk.Label(
+            body, text=f"Source: {os.path.basename(in_path)}",
+            foreground="#888",
+        ).pack(anchor="w", pady=(0, 8))
+        ttk.Label(body, text="Convert to format:").pack(anchor="w")
+        fmt_var = tk.StringVar(value=default)
+        ttk.Combobox(
+            body, textvariable=fmt_var, state="readonly",
+            values=choices, width=12,
+        ).pack(anchor="w", pady=(4, 12))
+
+        def _ok() -> None:
+            result["fmt"] = fmt_var.get()
+            dlg.destroy()
+
+        def _cancel() -> None:
+            result["fmt"] = None
+            dlg.destroy()
+
+        btns = ttk.Frame(body)
+        btns.pack(fill="x")
+        ttk.Button(btns, text="Convert", command=_ok).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(
+            side="right", padx=(0, 8)
+        )
+        dlg.protocol("WM_DELETE_WINDOW", _cancel)
+        dlg.bind("<Return>", lambda _e: _ok())
+        dlg.bind("<Escape>", lambda _e: _cancel())
+        dlg.grab_set()
+        self.wait_window(dlg)
+        return result["fmt"]
+
     def open_log_folder(self) -> None:
         path = open_log_folder()
         logger.info("Opened log folder: %s", path)
@@ -853,7 +1331,14 @@ class App(tk.Tk):
         name = self.theme_var.get()
         sv_ttk.set_theme(_resolve_theme(name))
         self.app_config["theme"] = name
-        save_config(self.app_config)
+        # Guard the save like every other pref handler (Audit B1 / FB-01): a
+        # disk/permissions failure inside this Tk callback must not raise out
+        # of the event loop — log it and tell the user, don't crash silently.
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to save theme preference")
+            self.log(f"Could not save theme setting: {e}")
 
     def _force_exit(self) -> None:
         """Bypass the minimise-to-tray redirect and exit immediately.
@@ -885,10 +1370,6 @@ class App(tk.Tk):
                 pass
             return
 
-        # Flip the closing flag so watcher events / stability-checks
-        # in flight short-circuit before touching destroyed widgets.
-        self._closing = True
-
         active = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         active_downloads = [
             t for t in self.download_queue if t.status not in ("finished", "cancelled", "error")
@@ -899,7 +1380,26 @@ class App(tk.Tk):
                 "There are queued or running tasks. Exit anyway?",
                 parent=self,
             ):
+                # Declining must NOT freeze the app. _closing is the sole
+                # gate that lets loop()/_drain_main_calls/_drain_watched_paths
+                # re-arm their after() callbacks; setting it before this
+                # return left it stuck True (it is only reset in __init__),
+                # permanently killing the queue pump and the drains.
+                #
+                # Also reset the one-shot exit override: _force_exit /
+                # tray Exit set _exit_from_tray=True to bypass the
+                # minimise-to-tray redirect above. If we don't clear it on
+                # the decline path, the flag stays True for the rest of the
+                # session, so the window's X button no longer honours the
+                # minimise-to-tray preference (it falls straight through to
+                # teardown). The latch is otherwise only reset in __init__.
+                self._exit_from_tray = False
                 return
+
+        # Confirmation passed (or there was nothing to confirm): flip the
+        # closing flag so watcher events / stability-checks in flight
+        # short-circuit before touching destroyed widgets.
+        self._closing = True
         # Persist window size + position so the next launch reopens at
         # the same shape. Runs *before* terminating subprocesses so it
         # never sees a broken state.
@@ -915,14 +1415,24 @@ class App(tk.Tk):
             except Exception:  # noqa: BLE001
                 pass
         for task in self.download_queue:
-            if task.process and task.process.poll() is None:
+            # Snapshot once (see cancel_download): a worker thread may null
+            # task.process between the test and the poll(), which would raise
+            # AttributeError mid-teardown.
+            proc = task.process
+            if proc is not None and proc.poll() is None:
                 # Tree-kill so yt-dlp's ffmpeg merge child dies too (a bare
                 # terminate() orphans it, holding the .part/output handle).
-                kill_process_tree(task.process, force=False)
+                try:
+                    kill_process_tree(proc, force=False)
+                except Exception:  # noqa: BLE001
+                    pass
         try:
             self.tiling.stop()
         except Exception:  # noqa: BLE001
             pass
+        # Stop the in-process web / LAN server so its socket + worker
+        # thread don't linger after the window closes.
+        self._shutdown_server_on_exit()
         self.transcription_service.stop_all()
         # Close the history DB connection (and checkpoint its WAL) on a
         # clean exit — the GUI never did, leaking the connection + the
@@ -971,14 +1481,27 @@ class App(tk.Tk):
         self.t2 = ttk.Frame(self.nb)
         self.t3 = ttk.Frame(self.nb)
         self.t4 = ttk.Frame(self.nb)
+        self.t5 = ttk.Frame(self.nb)
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
         self.nb.add(self.t3, text="Download Videos")
-        self.nb.add(self.t4, text="Video Tiling")
+        # Video Tiling is optional: the Standard installer can drop a
+        # no_tiling.flag marker into {app} when the user opts out at install
+        # time, in which case we don't add the tab at all. self.tiling (the
+        # controller) is still constructed in __init__, so on_exit's
+        # self.tiling.stop() stays safe; only the UI surface is hidden. All
+        # tiling_* vars + start/stop callbacks are reachable only through this
+        # tab's widgets, so skipping it leaves nothing dangling.
+        self._tiling_tab_visible = tiling_tab_enabled()
+        if self._tiling_tab_visible:
+            self.nb.add(self.t4, text="Video Tiling")
+        self.nb.add(self.t5, text="Web / LAN access")
         build_transcribe_tab(self, self.t1)
         build_queue_tab(self, self.t2)
         build_download_tab(self, self.t3)
-        build_tiling_tab(self, self.t4)
+        if self._tiling_tab_visible:
+            build_tiling_tab(self, self.t4)
+        build_server_tab(self, self.t5)
 
     def _save_auto_transcribe_pref(self) -> None:
         self.app_config["auto_transcribe_after_download"] = bool(self.auto_transcribe_var.get())
@@ -1043,19 +1566,22 @@ class App(tk.Tk):
         if len(chosen) == 1:
             self.fv.set(chosen[0])
             return
-        count = 0
-        for path in chosen:
-            self.fv.set(path)
-            self.add()
-            count += 1
-        self.log(f"Enqueued {count} files via Browse...")
+        count = self._bulk_enqueue(list(chosen))
+        if count:
+            self.log(f"Enqueued {count} files via Browse...")
 
     def browse_download_folder(self) -> None:
         folder = filedialog.askdirectory()
         if folder:
             self.download_folder_var.set(folder)
             self.app_config["download_folder"] = folder
-            save_config(self.app_config)
+            # Guard the save like every other pref handler (Audit B1 / FB-01):
+            # a disk/permissions failure must not raise out of the Tk callback.
+            try:
+                save_config(self.app_config)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Failed to save download folder preference")
+                self.log(f"Could not save download folder setting: {e}")
 
     def update_download_mode(self) -> None:
         audio_only = self.download_mode_var.get() == "Audio"
@@ -1087,11 +1613,140 @@ class App(tk.Tk):
         self.status_var.set(msg)
         self.log(msg)
 
+    # R3: device badge --------------------------------------------------------
+    def register_device_badge_label(self, label: "ttk.Label", tier_label: str = "") -> None:
+        """Register a badge Label so apply_device_badge can recolour it.
+
+        Called by tabs.py for each placement (Transcribe header + Queue
+        status line). Stores an optional tier label used in the tooltip.
+        """
+        self.device_badge_labels.append(label)
+        if tier_label:
+            self.device_badge_tip = tier_label
+        self._bind_device_badge_tooltip(label)
+
+    def apply_device_badge(self, text: str, kind: str, worker: dict[str, Any]) -> None:
+        """Set the badge text + colour from the worker's effective device.
+
+        ``kind`` is one of ``gpu`` (green), ``cpu`` (amber), ``cpu_downgraded``
+        (amber). Colours are theme-agnostic enough to read on sv_ttk's dark
+        and light palettes. The tooltip is refreshed with the full detail.
+        """
+        self.device_badge_var.set(text)
+        colour = {
+            "gpu": "#2e9e44",            # green — running on the GPU
+            "cpu": "#d08a1d",            # amber — CPU (slower)
+            "cpu_downgraded": "#d08a1d",  # amber — GPU asked, fell back to CPU
+        }.get(kind, "")
+        req = str(worker.get("requested_device") or "")
+        ct = str(worker.get("compute_type") or "")
+        dev = str(worker.get("device") or "")
+        tip = f"Transcribing on {dev or 'cpu'}"
+        if ct:
+            tip += f" ({ct})"
+        if kind in ("cpu", "cpu_downgraded"):
+            tip += (
+                ". CPU is much slower than a GPU. Open the Hardware wizard to "
+                "check for a CUDA GPU; if you have an NVIDIA card, install its "
+                "drivers + the cuDNN/cuBLAS runtime."
+            )
+        if kind == "cpu_downgraded" and req:
+            tip = f"Requested {req} but it was unavailable. " + tip
+        self.device_badge_tip = tip
+        for label in self.device_badge_labels:
+            try:
+                if colour:
+                    label.configure(foreground=colour)
+                label.configure(text=text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _bind_device_badge_tooltip(self, widget: "ttk.Label") -> None:
+        """Lightweight hover tooltip showing the full device detail.
+
+        Self-contained (no shared tooltip helper exists in the codebase yet);
+        creates a borderless Toplevel on <Enter> and destroys it on <Leave>.
+        """
+        state: dict[str, Any] = {"tip": None}
+
+        def _show(_event: Any) -> None:
+            if state["tip"] is not None or not self.device_badge_tip:
+                return
+            try:
+                tip = tk.Toplevel(widget)
+                tip.wm_overrideredirect(True)
+                x = widget.winfo_rootx() + 12
+                y = widget.winfo_rooty() + widget.winfo_height() + 4
+                tip.wm_geometry(f"+{x}+{y}")
+                tk.Label(
+                    tip, text=self.device_badge_tip, justify="left",
+                    background="#ffffe0", foreground="#000000",
+                    relief="solid", borderwidth=1, wraplength=320,
+                ).pack()
+                state["tip"] = tip
+            except Exception:  # noqa: BLE001
+                state["tip"] = None
+
+        def _hide(_event: Any) -> None:
+            tip = state["tip"]
+            state["tip"] = None
+            if tip is not None:
+                try:
+                    tip.destroy()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        widget.bind("<Enter>", _show)
+        widget.bind("<Leave>", _hide)
+
+    def warn_cpu_once(self, downgraded: bool) -> None:
+        """One-time modal + log warning that transcription is on CPU (slower).
+
+        Only invoked by TranscriptionService when the situation is actionable
+        (a CUDA->CPU downgrade, or a GPU detected-but-unusable). Kept short.
+        """
+        if downgraded:
+            msg = (
+                "Your GPU could not be used, so transcription is running on "
+                "the CPU — this is much slower.\n\n"
+                "This usually means the NVIDIA cuDNN/cuBLAS runtime is missing "
+                "or broken (not a corrupt model). Open the Hardware wizard "
+                "for details."
+            )
+        else:
+            msg = (
+                "A GPU was detected but cannot be used, so transcription is "
+                "running on the CPU — this is much slower.\n\n"
+                "Check your NVIDIA drivers and the cuDNN/cuBLAS runtime. Open "
+                "the Hardware wizard for details."
+            )
+        self.log(msg.replace("\n\n", " "))
+        try:
+            messagebox.showwarning("Running on CPU (slower)", msg, parent=self)
+        except Exception:  # noqa: BLE001
+            pass
+
     # Modal model setup -------------------------------------------------------
     def ensure_model_with_modal(self, mandatory: bool = False) -> bool:
         if self.model_ready:
             self.status_var.set("Model loaded")
             return True
+        return self._open_model_download_modal(mandatory=mandatory)
+
+    def download_model_now(self) -> bool:
+        """Force the model-download modal for the CONFIGURED slug.
+
+        Unlike ``ensure_model_with_modal``, this does NOT short-circuit on the
+        app-global ``model_ready`` flag. The Advanced "Download now" button
+        targets one specific model's bytes; once ANY model was loaded,
+        ``model_ready`` was True and the old gate made "Download now" a silent
+        no-op. ``ensure_model`` is idempotent (a fast MD5 check when the bytes
+        are already present), so opening the modal here is safe even if some
+        model is loaded.
+        """
+        return self._open_model_download_modal(mandatory=False)
+
+    def _open_model_download_modal(self, mandatory: bool = False) -> bool:
         if self.model_setup_running:
             return False
         self.model_setup_running = True
@@ -1235,17 +1890,35 @@ class App(tk.Tk):
         if not os.path.isfile(text):
             self.log(f"File not found — pick an existing file: {text}")
             return
-        # First-transcribe gating:
-        #   1. If the model bytes are not on disk → download dialog.
-        #   2. Then call ensure_worker_ready to lazy-load the model
-        #      into a worker subprocess. v1.0.3: was previously
-        #      preloaded at startup; deferring it here saves ~1.5 GB
-        #      of idle RAM in sessions where the user never clicks
-        #      Transcribe.
+        if not self._ensure_transcribe_ready():
+            return
+        # Per-task language override + optional clip range.
+        task = TranscriptionTask(self.fv.get())
+        self._apply_task_options(task)
+        self.queue.append(task)
+        self.pb["value"] = 0
+        self.nb.select(self.t2)
+        self.log(f"Queued: {os.path.basename(self.fv.get())}")
+        self.refresh()
+
+    def _ensure_transcribe_ready(self) -> bool:
+        """Run the one-time transcribe gates; True if a task may be enqueued.
+
+        Shared by add() and _bulk_enqueue so the ~3 GB model-download modal,
+        the optional-alignment offer, and the worker spawn happen exactly
+        ONCE per user action — not once per file in a multi-file batch.
+
+        First-transcribe gating:
+          1. If the model bytes are not on disk → download dialog.
+          2. Then call ensure_worker_ready to lazy-load the model into a
+             worker subprocess. v1.0.3: was previously preloaded at startup;
+             deferring it here saves ~1.5 GB of idle RAM in sessions where the
+             user never clicks Transcribe.
+        """
         if not self._model_bytes_present():
             if self.model_setup_running:
                 self.log("Model download already in progress — please wait.")
-                return
+                return False
             if not messagebox.askyesno(
                 "Whisper model required",
                 "The Whisper model must be downloaded before the first transcription. "
@@ -1253,10 +1926,10 @@ class App(tk.Tk):
                 parent=self,
             ):
                 self.log("Transcription cancelled: the Whisper model is required.")
-                return
+                return False
             if not self.ensure_model_with_modal():
                 self.log("Transcription cancelled: the Whisper model is not ready.")
-                return
+                return False
         # Slim build: if word-alignment is enabled but its (large, optional)
         # package isn't installed, offer the one-time download BEFORE the
         # worker spawns so the worker activates with it present. Declining
@@ -1265,11 +1938,19 @@ class App(tk.Tk):
             self._offer_optional_install("alignment", "Word-timestamp alignment", "700 MB")
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Transcription cancelled: model load was cancelled")
-            return
+            return False
+        return True
+
+    def _apply_task_options(self, task: TranscriptionTask) -> None:
+        """Apply the Transcribe-tab language + clip-range options to a task.
+
+        Shared by add() and _bulk_enqueue so a bulk-enqueued file gets the
+        same per-task language override and optional time-slice as a single
+        file enqueued through Transcribe.
+        """
         # Per-task language override. The picker shows "Auto" for the
         # default Whisper auto-detect; any other value is a language
         # name that maps to a known code via app.domain.languages.
-        task = TranscriptionTask(self.fv.get())
         lang_choice = getattr(self, "transcribe_lang_var", None)
         if lang_choice is not None:
             choice = lang_choice.get().strip()
@@ -1288,11 +1969,34 @@ class App(tk.Tk):
             from app.services.download_service import _parse_timecode
             task.clip_start = _parse_timecode(self.transcribe_start_time_var.get()) or None
             task.clip_end = _parse_timecode(self.transcribe_end_time_var.get()) or None
-        self.queue.append(task)
-        self.pb["value"] = 0
-        self.nb.select(self.t2)
-        self.log(f"Queued: {os.path.basename(self.fv.get())}")
-        self.refresh()
+
+    def _bulk_enqueue(self, paths: "list[str]") -> int:
+        """Enqueue many files as transcription tasks in one shot.
+
+        Multi-file Browse and multi-file drag-and-drop both call this instead
+        of looping add() per path: add() re-pops the ~3 GB model-download
+        modal and re-runs the tab-switch + full-tree refresh() PER FILE, which
+        is jarring for a 20-file drop. Here the model/worker gate runs ONCE up
+        front, every existing file is enqueued with the same language/clip
+        options, and refresh() runs ONCE at the end. Returns the count
+        enqueued (0 if the gate was declined or no path existed).
+        """
+        files = [p for p in paths if p and os.path.isfile(p)]
+        if not files:
+            return 0
+        if not self._ensure_transcribe_ready():
+            return 0
+        count = 0
+        for path in files:
+            task = TranscriptionTask(path)
+            self._apply_task_options(task)
+            self.queue.append(task)
+            count += 1
+        if count:
+            self.pb["value"] = 0
+            self.nb.select(self.t2)
+            self.refresh()
+        return count
 
     def _model_bytes_present(self) -> bool:
         """True when the Whisper model files are already on disk.
@@ -1429,16 +2133,21 @@ class App(tk.Tk):
         task = self.row_map.get(item)
         if not task:
             return
+        # Drive the menu entries from the SAME pure helper the always-visible
+        # action bar uses (button_states_for_status), so the two can never
+        # disagree about which actions a status offers.
+        from app.widgets.tabs import button_states_for_status
+        states = button_states_for_status(
+            task.status, self._task_has_checkpoint(task)
+        )
         m = tk.Menu(self, tearoff=0)
-        if task.status == "waiting":
-            m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status == "running":
+        if states["pause"]:
             m.add_command(label="Pause", command=lambda: self.pause(task))
-            m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status == "paused":
+        if states["resume"] and task.status == "paused":
             m.add_command(label="Resume", command=lambda: self.resume(task))
+        if states["cancel"]:
             m.add_command(label="Cancel", command=lambda: self.cancel(task))
-        elif task.status in ("finished", "cancelled", "error"):
+        if task.status in ("finished", "cancelled", "error"):
             if task.status == "finished":
                 m.add_command(
                     label="Export → oTranscribe (.otr)",
@@ -1450,33 +2159,45 @@ class App(tk.Tk):
                 )
                 m.add_command(
                     label="View transcript",
-                    command=lambda: self.open_transcript_viewer_for(task.file_path),
+                    command=lambda: self.open_transcript_viewer_for(
+                        task.file_path, self._task_json_output(task)
+                    ),
                 )
                 m.add_command(
                     label="Open output folder",
                     command=lambda: self._open_folder(os.path.dirname(task.file_path)),
                 )
                 m.add_separator()
-            # Resume-from-cancellation: if a partial checkpoint
-            # exists for this cancelled task, surface a "Resume"
-            # entry above "Re-run". Only the cancelled path is wired
-            # — for "error" and "finished" we don't want to invite
-            # the user to resume from a stale partial that may have
-            # been produced by a different config.
-            if task.status == "cancelled":
-                try:
-                    from core.transcriber import has_resumable_checkpoint
-                    if has_resumable_checkpoint(task.file_path):
-                        m.add_command(
-                            label="Resume",
-                            command=lambda: self.resume_task(task),
-                        )
-                except Exception:  # noqa: BLE001
-                    # Checkpoint probe must never block the menu.
-                    pass
-            m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
-            m.add_command(label="Remove", command=lambda: self.remove_task(task))
+            # Resume-from-cancellation: a "Resume" entry sits above "Re-run"
+            # only when a resumable checkpoint exists (states["resume"] for a
+            # cancelled task). Error / finished never invite a resume from a
+            # potentially stale partial.
+            if states["resume"] and task.status == "cancelled":
+                m.add_command(
+                    label="Resume",
+                    command=lambda: self.resume_task(task),
+                )
+            if states["rerun"]:
+                m.add_command(label="Re-run", command=lambda: self._rerun_task(task))
+            if states["remove"]:
+                m.add_command(label="Remove", command=lambda: self.remove_task(task))
         m.tk_popup(e.x_root, e.y_root)
+
+    def _task_has_checkpoint(self, task: TranscriptionTask) -> bool:
+        """True when a cancelled task has a resumable partial on disk.
+
+        Cheap, defensive probe shared by menu_row and the action bar so
+        both surface "Resume" under the same condition. Any failure (the
+        checkpoint module missing, a bad path) is swallowed — the probe
+        must never block the menu or the action-bar refresh.
+        """
+        if getattr(task, "status", "") != "cancelled":
+            return False
+        try:
+            from core.transcriber import has_resumable_checkpoint
+            return bool(has_resumable_checkpoint(task.file_path))
+        except Exception:  # noqa: BLE001
+            return False
 
     def download_menu_row(self, e: tk.Event) -> None:
         item = self.download_tree.identify_row(e.y)
@@ -1491,11 +2212,23 @@ class App(tk.Tk):
         task = self.download_row_map.get(item)
         if not task:
             return
+        from app.services.download_service import _is_smtv_task
+        from app.widgets.tabs import download_button_states_for_status
+        saved_dl = getattr(task, "saved_path", None)
+        has_file_dl = bool(saved_dl) and os.path.isfile(saved_dl) if saved_dl else False
+        dstates = download_button_states_for_status(
+            task.status, is_smtv=_is_smtv_task(task), has_saved_file=has_file_dl
+        )
         m = tk.Menu(self, tearoff=0)
         if task.status in ("waiting", "running", "transcribing"):
             # "transcribing" = the download finished and handed off to an
             # auto-transcribe; Cancel here stops that linked task too
             # (cancel_download unlinks + cancels transcription_task).
+            if dstates["pause"]:
+                m.add_command(label="Pause", command=lambda: self.pause_download(task))
+            m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
+        elif task.status == "paused":
+            m.add_command(label="Resume", command=lambda: self.resume_download(task))
             m.add_command(label="Cancel", command=lambda: self.cancel_download(task))
         elif task.status in ("finished", "cancelled", "error"):
             saved = getattr(task, "saved_path", None)
@@ -1535,14 +2268,51 @@ class App(tk.Tk):
                     pass
         return out
 
+    def _active_dup_in_queue(self, file_path: str) -> bool:
+        """True if a non-terminal queue task already targets ``file_path``.
+
+        Re-run / Resume re-enqueue a fresh task from a terminal (finished /
+        cancelled / error) row. Without this guard, double-clicking Re-run
+        (or re-running while a previous re-run of the same file is still
+        waiting / running) enqueues a SECOND concurrent transcription of the
+        same file — wasted work and confusing duplicate rows. Mirrors the
+        watched-folder dedup in :meth:`_enqueue_watched_file`: skip only when
+        a same-path task is still pending; a finished/cancelled/error row
+        does not block a fresh re-run.
+        """
+        try:
+            norm = os.path.normcase(os.path.abspath(file_path))
+        except Exception:  # noqa: BLE001
+            return False
+        for existing in self.queue:
+            try:
+                if (os.path.normcase(os.path.abspath(existing.file_path)) == norm
+                        and getattr(existing, "status", "")
+                        not in ("finished", "cancelled", "error")):
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
     def _bulk_rerun(self, tasks: list[Any]) -> None:
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Re-run cancelled: model load was cancelled")
             return
         for t in tasks:
+            if self._active_dup_in_queue(t.file_path):
+                self.log(
+                    f"Re-run skipped: {os.path.basename(t.file_path)} is "
+                    f"already in the queue."
+                )
+                continue
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
+            # Preserve the time-range slice across re-run (mirrors the Download
+            # tab's _rerun_download fix) — without this a clipped row re-runs
+            # the WHOLE file instead of the slice the user picked.
+            nt.clip_start = getattr(t, "clip_start", None)
+            nt.clip_end = getattr(t, "clip_end", None)
             self.queue.append(nt)
         self.refresh()
 
@@ -1551,9 +2321,17 @@ class App(tk.Tk):
             self.log("Resume cancelled: model load was cancelled")
             return
         for t in tasks:
+            if self._active_dup_in_queue(t.file_path):
+                self.log(
+                    f"Resume skipped: {os.path.basename(t.file_path)} is "
+                    f"already in the queue."
+                )
+                continue
             nt = TranscriptionTask(t.file_path)
             if getattr(t, "language", None):
                 nt.language = t.language
+            nt.clip_start = getattr(t, "clip_start", None)
+            nt.clip_end = getattr(t, "clip_end", None)
             nt.resume = True
             nt.cancelled = False
             self.queue.append(nt)
@@ -1604,9 +2382,17 @@ class App(tk.Tk):
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Re-run cancelled: model load was cancelled")
             return
+        if self._active_dup_in_queue(task.file_path):
+            self.log(
+                f"Re-run skipped: {os.path.basename(task.file_path)} is "
+                f"already in the queue."
+            )
+            return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
+        new_task.clip_start = getattr(task, "clip_start", None)
+        new_task.clip_end = getattr(task, "clip_end", None)
         self.queue.append(new_task)
         self.refresh()
 
@@ -1627,9 +2413,17 @@ class App(tk.Tk):
         if not self.transcription_service.ensure_worker_ready(self):
             self.log("Resume cancelled: model load was cancelled")
             return
+        if self._active_dup_in_queue(task.file_path):
+            self.log(
+                f"Resume skipped: {os.path.basename(task.file_path)} is "
+                f"already in the queue."
+            )
+            return
         new_task = TranscriptionTask(task.file_path)
         if getattr(task, "language", None):
             new_task.language = task.language
+        new_task.clip_start = getattr(task, "clip_start", None)
+        new_task.clip_end = getattr(task, "clip_end", None)
         new_task.resume = True
         new_task.cancelled = False
         self.queue.append(new_task)
@@ -1700,15 +2494,27 @@ class App(tk.Tk):
 
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True
+        # Clear any pause hold so the (now cancelled) task can't be mistaken
+        # for resumable, and a stale torn-down "paused" event can't resurrect
+        # it (the _finish stale-pause guard only spares running/waiting).
+        task.paused = False
         task.status = "cancelled"
         # Freeze the Elapsed column at the cancel moment.
         if task.end_time is None:
             task.end_time = time.time()
-        if task.process and task.process.poll() is None:
+        # Snapshot task.process ONCE: the download worker thread can null it
+        # (in _run_task's finally / _media_phase / _subtitle_phase) between
+        # the truthiness test and the .poll() call, which on the shared
+        # attribute would dereference None -> AttributeError on the Tk thread.
+        proc = task.process
+        if proc is not None and proc.poll() is None:
             # Tree-kill so the ffmpeg merge/extract child dies with yt-dlp;
             # otherwise it keeps the .part/output handle open and the
             # follow-up unlink/replace can fail with PermissionError.
-            kill_process_tree(task.process, force=False)
+            try:
+                kill_process_tree(proc, force=False)
+            except Exception:  # noqa: BLE001
+                pass
         # If the download had already handed off to auto-transcribe, stop
         # that too and unlink it — otherwise the transcription keeps running
         # and finish_task would later overwrite this "cancelled" status.
@@ -1726,6 +2532,138 @@ class App(tk.Tk):
         if task in self.download_queue:
             self.download_queue.remove(task)
         self.refresh_download_queue()
+
+    def pause_download(self, task: VideoDownloadTask) -> None:
+        """R2 "pause" for a download = STOP-AND-CONTINUE (not a true freeze).
+
+        yt-dlp has no live pause signal, so we tear the process down the
+        same way ``cancel_download`` does (reusing kill_process_tree) BUT:
+          * land on status "paused" (not "cancelled"),
+          * KEEP the partial .part file so resume can continue it,
+          * only HOLD a linked auto-transcribe (don't cancel it permanently).
+
+        SMTV downloads can't be paused (no HTTP Range on the CDN stream), so
+        the action bar disables Pause for them; this method also guards.
+        """
+        from app.services.download_service import _is_smtv_task
+        # Only a RUNNING download can be paused. A not-yet-started "waiting"
+        # download has no process to stop-and-continue, and pausing it would
+        # just strand it in "paused" (the action bar offers Cancel for waiting
+        # rows, not Pause). Mirrors download_button_states_for_status.
+        if task.status != "running":
+            return
+        if _is_smtv_task(task):
+            self.log("Pause is unavailable for SMTV downloads (no resume point).")
+            return
+        task.paused = True
+        task.status = "paused"
+        if task.end_time is None:
+            task.end_time = time.time()
+        # Snapshot once (see cancel_download): the worker thread may null
+        # task.process between the test and the .poll(), which would raise
+        # AttributeError on the Tk thread and skip the tree-kill.
+        proc = task.process
+        if proc is not None and proc.poll() is None:
+            # Same tree-kill as cancel so the ffmpeg child dies with yt-dlp
+            # and releases the .part handle — but we do NOT delete the .part.
+            try:
+                kill_process_tree(proc, force=False)
+            except Exception:  # noqa: BLE001
+                pass
+        # Hold (don't cancel) any linked auto-transcribe: keep it referenced
+        # so a resume can re-establish the hand-off. The download row stops
+        # mirroring its progress because the status is no longer "transcribing".
+        if self.download_current is task:
+            self.download_current = None
+        self.refresh_download_queue()
+        # Let the next waiting download (if any) start now that this one
+        # released the single-download slot.
+        self.download_service.process_queue()
+
+    def resume_download(self, task: VideoDownloadTask) -> None:
+        """Re-enqueue a paused download so yt-dlp continues its .part.
+
+        build_download_command passes ``-c``/``--continue``, so re-running
+        the SAME task resumes from the existing fragment instead of
+        restarting at zero. We don't build a fresh task (unlike _rerun_
+        download) precisely so the partial keeps its identity.
+        """
+        if task.status != "paused":
+            return
+        task.paused = False
+        task.cancelled = False
+        task.status = "waiting"
+        task.end_time = None
+        if task not in self.download_queue:
+            self.download_queue.append(task)
+        self.refresh_download_queue()
+        self.download_service.process_queue()
+
+    # --- R2: always-visible Download action bar ------------------------------
+    def _selected_downloads(self) -> list[VideoDownloadTask]:
+        tree = getattr(self, "download_tree", None)
+        if tree is None:
+            return []
+        return [
+            t for t in (self.download_row_map.get(i) for i in tree.selection()) if t
+        ]
+
+    def _download_action_apply(
+        self, fn: "Callable[[VideoDownloadTask], Any]"
+    ) -> None:
+        """Run a per-download handler over the current selection, then
+        refresh the action-bar enabled state. Each handler already guards
+        its own valid statuses, so we don't pre-filter here."""
+        for t in list(self._selected_downloads()):
+            try:
+                fn(t)
+            except Exception:  # noqa: BLE001
+                pass
+        self._update_download_action_bar()
+
+    def _download_action_open(self) -> None:
+        """Open button — opens the saved file of a finished download, else
+        falls back to its download folder."""
+        for t in list(self._selected_downloads()):
+            saved = getattr(t, "saved_path", None)
+            if t.status == "finished" and saved and os.path.isfile(saved):
+                self._open_file(saved)
+            elif getattr(t, "folder", ""):
+                self._open_folder(t.folder)
+
+    def _update_download_action_bar(self) -> None:
+        """Enable/disable Download action-bar buttons for the selection.
+
+        Recomputed on <<TreeviewSelect>> and inside refresh_download_queue
+        (which rebuilds the tree each tick) so a row whose status flipped
+        never leaves a stale button enabled. Uses the same pure helper
+        (download_button_states_for_status) as the design contract."""
+        buttons = getattr(self, "download_action_buttons", None)
+        if not buttons:
+            return
+        from app.services.download_service import _is_smtv_task
+        from app.widgets.tabs import (
+            DOWNLOAD_ACTION_KEYS,
+            download_button_states_for_status,
+        )
+
+        merged = {k: False for k in DOWNLOAD_ACTION_KEYS}
+        for t in self._selected_downloads():
+            saved = getattr(t, "saved_path", None)
+            has_file = bool(saved) and os.path.isfile(saved) if saved else False
+            states = download_button_states_for_status(
+                getattr(t, "status", ""),
+                is_smtv=_is_smtv_task(t),
+                has_saved_file=has_file,
+            )
+            for k, v in states.items():
+                if v:
+                    merged[k] = True
+        for key, btn in buttons.items():
+            if merged.get(key):
+                btn.state(["!disabled"])
+            else:
+                btn.state(["disabled"])
 
     def pause(self, t: TranscriptionTask) -> None:
         # Only a task actually running on a worker can be paused.
@@ -1749,6 +2687,11 @@ class App(tk.Tk):
         self.refresh()
 
     def cancel(self, t: TranscriptionTask) -> None:
+        # Terminal-status guard (mirrors pause()/resume()): a right-click menu
+        # left open while the task finished could otherwise flip a just-
+        # completed task back to "cancelled".
+        if getattr(t, "status", "") in ("finished", "cancelled", "error"):
+            return
         t.cancelled = True
         t.status = "cancelled"
         # Freeze the Elapsed column at the cancel moment so the user
@@ -1772,20 +2715,291 @@ class App(tk.Tk):
             self.queue.remove(t)
         self.refresh()
 
+    # --- R2: always-visible Queue action bar ---------------------------------
+    def _selected_tasks(self) -> list[TranscriptionTask]:
+        """Tasks currently selected in the Queue Treeview (may be empty)."""
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return []
+        return [t for t in (self.row_map.get(i) for i in tree.selection()) if t]
+
+    def _action_bar_apply(
+        self, fn: "Callable[[TranscriptionTask], Any]", *, active_only: bool
+    ) -> None:
+        """Run a per-task handler over the current Queue selection.
+
+        ``active_only`` restricts Pause/Cancel to waiting/running/paused
+        rows; Re-run/Remove (active_only=False) apply to terminal rows.
+        Shared by the action-bar buttons; mirrors the bulk context menu.
+        """
+        active = {"waiting", "running", "paused"}
+        terminal = {"finished", "cancelled", "error"}
+        wanted = active if active_only else terminal
+        for t in list(self._selected_tasks()):
+            if getattr(t, "status", "") in wanted:
+                try:
+                    fn(t)
+                except Exception:  # noqa: BLE001
+                    pass
+        self._update_queue_action_bar()
+
+    def _action_bar_resume(self) -> None:
+        """Resume button — paused tasks resume in place; a cancelled task
+        with a checkpoint re-enqueues from its partial (resume_task)."""
+        for t in list(self._selected_tasks()):
+            status = getattr(t, "status", "")
+            if status == "paused":
+                self.resume(t)
+            elif status == "cancelled" and self._task_has_checkpoint(t):
+                self.resume_task(t)
+        self._update_queue_action_bar()
+
+    def _update_queue_action_bar(self) -> None:
+        """Enable/disable the Queue action-bar buttons for the selection.
+
+        Recomputed on <<TreeviewSelect>> AND inside refresh() (which
+        rebuilds the tree every tick), so the buttons never reflect a
+        stale row. Uses the same button_states_for_status helper as
+        menu_row. With a multi-row selection a button is enabled when it
+        is valid for ANY selected row (matching the bulk menu).
+        """
+        buttons = getattr(self, "queue_action_buttons", None)
+        if not buttons:
+            return
+        from app.widgets.tabs import QUEUE_ACTION_KEYS, button_states_for_status
+
+        merged = {k: False for k in QUEUE_ACTION_KEYS}
+        for t in self._selected_tasks():
+            states = button_states_for_status(
+                getattr(t, "status", ""), self._task_has_checkpoint(t)
+            )
+            for k, v in states.items():
+                if v:
+                    merged[k] = True
+        for key, btn in buttons.items():
+            if merged.get(key):
+                btn.state(["!disabled"])
+            else:
+                btn.state(["disabled"])
+
+    def queue_status_cell_click(self, event: tk.Event) -> None:
+        """Single-click on a running/paused row's Status or Progress cell
+        toggles pause/resume — a discoverable shortcut on top of the menu.
+
+        Other cells / statuses fall through so normal row selection still
+        works (this is bound additively with ``add="+"``).
+        """
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        col = self.tree.identify_column(event.x)
+        # columns are ("file","status","progress","language","time")
+        # -> status is #2, progress is #3.
+        if col not in ("#2", "#3"):
+            return
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        task = self.row_map.get(item)
+        if not task:
+            return
+        # pause()/resume() call refresh(), which delete()s and re-inserts every
+        # row. Doing that from INSIDE the <Button-1> handler mutates the tree
+        # while the click is still being dispatched (the iid under the pointer
+        # is gone mid-event). Defer to after_idle so the click finishes
+        # dispatching first, then the tree rebuilds cleanly.
+        if task.status == "running":
+            self.after_idle(lambda: self.pause(task))
+        elif task.status == "paused":
+            self.after_idle(lambda: self.resume(task))
+
     def clear_completed(self) -> None:
         self.queue[:] = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         self.refresh()
 
     # Video tiling ------------------------------------------------------------
+    def _save_tiling_prefs(self) -> None:
+        """Persist the Video Tiling tab choices to config.
+
+        Mirrors the Tk vars into ``app_config`` and saves. Surfaces a save
+        failure in the status line rather than letting the choice silently
+        revert on the next launch.
+        """
+        self.app_config["tiling_quality"] = self.tiling_quality_var.get()
+        self.app_config["tiling_mute"] = bool(self.tiling_mute_var.get())
+        self.app_config["tiling_multi_monitor"] = bool(
+            self.tiling_multi_monitor_var.get()
+        )
+        self.app_config["tiling_auto_restart"] = bool(
+            self.tiling_auto_restart_var.get()
+        )
+        # Persist the grid size too (it was never saved/restored). The Spinbox
+        # is free-text editable, so .get() can raise TclError on junk — keep the
+        # prior saved value in that case rather than crashing the save.
+        try:
+            from core.tiling import clamp_divisions
+            self.app_config["tiling_divisions"] = clamp_divisions(
+                self.tiling_divisions_var.get()
+            )
+        except (tk.TclError, ValueError):
+            pass
+        self.app_config["tiling_selected_monitors"] = list(
+            getattr(self, "tiling_selected_monitors", [])
+        )
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not save tiling settings: {e}")
+
+    def refresh_tiling_monitor_info(self) -> None:
+        """Update the detected-monitors info line under the tiling controls."""
+        try:
+            from core.monitors import list_monitors
+            mons = list_monitors()
+            sel = [
+                m for m in mons
+                if m["index"] in getattr(self, "tiling_selected_monitors", [])
+            ]
+            txt = ", ".join("#{}".format(m["index"] + 1) for m in sel) or "none"
+            self.tiling_monitors_info_var.set(
+                f"Detected {len(mons)} monitor(s).  "
+                f"Selected for multi-monitor: {txt}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def identify_tiling_monitors(self) -> None:
+        """Flash each monitor's number on its own borderless overlay (~2.5s)."""
+        try:
+            from core.monitors import list_monitors
+            wins: list[tk.Toplevel] = []
+            for m in list_monitors():
+                w = tk.Toplevel(self)
+                w.overrideredirect(True)
+                w.geometry(
+                    "{w}x{h}+{x}+{y}".format(
+                        w=m["width"], h=m["height"], x=m["x"], y=m["y"]
+                    )
+                )
+                w.configure(bg="black")
+                try:
+                    w.attributes("-topmost", True)
+                except Exception:  # noqa: BLE001
+                    pass
+                tk.Label(
+                    w, text=str(m["index"] + 1), fg="#39d0ff", bg="black",
+                    font=("Helvetica", 240, "bold"),
+                ).pack(expand=True)
+                wins.append(w)
+            self.after(2500, lambda: [w.destroy() for w in wins])
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Identify monitors failed: {e}")
+
+    def choose_tiling_monitors(self) -> None:
+        """Modal chooser: tick which monitors get a tiled-playback window."""
+        from core.monitors import describe, list_monitors
+        monitors = list_monitors()
+        dlg = tk.Toplevel(self)
+        dlg.title("Select monitors")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+        ttk.Label(
+            dlg, text="Tick the monitors to use for tiled playback:",
+        ).pack(padx=12, pady=(12, 6), anchor="w")
+        rows: list[tuple[int, tk.BooleanVar]] = []
+        current = getattr(self, "tiling_selected_monitors", [])
+        for m in monitors:
+            var = tk.BooleanVar(value=(m["index"] in current))
+            ttk.Checkbutton(dlg, text=describe(m), variable=var).pack(
+                padx=18, pady=2, anchor="w"
+            )
+            rows.append((m["index"], var))
+
+        def set_all(value: bool) -> None:
+            for _, v in rows:
+                v.set(value)
+
+        def apply_sel() -> None:
+            chosen = [idx for idx, v in rows if v.get()]
+            if not chosen:
+                messagebox.showwarning(
+                    "Monitors", "Please tick at least one monitor.", parent=dlg
+                )
+                return
+            self.tiling_selected_monitors = chosen
+            if len(chosen) > 1:
+                self.tiling_multi_monitor_var.set(True)
+            self._save_tiling_prefs()
+            self.refresh_tiling_monitor_info()
+            dlg.destroy()
+
+        helpers = ttk.Frame(dlg)
+        helpers.pack(pady=(8, 0))
+        ttk.Button(
+            helpers, text="Select all", command=lambda: set_all(True)
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            helpers, text="Select none", command=lambda: set_all(False)
+        ).pack(side="left", padx=6)
+        ttk.Button(
+            helpers, text="Identify", command=self.identify_tiling_monitors
+        ).pack(side="left", padx=6)
+        btns = ttk.Frame(dlg)
+        btns.pack(pady=12)
+        ttk.Button(btns, text="OK", width=10, command=apply_sel).pack(
+            side="left", padx=10
+        )
+        ttk.Button(btns, text="Cancel", width=10, command=dlg.destroy).pack(
+            side="left", padx=10
+        )
+
+    def _tiling_status(self, message: str, color: str) -> None:
+        """Status callback for the tiling engine (called from its worker
+        thread). Marshals the widget update onto the Tk main thread, applying
+        BOTH the text and the engine's state colour (green Playing / orange
+        Reconnecting / grey Stopped) so the status line reflects health at a
+        glance instead of a fixed grey."""
+        def _apply() -> None:
+            self.tiling_status_var.set(f"Tiling: {message}")
+            label = getattr(self, "tiling_status_label", None)
+            if label is not None:
+                try:
+                    label.configure(foreground=color or "#666")
+                except Exception:  # noqa: BLE001
+                    pass
+        self.post_to_main(_apply)
+
+    def _tiling_log(self, msg: str) -> None:
+        """Log callback for the tiling engine. The engine calls this from its
+        daemon worker thread (every stream drop / reconnect / self-heal), so
+        it must be marshalled onto the Tk main thread — App.log writes the
+        console Text widget directly and Tk is not thread-safe."""
+        self.post_to_main(lambda: self.log(msg))
+
     def start_tiling(self) -> None:
+        # A cleared / non-numeric Grid spinbox makes IntVar.get() raise
+        # tk.TclError ("expected floating-point number"), which would surface
+        # as a confusing "Could not start tiling" message. Default to 3 (the
+        # engine also clamps to 1–64); mirrors _save_server_prefs' guarded get.
+        try:
+            divisions = self.tiling_divisions_var.get()
+        except (tk.TclError, ValueError):
+            divisions = 3
         try:
             self.tiling.start(
                 self.tiling_url_var.get(),
-                self.tiling_divisions_var.get(),
-                log=self.log,
+                divisions,
+                quality=self.tiling_quality_var.get(),
+                mute=bool(self.tiling_mute_var.get()),
+                multi_monitor=bool(self.tiling_multi_monitor_var.get()),
+                selected_monitors=list(
+                    getattr(self, "tiling_selected_monitors", [])
+                ),
+                auto_restart=bool(self.tiling_auto_restart_var.get()),
+                log=self._tiling_log,
+                status=self._tiling_status,
             )
-            n = self.tiling_divisions_var.get()
-            self.tiling_status_var.set(f"Tiling running ({n}×{n}). Stop with the button or Q/Esc in the video window.")
+            self._save_tiling_prefs()
         except (FileNotFoundError, RuntimeError) as e:
             self.tiling_status_var.set(str(e))
         except Exception as e:  # noqa: BLE001
@@ -1798,6 +3012,264 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         self.tiling_status_var.set("Stopped.")
+
+    def download_ffplay(self) -> None:
+        """Download ffplay for Video Tiling on a daemon thread (P4-5).
+
+        ffplay isn't bundled; when a download URL is configured for this
+        platform (``config['ffplay_downloads']``) this fetches it into the
+        app's bin/ dir. The blocking download runs off-thread; progress + the
+        success/failure result are marshalled back to the Tk main thread via
+        post_to_main — this method NEVER touches Tk from the worker thread.
+        """
+        from core.tiling import download_ffplay as _download_ffplay
+
+        btn = getattr(self, "tiling_download_ffplay_btn", None)
+        try:
+            if btn is not None:
+                btn.config(state="disabled", text="Downloading ffplay…")
+        except Exception:  # noqa: BLE001
+            pass
+        self.tiling_status_var.set("Downloading ffplay…")
+
+        def _progress(msg: str) -> None:
+            self.post_to_main(lambda m=msg: self._on_ffplay_progress(m))
+
+        def _worker() -> None:
+            ok = _download_ffplay(progress_cb=_progress, config=self.app_config)
+            self.post_to_main(lambda: self._on_ffplay_done(ok))
+
+        import threading as _threading
+        _threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_ffplay_progress(self, msg: str) -> None:
+        self.tiling_status_var.set(msg)
+        self.log(msg)
+
+    def _on_ffplay_done(self, ok: bool) -> None:
+        from core.tiling import ffplay_available
+
+        btn = getattr(self, "tiling_download_ffplay_btn", None)
+        if ok and ffplay_available():
+            # Hide the whole notice (label + button) — ffplay is here now.
+            notice = getattr(self, "tiling_ffplay_notice", None)
+            if notice is not None:
+                try:
+                    notice.pack_forget()
+                except Exception:  # noqa: BLE001
+                    pass
+            self.tiling_status_var.set("ffplay is ready — you can start tiling.")
+        else:
+            if btn is not None:
+                try:
+                    btn.config(state="normal", text="Download ffplay")
+                except Exception:  # noqa: BLE001
+                    pass
+            messagebox.showwarning(
+                "Download ffplay",
+                "Could not download ffplay automatically. You can put "
+                "ffplay in the app's bin folder manually (it ships with the "
+                "full ffmpeg build).",
+                parent=self,
+            )
+
+    # Web / LAN access server -------------------------------------------------
+    def _save_server_prefs(self) -> None:
+        """Persist the port / share-on-LAN / token choices."""
+        try:
+            port = int(self.server_port_var.get())
+        except (tk.TclError, ValueError):
+            port = 8765
+        port = port if 1 <= port <= 65535 else 8765
+        self.app_config["server_port"] = port
+        self.app_config["server_share_lan"] = bool(self.server_share_lan_var.get())
+        self.app_config["server_token"] = self.server_token_var.get().strip()
+        try:
+            save_config(self.app_config)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Failed to save web/LAN server preferences")
+            self.log(f"Could not save Web / LAN settings: {e}")
+
+    def _server_is_running(self) -> bool:
+        h = self._server_handle
+        return h is not None and h.is_running()
+
+    def toggle_server(self) -> None:
+        """One-click Start/Stop for the web / LAN server (idempotent).
+
+        The bind + (first-time) model load happen on a daemon thread so
+        the UI never freezes; the result is marshalled back onto the Tk
+        main thread via post_to_main. Re-entrancy is guarded by
+        ``_server_busy`` so a double-click can't start two servers.
+        """
+        if self._server_busy:
+            return
+        self._save_server_prefs()
+        if self._server_is_running():
+            self._stop_server_async()
+        else:
+            self._start_server_async()
+
+    def _start_server_async(self) -> None:
+        import threading as _t
+
+        try:
+            port = int(self.server_port_var.get())
+        except (tk.TclError, ValueError):
+            port = int(self.app_config.get("server_port", 8765))
+        # Clamp an out-of-range typed port (0, >65535, negative) to the
+        # default, mirroring _save_server_prefs. _save_server_prefs only
+        # clamps app_config; it does NOT rewrite server_port_var, so without
+        # this the raw typed value would flow into find_available_port, which
+        # rejects it and silently binds a random ephemeral port instead.
+        port = port if 1 <= port <= 65535 else 8765
+        share_lan = bool(self.server_share_lan_var.get())
+        token = self.server_token_var.get().strip()
+        max_upload_mb = int(self.app_config.get("server_max_upload_mb", 512))
+
+        self._server_busy = True
+        self.server_toggle_btn.config(state="disabled")
+        self.server_status_var.set("Starting...")
+        self.server_url_var.set("")
+
+        def _work() -> None:
+            try:
+                from core.server import HOST_LAN, HOST_LOOPBACK, ServerHandle
+                host = HOST_LAN if share_lan else HOST_LOOPBACK
+                handle = ServerHandle()
+                # Register the handle BEFORE start(). start() can block on a
+                # model load ("Starting…"); if the user quits during that
+                # window, _shutdown_server_on_exit must already see the handle
+                # so it can stop it. The handle is start-idempotent and
+                # is_running() stays False until the serve thread is alive, so
+                # an early stop() on a not-yet-started handle is a safe no-op.
+                self._server_handle = handle
+                # auto_port: if the chosen port is busy the handle falls
+                # back to a free one rather than failing — we report what
+                # it actually bound.
+                handle.start(host, port, token, max_upload_mb=max_upload_mb)
+                urls = handle.urls()
+                bound_port = handle.port
+                self.post_to_main(
+                    lambda: self._on_server_started(urls, bound_port, share_lan)
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Web / LAN server failed to start")
+                msg = str(e)
+                self.post_to_main(lambda: self._on_server_failed(msg))
+
+        _t.Thread(target=_work, name="server-start", daemon=True).start()
+
+    def _stop_server_async(self) -> None:
+        import threading as _t
+
+        handle = self._server_handle
+        self._server_busy = True
+        self.server_toggle_btn.config(state="disabled")
+        self.server_status_var.set("Stopping...")
+
+        def _work() -> None:
+            try:
+                if handle is not None:
+                    handle.stop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Web / LAN server failed to stop cleanly")
+            finally:
+                self._server_handle = None
+                self.post_to_main(self._on_server_stopped)
+
+        _t.Thread(target=_work, name="server-stop", daemon=True).start()
+
+    def _on_server_started(
+        self, urls: list[str], port: int, share_lan: bool
+    ) -> None:
+        self._server_busy = False
+        # Reflect the port the server actually bound (auto-port fallback).
+        # save_config can raise OSError/PermissionError (disk full, an
+        # antivirus lock on config.json, a read-only profile); that must NOT
+        # skip the button-re-enable / status / url updates below — otherwise
+        # the server is live but its only toggle stays greyed out and the
+        # status is stuck "Starting...". So catch OSError too AND persist
+        # only after the UI is restored.
+        try:
+            if int(self.server_port_var.get()) != port:
+                self.server_port_var.set(port)
+                self.app_config["server_port"] = port
+                try:
+                    save_config(self.app_config)
+                except OSError:
+                    logger.exception("Failed to persist auto-bound server port")
+        except (tk.TclError, ValueError):
+            pass
+        self.server_toggle_btn.config(
+            text="Stop web access", state="normal")
+        self.server_open_btn.config(state="normal")
+        primary = urls[0] if urls else f"http://127.0.0.1:{port}/"
+        if share_lan and len(urls) > 1:
+            self.server_status_var.set(
+                "Running. On this PC and on your network.")
+            self.server_url_var.set(
+                f"This PC:  {urls[0]}\nNetwork:  {urls[1]}")
+        elif share_lan:
+            # LAN sharing was requested but the network address could not be
+            # determined (LAN-IP detection failed — no active network
+            # interface, VPN-only, etc.). The server is bound on all
+            # interfaces and IS reachable from the network if you know this
+            # PC's IP; we just can't display it. Say so distinctly instead of
+            # the misleading "Running on this computer." (local-only) line.
+            self.server_status_var.set(
+                "Running. Network sharing on, but your network address "
+                "couldn't be detected.")
+            self.server_url_var.set(primary)
+        else:
+            self.server_status_var.set("Running on this computer.")
+            self.server_url_var.set(primary)
+        self.log(f"Web / LAN access started: {primary}")
+
+    def _on_server_failed(self, message: str) -> None:
+        self._server_busy = False
+        self._server_handle = None
+        self.server_toggle_btn.config(text="Start web access", state="normal")
+        self.server_open_btn.config(state="disabled")
+        self.server_status_var.set("Off")
+        self.server_url_var.set("")
+        messagebox.showerror(
+            "Could not start web access",
+            f"The web / LAN server could not start.\n\n{message}",
+            parent=self,
+        )
+
+    def _on_server_stopped(self) -> None:
+        self._server_busy = False
+        self.server_toggle_btn.config(text="Start web access", state="normal")
+        self.server_open_btn.config(state="disabled")
+        self.server_status_var.set("Off")
+        self.server_url_var.set("")
+        self.log("Web / LAN access stopped.")
+
+    def open_server_in_browser(self) -> None:
+        """Open the loopback URL in the default browser."""
+        handle = self._server_handle
+        if handle is None or not handle.is_running():
+            return
+        import webbrowser
+        urls = handle.urls()
+        if urls:
+            try:
+                webbrowser.open(urls[0])
+            except Exception:  # noqa: BLE001
+                logger.exception("Could not open browser")
+
+    def _shutdown_server_on_exit(self) -> None:
+        """Best-effort synchronous stop of the server during app exit."""
+        handle = self._server_handle
+        if handle is None:
+            return
+        try:
+            handle.stop(timeout=3.0)
+        except Exception:  # noqa: BLE001
+            logger.exception("Error stopping web / LAN server on exit")
+        self._server_handle = None
 
     # Rendering ---------------------------------------------------------------
     def fmt_time(self, t: Any) -> str:
@@ -1880,6 +3352,15 @@ class App(tk.Tk):
     def refresh(self) -> None:
         from app.widgets.tabs import status_label
 
+        # Snapshot the SELECTED tasks (by identity) before we tear the tree
+        # down: refresh() runs every 500ms via loop(), and a plain
+        # delete()+re-insert() assigns brand-new iids, wiping the Treeview
+        # selection. With the selection gone _update_queue_action_bar() below
+        # would see nothing selected and disable every Pause/Resume/Cancel/
+        # Re-run/Remove button ~0.5s after the user clicks a row — making the
+        # action bar unusable. We restore the selection onto the new iids so
+        # it survives the rebuild.
+        prev_selected = self._selected_tasks()
         self.tree.delete(*self.tree.get_children())
         self.row_map = {}
         for t in self.queue:
@@ -1898,6 +3379,11 @@ class App(tk.Tk):
                 ),
             )
             self.row_map[item_id] = t
+        # Re-select the same task objects on their new iids (no-op when the
+        # selection was empty or its tasks left the queue).
+        restore = _iids_for_tasks(self.row_map, prev_selected)
+        if restore:
+            self.tree.selection_set(restore)
         # Empty-state hint visibility — show when the queue is empty,
         # hide once there is at least one task. Kept here (rather than
         # in tabs.py) because refresh is the choke point for queue
@@ -1912,6 +3398,12 @@ class App(tk.Tk):
         # in their taskbar / Alt-Tab.
         self._refresh_window_title()
         self._ensure_animation()
+        # Recompute the action-bar enabled state AFTER the selection is
+        # restored: refresh rebuilds the tree every tick, so a row whose
+        # status flipped (e.g. running->finished) must not leave the buttons
+        # reflecting the old status, and a still-selected row must keep them
+        # enabled.
+        self._update_queue_action_bar()
 
     def refresh_download_queue(self) -> None:
         from app.widgets.tabs import status_label
@@ -1938,6 +3430,7 @@ class App(tk.Tk):
             self.download_row_map[item_id] = task
         self._refresh_window_title()
         self._ensure_animation()
+        self._update_download_action_bar()
 
     # -- UX helpers (Phase v0.7.1 — user-friendly result surfacing) ----------
 
@@ -2066,10 +3559,15 @@ class App(tk.Tk):
         # "View transcript" launches the in-app viewer with the JSON
         # next to the source media (or the file picker if no JSON
         # found). Discoverable single click into the new viewer.
-        if any(p.endswith(".json") for p in existing):
+        json_output = next(
+            (p for p in existing if p.lower().endswith(".json")), None
+        )
+        if json_output is not None:
             ttk.Button(
                 button_row, text="View transcript",
-                command=lambda: self.open_transcript_viewer_for(task.file_path),
+                command=lambda jp=json_output: self.open_transcript_viewer_for(
+                    task.file_path, jp
+                ),
             ).pack(side="left", padx=(8, 0))
 
         self.last_result_body.pack(fill="both", expand=True)
@@ -2217,6 +3715,108 @@ class App(tk.Tk):
                 self.after(250, self._drain_watched_paths)
             except Exception:  # noqa: BLE001
                 pass
+
+    # Update check ------------------------------------------------------------
+    def _maybe_quiet_update_check(self) -> None:
+        """Fire the silent launch-time GitHub update check, if eligible.
+
+        Runs on the Tk main thread (scheduled via ``after``). Gated by
+        ``update_check_enabled`` and a once-per-day throttle keyed on
+        ``last_update_check`` (an ISO date). When eligible, the date is
+        stamped immediately (so a second launch the same day won't
+        re-check) and the network call runs on a daemon thread. The
+        result only ever pops the "update available" prompt — it shows
+        NOTHING when up to date, offline, or on a private repo.
+        """
+        if self._closing:
+            return
+        try:
+            if not bool(self.app_config.get("update_check_enabled", True)):
+                return
+            from datetime import date
+            today = date.today().isoformat()
+            if (self.app_config.get("last_update_check") or "") == today:
+                return  # already checked today
+            # Stamp the date up-front so we throttle even if the check
+            # races / fails; persist via save_config so it survives a
+            # restart.
+            self.app_config["last_update_check"] = today
+            try:
+                save_config(self.app_config)
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not persist last_update_check", exc_info=True)
+        except Exception:  # noqa: BLE001
+            logger.debug("Quiet update-check gate failed", exc_info=True)
+            return
+        self._run_update_check(manual=False)
+
+    def _check_for_updates_manual(self) -> None:
+        """Help-menu "Check for updates..." — always runs, reports all cases."""
+        self._run_update_check(manual=True)
+
+    def _run_update_check(self, *, manual: bool) -> None:
+        """Run core.updates.check_for_update on a daemon thread.
+
+        The network call happens off the Tk thread (it can block for up
+        to the urllib timeout); the result is marshalled back via
+        :meth:`post_to_main` so all widget work stays on the main
+        thread. ``manual`` controls whether the "up to date" /
+        "couldn't reach the server" cases are surfaced (manual) or
+        swallowed (the quiet launch check).
+        """
+
+        def _worker() -> None:
+            from core import updates as _updates
+            info = _updates.check_for_update()
+            self.post_to_main(lambda: self._on_update_result(info, manual=manual))
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="update-check")
+
+    def _on_update_result(self, info: object, *, manual: bool) -> None:
+        """Show the appropriate dialog for an update-check result (main thread).
+
+        ``info`` is a ``core.updates.UpdateInfo`` or ``None`` (typed as
+        ``object`` here to keep this glue free of a hard import at the
+        annotation site). On a found newer release we ask whether to open
+        the download page; on a manual check we also report up-to-date /
+        unreachable; the quiet launch check stays silent in those cases.
+        """
+        if self._closing:
+            return
+        from core.updates import RELEASES_PAGE_URL, UpdateInfo
+
+        if info is None:
+            if manual:
+                messagebox.showinfo(
+                    "Check for updates",
+                    "Could not reach the update server.\n\n"
+                    "Please check your internet connection and try again "
+                    "later.",
+                    parent=self,
+                )
+            return
+
+        if not isinstance(info, UpdateInfo):  # defensive; never expected
+            return
+
+        if info.is_newer:
+            open_page = messagebox.askyesno(
+                "Update available",
+                f"A newer version ({info.latest_tag}) is available — "
+                f"you have v{_APP_VERSION}.\n\n"
+                "Open the download page?",
+                parent=self,
+            )
+            if open_page:
+                import webbrowser
+                webbrowser.open(info.html_url or RELEASES_PAGE_URL)
+        elif manual:
+            messagebox.showinfo(
+                "Check for updates",
+                f"You're on the latest version (v{_APP_VERSION}).",
+                parent=self,
+            )
 
     def _drain_main_calls(self) -> None:
         """Drain the cross-thread queue of main-thread callables.
@@ -2628,8 +4228,13 @@ class App(tk.Tk):
         """Handle a drag-and-drop onto the window.
 
         tkinterdnd2 packs all dropped paths into a single string with
-        space-or-brace separation. The simplest robust parser is
-        ``self.tk.splitlist`` — Tcl knows the encoding rules.
+        space-or-brace separation. We split it with ``_split_dnd_paths``
+        rather than ``self.tk.splitlist`` because Tcl's list parser
+        collapses a UNC path's leading double-backslash down to a single
+        one, which then fails the ``os.path.isfile`` gate and silently
+        drops network-share files. ``self.tk.splitlist`` is kept as a
+        fallback for any unexpected token shape, so behaviour is
+        otherwise unchanged.
         Behaviour:
           - one file dropped → populate the Transcribe tab's file
             field
@@ -2639,37 +4244,76 @@ class App(tk.Tk):
             into the Download tab's URL field
         """
         raw = getattr(event, "data", "") or ""
-        try:
-            items = list(self.tk.splitlist(raw))
-        except Exception:  # noqa: BLE001
-            items = [raw]
+        items = _split_dnd_paths(raw)
+        if not items and raw.strip():
+            # Helper found nothing in a non-empty payload — fall back to
+            # Tcl's own splitter so we don't regress on an odd token shape.
+            try:
+                items = list(self.tk.splitlist(raw))
+            except Exception:  # noqa: BLE001
+                items = [raw]
         paths: list[str] = []
         urls: list[str] = []
+        unsupported: list[str] = []
         for item in items:
             s = item.strip()
             if not s:
                 continue
             if s.startswith(("http://", "https://")):
                 urls.append(s)
+            elif s.startswith("file://"):
+                # A file:// URI (some apps / file managers hand these to a
+                # drop target) points at a local file. Convert it to a real
+                # path and treat it like any other local file rather than
+                # silently swallowing it.
+                local = _file_uri_to_path(s)
+                if local and os.path.isfile(local):
+                    paths.append(local)
+                else:
+                    unsupported.append(s)
             elif os.path.isfile(s):
                 paths.append(s)
+            elif "://" in s or s.split(":", 1)[0] in ("ftp", "magnet", "smb"):
+                # A recognised-but-unsupported scheme (ftp:, magnet:, smb:,
+                # …). Don't pretend it worked — note it so the drop isn't a
+                # silent no-op.
+                unsupported.append(s)
 
         if urls and hasattr(self, "download_url_var"):
             self.download_url_var.set(urls[0])
             self.nb.select(self.t3)
             self.log(f"Pasted URL into Download tab: {urls[0]}")
+            if len(urls) > 1:
+                # The Download tab takes one URL at a time; the rest of a
+                # multi-URL drop would otherwise vanish without a trace.
+                self.log(
+                    f"Only the first of {len(urls)} dropped URLs was used; "
+                    f"drop the others one at a time."
+                )
         if paths:
             if len(paths) == 1:
                 self.fv.set(paths[0])
                 self.nb.select(self.t1)
                 self.log(f"Picked: {os.path.basename(paths[0])} (drag-and-drop)")
             else:
-                count = 0
-                for p in paths:
-                    self.fv.set(p)
-                    self.add()
-                    count += 1
-                self.log(f"Enqueued {count} files via drag-and-drop")
+                count = self._bulk_enqueue(paths)
+                if count:
+                    self.log(f"Enqueued {count} files via drag-and-drop")
+        if unsupported:
+            self.log(
+                f"Ignored {len(unsupported)} dropped item(s) with an "
+                f"unsupported type (e.g. {unsupported[0]}). Drop a media file "
+                f"or an http(s) URL."
+            )
+        elif not paths and not urls and raw.strip():
+            # A non-empty payload that produced nothing actionable — a folder,
+            # a deleted/unreachable path, or an empty selection. Without this
+            # the drop is a silent no-op and the user can't tell what went
+            # wrong.
+            self.log(
+                "Nothing to do with that drop — drop a media FILE (not a "
+                "folder) or an http(s) URL."
+            )
 
     def _cancel_running(self) -> None:
         """Esc handler — cancel whichever single running task is most relevant."""
@@ -2715,6 +4359,16 @@ class App(tk.Tk):
         if hasattr(self, "txt") and self.txt is not None:
             self.txt.insert("end", msg + "\n")
             self.txt.see("end")
+
+    def log_threadsafe(self, msg: str) -> None:
+        """Thread-safe wrapper around :meth:`log` for background threads.
+
+        log() writes the console Text widget directly, and Tk is not
+        thread-safe, so any background-thread caller (e.g. the Advanced
+        dialog's install / model-download / cloud-key / gcloud-test workers)
+        must marshal through here. Mirrors the post_to_main pattern already
+        used by _offer_optional_install and the tiling callbacks."""
+        self.post_to_main(lambda: self.log(msg))
 
     # Driver loops ------------------------------------------------------------
     def update_overall_progress(self) -> None:

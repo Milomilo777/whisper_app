@@ -23,6 +23,7 @@ import threading
 import time
 from typing import Callable
 
+from . import _proc
 from .config import user_cache_dir
 
 # Hard cap on a single on-demand pip install. A stalled PyPI / proxy
@@ -41,7 +42,28 @@ _install_lock = threading.Lock()
 FEATURES: dict[str, tuple[str, list[str]]] = {
     "alignment": ("stable_whisper", ["stable-ts"]),      # pulls torch
     "whisper_backend": ("whisper", ["openai-whisper"]),  # pulls torch
+    # REAL Google Cloud Speech-to-Text v2 backend. Pulls the google-cloud
+    # client stack (grpc/protobuf/google-auth) — large enough to keep out
+    # of the slim embed tree, so it installs on first use. The probe
+    # import is the speech client package; google-cloud-storage is bundled
+    # in the same install so the cheaper GCS batch mode works without a
+    # second on-demand install.
+    "google_cloud_stt": (
+        "google.cloud.speech_v2",
+        ["google-cloud-speech", "google-cloud-storage"],
+    ),
 }
+
+
+def _rm(path: str) -> None:
+    """Best-effort remove a file or directory tree. Never raises."""
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+        elif os.path.lexists(path):
+            os.unlink(path)
+    except OSError:
+        pass
 
 
 def extras_dir() -> str:
@@ -116,6 +138,12 @@ def install(
             "--target", staging, "--upgrade", *pkgs,
         ]
         try:
+            # Spawn with new_session_kwargs() (start_new_session=True on
+            # POSIX so pip leads its own process group; CREATE_NO_WINDOW on
+            # Windows) so the WHOLE pip tree — pip shells out to a build
+            # backend / downloaders — can be reaped on cancel/timeout
+            # instead of orphaning grandchildren that hold the staging dir
+            # open and defeat the rmtree below.
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -123,7 +151,7 @@ def install(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                **_proc.new_session_kwargs(),
             )
         except Exception as e:  # noqa: BLE001
             shutil.rmtree(staging, ignore_errors=True)
@@ -164,13 +192,20 @@ def install(
                 break
 
         if aborted:
-            for _stop in (proc.terminate, proc.kill):
+            # Reap the entire pip tree (build backend / downloader
+            # grandchildren), not just the immediate pip process —
+            # otherwise an orphan keeps the --target staging files open
+            # and the rmtree below silently fails on Windows, leaking a
+            # partial pylibs-stage-* dir.
+            _proc.kill_process_tree(proc, force=False)
+            try:
+                proc.wait(timeout=5)
+            except Exception:  # noqa: BLE001
+                _proc.kill_process_tree(proc, force=True)
                 try:
-                    _stop()
                     proc.wait(timeout=5)
-                    break
                 except Exception:  # noqa: BLE001
-                    continue
+                    pass
             reader.join(timeout=2)
             shutil.rmtree(staging, ignore_errors=True)
             return False
@@ -182,13 +217,105 @@ def install(
             shutil.rmtree(staging, ignore_errors=True)
             return False
 
-        # Merge the freshly-installed tree into the extras dir, then drop
-        # the staging copy. dirs_exist_ok merges over an existing sibling.
-        try:
-            shutil.copytree(staging, final_target, dirs_exist_ok=True)
-        except Exception as e:  # noqa: BLE001
+        # Merge the freshly-installed tree into the extras dir top-level
+        # entry by entry. A bare ``copytree(staging, final_target,
+        # dirs_exist_ok=True)`` is NOT atomic: if it fails partway (disk
+        # full, a locked .pyd already imported in the GUI, antivirus
+        # lock) it leaves the top-level package dir + __init__.py written
+        # but submodules missing. is_available()'s find_spec then sees
+        # the half-tree, returns True, the next install() short-circuits,
+        # and the real import crashes — exactly what staging was meant to
+        # prevent. Instead: copy each top-level entry into a temp name on
+        # the same volume and os.replace() it into place atomically; on
+        # ANY failure, remove from final_target every top-level entry
+        # that staging contributes, so no partial package is left behind.
+        staged_names = os.listdir(staging)
+        # Snapshot the top-level names already present BEFORE this merge so
+        # rollback can tell apart entries THIS install creates from dirs a
+        # sibling feature already installed. 'alignment' and
+        # 'whisper_backend' both pull torch/numpy; if a later install's
+        # torch/ merge fails (e.g. a locked .pyd), the rollback must NOT
+        # delete the torch/numpy the already-installed feature still needs.
+        pre_existing = set(os.listdir(final_target))
+        merged_ok = True
+        merge_err: Exception | None = None
+        # Backups of live dst entries displaced this iteration, keyed by the
+        # final dst path: name -> bak path. Each entry's replace is made
+        # atomic w.r.t. an EXISTING dst by moving the live dst aside to a
+        # .bak first, so a mid-loop os.replace failure (locked .pyd / AV /
+        # disk-full) can be undone and never leaves a pre-existing shared
+        # dir (e.g. torch/) destroyed with no restore path.
+        backups: dict[str, str] = {}
+        for name in staged_names:
+            src = os.path.join(staging, name)
+            dst = os.path.join(final_target, name)
+            tmp = os.path.join(final_target, f".{name}.merge-{os.getpid()}")
+            bak = os.path.join(final_target, f".{name}.bak-{os.getpid()}")
+            try:
+                if os.path.exists(tmp):
+                    _rm(tmp)
+                if os.path.lexists(bak):
+                    _rm(bak)
+                if os.path.isdir(src):
+                    shutil.copytree(src, tmp)
+                else:
+                    shutil.copy2(src, tmp)
+                # os.replace is atomic on the same volume for files and for
+                # replacing a non-existent / file target. For an existing
+                # destination DIRECTORY it would fail outright, and a plain
+                # _rm(dst) before the replace is NON-atomic: if the replace
+                # then fails (locked .pyd, AV, disk-full) the live dst — which
+                # may be a torch/ a sibling feature still needs — is already
+                # gone with no way back. Instead move the live dst aside to a
+                # .bak FIRST, then replace; restore the .bak on any failure.
+                displaced = False
+                if os.path.lexists(dst):
+                    os.replace(dst, bak)
+                    backups[dst] = bak
+                    displaced = True
+                try:
+                    os.replace(tmp, dst)
+                except Exception:
+                    # Replace failed — put the original dst back so the
+                    # pre-existing entry is never left missing, then re-raise
+                    # into the outer handler to roll the whole merge back.
+                    if displaced:
+                        os.replace(bak, dst)
+                        backups.pop(dst, None)
+                    raise
+                # Success for this entry: the staged copy is in place and the
+                # displaced original is now superseded — drop its backup.
+                if displaced:
+                    _rm(bak)
+                    backups.pop(dst, None)
+            except Exception as e:  # noqa: BLE001
+                merged_ok = False
+                merge_err = e
+                _rm(tmp)
+                break
+
+        if not merged_ok:
+            # Restore every still-displaced original (entries replaced earlier
+            # in this loop before the failing one) so no pre-existing shared
+            # dir is left missing after a partial merge.
+            for d, b in backups.items():
+                _rm(d)
+                try:
+                    os.replace(b, d)
+                except OSError:
+                    pass
+            backups.clear()
             if log_cb:
-                log_cb(f"Could not finalise install: {e}")
+                log_cb(f"Could not finalise install: {merge_err}")
+            # Roll back: delete only the top-level entries THIS install
+            # newly created, so is_available() cannot observe a partial
+            # tree — but leave pre-existing shared dirs (e.g. torch/numpy a
+            # sibling feature already installed) untouched, or rolling back
+            # one feature's failed merge would silently break another.
+            for name in staged_names:
+                if name in pre_existing:
+                    continue
+                _rm(os.path.join(final_target, name))
             shutil.rmtree(staging, ignore_errors=True)
             return False
         shutil.rmtree(staging, ignore_errors=True)

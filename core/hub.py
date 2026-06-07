@@ -25,10 +25,16 @@ Resolution order used by the rest of the codebase (in ``model_manager``
      headless from the CLI with a fresh profile).
 
 The first-run UI dialog (``app/dialogs/hub_setup``) shows
-:func:`default_hub_folder` as its initial value, which is the app's
-sibling ``hub/`` directory. The user can pick a different folder
-(e.g. a big external drive) and we persist that choice to
-``config["hub_folder"]``.
+:func:`default_hub_folder` as its initial value, which is a writable
+per-user cache directory (``%LOCALAPPDATA%\\WhisperProject\\Cache\\models``
+on Windows). The user can pick a different folder (e.g. a big external
+drive) and we persist that choice to ``config["hub_folder"]``.
+
+The default deliberately lives under the per-user cache, NEVER under
+the install directory. The installers put the app in Program Files
+(admin-only, non-writable for a standard user), so an ``<app_dir>/hub``
+default made the very first model download fail with "Access is denied"
+for non-admin accounts.
 
 This module is Tk-free so it can be called from worker subprocesses
 and the installer-side Pascal Script (via reading the JSON file
@@ -45,11 +51,25 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-HUB_SUBFOLDER_NAME = "hub"
+# The default hub is the per-user model cache root. It MUST equal the
+# empty-hub fallback used by ``model_folder_for`` (``user_cache_dir() /
+# "models"``) so that a profile with no explicit ``hub_folder`` resolves
+# the SAME folder whether the path comes from ``default_hub_folder()``
+# (e.g. the first-run dialog / ``_apply_runtime_fallbacks``) or from the
+# bare fallback. If these diverged, an existing model already sitting in
+# ``Cache/models`` would be ignored and silently re-downloaded (~3 GB)
+# into a different folder. Keep the two in lock-step.
+HUB_SUBFOLDER_NAME = "models"
 
 
 def resolve_app_dir() -> Path:
     """Return the directory the user thinks of as "the app folder".
+
+    NOTE: this no longer backs the model hub (see
+    :func:`default_hub_folder`). It is kept only for installer-side
+    "is the hub inside the install dir?" detection and uninstall
+    prompts — never use it to derive a writable data location, because
+    a Program Files install dir is not writable for a standard user.
 
     Three runtime contexts:
 
@@ -71,12 +91,49 @@ def resolve_app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+# Marker file the Standard installer drops into the {app} directory when
+# the user ticks "do NOT include Video Tiling" at install time. Its mere
+# presence disables the in-app Video Tiling tab; it is never written by
+# the app itself. In a source / dev checkout the repo root won't contain
+# it, so tiling stays on for developers.
+NO_TILING_MARKER = "no_tiling.flag"
+
+
+def tiling_tab_enabled() -> bool:
+    """Whether the Video Tiling tab should be shown.
+
+    Returns ``True`` unless a ``no_tiling.flag`` marker file sits in the
+    install ``{app}`` directory (see :func:`resolve_app_dir`). The installer
+    creates that marker only when the user opted out of Video Tiling.
+
+    Any filesystem error is swallowed and treated as "enabled" so a quirky
+    path / permission problem can never block app startup — the feature
+    simply stays on, which is the safe default.
+    """
+    try:
+        return not (resolve_app_dir() / NO_TILING_MARKER).exists()
+    except OSError:
+        return True
+
+
 def default_hub_folder() -> Path:
     """The pre-filled value the first-run dialog shows.
 
-    ``<app_dir>/hub`` matches the user-request wording exactly.
+    Returns ``user_cache_dir() / "models"`` —
+    ``%LOCALAPPDATA%\\WhisperProject\\Cache\\models`` on Windows. This is
+    always writable by the current user, so the first-run model
+    download cannot fail with "Access is denied" the way an
+    ``<app_dir>/hub`` default did under a Program Files install. It is
+    also the SAME folder ``model_folder_for`` falls back to when no hub
+    is configured, so an existing ``Cache/models`` model is reused rather
+    than re-downloaded.
+
+    We reuse ``core.config.user_cache_dir`` (the single platformdirs
+    wrapper, ``appname=WhisperProject`` / ``appauthor=False``) so the
+    hub stays consistent with every other cache path in the app.
     """
-    return resolve_app_dir() / HUB_SUBFOLDER_NAME
+    from .config import user_cache_dir  # local import avoids a cycle
+    return user_cache_dir() / HUB_SUBFOLDER_NAME
 
 
 def is_hub_configured(config: dict[str, Any]) -> bool:
@@ -121,6 +178,14 @@ def model_folder_for(
         hub = user_cache_dir() / "models"
     else:
         hub = Path(str(hub_folder))
+    # ``model_name`` is typed ``str``, but a None / non-string can still
+    # reach here from a hand-edited or externally-produced config (e.g.
+    # ``{"model": {"name": null}}`` on macOS). ``None.strip()`` would raise
+    # an uncaught AttributeError and crash launch; callers only guard
+    # against ValueError. Coerce the bad-input case into the same clean
+    # ValueError the empty-string check already raises.
+    if not isinstance(model_name, str):
+        raise ValueError("model_name must be a non-empty string")
     name = model_name.strip()
     if not name:
         raise ValueError("model_name must be non-empty")

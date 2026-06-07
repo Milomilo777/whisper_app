@@ -187,11 +187,28 @@ class Recorder:
         never produced one (start failed, instant stop, no backend) we
         write a valid empty WAV here so the caller's "open this file"
         path doesn't crash.
+
+        DATA-LOSS guard: ``_finalize_wav`` opens ``output_path`` with
+        ``wave.open(..., "wb")``, which truncates the file. We must NEVER
+        do that while the capture thread is *still alive* — a wedged
+        backend that ignored the stop event can still own the same WAV
+        handle, and truncating it here would corrupt the partial take
+        and create two writers. So we only fall back to the empty-file
+        writer once the thread has actually terminated. The read of
+        ``_wrote_wave`` is likewise gated on the thread being dead, which
+        removes the TOCTOU window where the loop is mid-close.
         """
         self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=timeout)
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
         self._stopped_at = time.time()
+        # If the capture thread is wedged (still alive after join), leave
+        # whatever it has streamed to disk untouched rather than racing it
+        # for the same file handle. A partial WAV beats a truncated/empty
+        # one and avoids the two-writer corruption.
+        if thread is not None and thread.is_alive():
+            return self.output_path
         if not self._wrote_wave or not os.path.isfile(self.output_path):
             self._finalize_wav()
         return self.output_path

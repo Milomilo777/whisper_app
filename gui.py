@@ -1,8 +1,9 @@
-"""Entry point. Three modes:
+"""Entry point. Four modes:
 
   python gui.py                  → launch the Tk app (default)
   python gui.py --worker         → spawn the JSON-stdio worker
   python gui.py transcribe FILE  → CLI transcription
+  python gui.py serve            → run the local-network HTTP job server
   python gui.py --help           → usage
 
 The worker mode is invoked by the App spawning its own exe; do
@@ -116,6 +117,32 @@ def _cli_transcribe(args: argparse.Namespace) -> int:
     return 0 if status == "finished" else 4
 
 
+def _cli_serve(args: argparse.Namespace) -> int:
+    """Run the optional local-network / web HTTP job server.
+
+    Default bind is loopback (127.0.0.1) so it never triggers a Windows
+    firewall prompt. ``--lan`` (or an explicit ``--host 0.0.0.0``) binds all
+    interfaces for the LAN case — that is the ONLY path that pops the
+    Windows Defender prompt, which is why it must be an explicit opt-in.
+    """
+    from core.config import load_config
+    from core.server import run_server
+
+    cfg = load_config()
+    host = args.host
+    if args.lan:
+        host = "0.0.0.0"
+    port = args.port if args.port is not None else int(cfg.get("server_port", 8765))
+    max_upload_mb = (
+        args.max_upload_mb if args.max_upload_mb is not None
+        else int(cfg.get("server_max_upload_mb", 512))
+    )
+    return run_server(
+        host=host, port=port, token=args.token or "",
+        max_upload_mb=max_upload_mb,
+    )
+
+
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="WhisperProject",
@@ -141,6 +168,35 @@ def _build_argparser() -> argparse.ArgumentParser:
     tr.add_argument(
         "--diarization", action="store_true",
         help="enable speaker diarization for this transcription",
+    )
+
+    sv = sub.add_parser(
+        "serve",
+        help="Run the local-network / web HTTP job server (no UI)",
+    )
+    sv.add_argument(
+        "--port", "-p", type=int, default=None,
+        help="TCP port to listen on (default: config server_port or 8765)",
+    )
+    sv.add_argument(
+        "--host", default="127.0.0.1",
+        help="bind address (default 127.0.0.1 = loopback only, no firewall "
+             "prompt). Use --lan or --host 0.0.0.0 to share on the network.",
+    )
+    sv.add_argument(
+        "--lan", action="store_true",
+        help="bind all interfaces (0.0.0.0) for LAN access - explicit opt-in "
+             "because this is what triggers the Windows firewall prompt",
+    )
+    sv.add_argument(
+        "--token", default="",
+        help="optional shared secret; clients must send it via the "
+             "X-Auth-Token header or ?token= query",
+    )
+    sv.add_argument(
+        "--max-upload-mb", type=int, default=None, dest="max_upload_mb",
+        help="reject uploads larger than this many MB "
+             "(default: config server_max_upload_mb or 512)",
     )
     return p
 
@@ -201,6 +257,9 @@ def main() -> int:
 
     if args.command == "transcribe":
         return _cli_transcribe(args)
+
+    if args.command == "serve":
+        return _cli_serve(args)
 
     # Default: launch the Tk app.
     from app import run

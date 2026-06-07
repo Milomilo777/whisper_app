@@ -4,6 +4,283 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.8] — 2026-06-06
+
+> Hardening release on top of v1.3.7: the Phase 1–6 feature work (Google
+> Cloud / Gemini cloud STT, the optional LAN/web server, transcript-format
+> conversion, the SMTV team `.docx`, the multi-monitor Video Tiling rewrite,
+> three-level merged config, multi-model picker, usage stats, ffplay
+> auto-download, and macOS groundwork) **plus a 44-finding adversarial audit
+> fixpack** — every finding independently confirmed by skeptic review and
+> covered by a hermetic regression test. pyright `app/ core/` 0/0/0; hermetic
+> suite green.
+
+### Fixed — adversarial audit fixpack (44 confirmed bugs)
+
+- **Data loss:** transcript-format conversion overwrote the source file in
+  place on a case-only extension difference (Windows); cloud STT collapsed a
+  whole file into one chunk when the duration was unreadable (truncating long
+  transcripts); the SMTV `.docx` writer rendered a literal `"None"` for a null
+  segment.
+- **Crashes / launch failures:** a non-finite (`Infinity`) numeric in a
+  hand-edited config crashed startup; a non-string `model.name` crashed config
+  load; the Advanced dialog's free-text Batch-size field crashed Save; a
+  non-`dict` `words` entry crashed conversion; the TSV writer raised on
+  non-finite timestamps; a non-ASCII LAN-server auth token bricked the server.
+- **Reliability / concurrency:** the tray exit latch stayed stuck after a
+  declined quit (minimise-to-tray broke permanently); a stopped-then-restarted
+  Video Tiling run could revive the old worker; the LAN server leaked a worker
+  (and the hot model) when a paused job was stopped; download pause/resume and
+  the tiling run-token had races/TOCTOU windows; sqlite reads raced the writer
+  thread.
+- **Windows process teardown:** a graceful kill of the yt-dlp/ffmpeg tree could
+  orphan the process and hold the file handle — now escalates to a forced kill.
+- **Resource / security:** the LAN multipart upload was fully buffered in RAM
+  (now streamed); JSON bodies and the online-config fetch are now size-capped;
+  `stats_url` and URL-job hosts get scheme / SSRF validation; aborted optional
+  pip installs no longer orphan their child tree.
+- **Smaller correctness:** LRC timestamps no longer emit `:60.00`; SMTV episode
+  URLs with a query string / fragment are recognised; per-chunk cloud
+  diarization labels stay consistent; cloud RPCs have timeouts and honour
+  cancel; the multi-monitor index is now a stable total order.
+
+### Added
+
+- **Optional LAN / web server mode.** `python gui.py serve` starts a
+  stdlib-only HTTP server (no new dependency) so a phone or another PC can
+  send a file or a URL to transcribe from a browser. It binds to loopback
+  (`127.0.0.1`) by default — no Windows firewall prompt — and `--lan` is an
+  explicit opt-in to listen on the local network. Optional `--port`,
+  `--host`, `--token` (shared-secret gate) and `--max-upload-mb` (upload
+  cap). The page and a small JSON API accept an upload **or** a URL job,
+  poll progress, and download the result; transcription runs in-process and
+  sequentially so the ~3 GB model stays hot, behind a bounded queue. Jobs
+  are recorded to history. New Tk-free `core/server/` package; new config
+  keys `server_port` / `server_max_upload_mb`. (Verified live on this
+  machine: `GET /api/health`, `/api/formats`, and `/` all 200.)
+- **Optional Google Gemini cloud Speech-to-Text backend** (`cloud_stt`).
+  Paste a free AI Studio API key and transcribe over the Gemini API via
+  stdlib REST (default model `gemini-3.5-flash`, configurable), with chunked
+  upload through the Files API. A loud privacy opt-in makes clear this
+  **uploads your audio to Google and breaks the offline guarantee**. An
+  honest *local* minutes-used counter (the $300 free credit is **not**
+  readable from an API key, so we don't pretend to show it) plus a link to
+  Google's billing console. New config keys `cloud_stt_api_key` /
+  `cloud_stt_model` / `cloud_stt_minutes_used` / `cloud_stt_free_minutes_cap`
+  / `cloud_stt_chunk_seconds`. *(The real end-to-end Google call is
+  UNTESTED here — no API key in this environment; live-test with your own
+  key before relying on it.)*
+- **Opt-in update check** (notify-only — it never auto-installs). A new
+  `core/updates.py` queries the GitHub releases API; a Help-menu "Check for
+  updates" runs it on demand and a throttled quiet check runs at launch. It
+  is silent on a private repo, offline, or when already up to date. New
+  config keys `update_check_enabled` / `last_update_check`. Also documented
+  that the Standard installer already upgrades **in place** over the
+  previous version (stable Inno `AppId` — no uninstall needed).
+- **Always-visible per-task action bars** under both Queue tabs —
+  Pause / Resume / Cancel / Re-run / Remove buttons on each row (plus a
+  click on the status cell to toggle), so the controls are discoverable
+  without the right-click menu (which, with Esc, still works). Download
+  "pause" is **stop-and-continue**: it keeps the `.part` and resumes via
+  yt-dlp `-c`/`--continue`; pause is disabled for Supreme Master TV
+  downloads, which have no resume point.
+- **Multi-monitor Video Tiling.** The Tiling tab was rewritten from a
+  single-screen `ffplay tile=NxN` into a Tk-free multi-monitor engine
+  (ported from the maintainer's `video-tiler` v1.1): one download is fanned
+  out to one `ffplay` per selected monitor, with `poll()` liveness,
+  exponential-backoff reconnect, self-healing `yt-dlp -U`, more robust
+  extraction (player-client fallbacks, retries, height-based format),
+  http(s) URL validation, and clean teardown via
+  `core._proc.kill_process_tree` (fixes orphaned ffmpeg/yt-dlp children).
+  New `core/monitors.py` detects screens (screeninfo → ctypes Win32 →
+  single-monitor fallback). UI adds Quality / Mute / Multi-monitor and a
+  "Monitors…" chooser with Identify and Auto-restart. New config keys
+  `tiling_quality` / `tiling_mute` / `tiling_multi_monitor` /
+  `tiling_selected_monitors` / `tiling_auto_restart`. New optional
+  dependency: **screeninfo** (multi-monitor degrades gracefully without it).
+
+#### Phase 2 (added later in the same local batch)
+
+- **Real Google Cloud Speech-to-Text backend** (`google_cloud_stt`) — a
+  second, more capable cloud option alongside the simple Gemini one. It
+  authenticates with a **service-account JSON file** (not a pasted key) and
+  uses the official `google-cloud-speech` **v2** client, which is installed
+  **on demand on first use** (via `core/optional_deps.py`) — not bundled.
+  Two modes:
+  - **Standard / online** — decodes with the bundled ffmpeg, splits the
+    local file into ≤ ~55 s chunks, calls `recognize()` inline per chunk,
+    and offsets + stitches the timestamps. No Cloud Storage needed
+    (~$0.016 / min).
+  - **Batch** — uses v2 `BatchRecognize` through a user-supplied Google
+    Cloud Storage bucket (`gs://`) with `DYNAMIC_BATCHING` (~$0.004 / min,
+    ~75 % cheaper) at the cost of up to ~24 h turnaround.
+
+  Supports word-level timestamps and speaker diarization. The earlier
+  Gemini backend (`cloud_stt`) is **kept** as the simpler paste-a-key
+  alternative; both are clearly labelled in the UI. *(The real Google Cloud
+  network path is **UNTESTED** here — no service-account JSON in this
+  environment; live-test before relying on it — see the handoff.)*
+- **Cloud STT settings UI** (`app/dialogs/advanced.py`) — the backend
+  dropdown now shows human labels for both cloud options, and a dedicated
+  **Google Cloud Speech-to-Text** section adds: a service-account JSON file
+  picker; a "How do I get this file?" step-by-step help dialog with
+  clickable links to the exact Google Cloud console pages; a non-blocking
+  **Test connection** button (installs the Google libs on demand, then
+  validates the JSON + auth); a **Batch-mode** toggle with a GCS bucket
+  field; a **diarization** toggle; and a **live usage display**.
+- **Free-tier usage tracking** — a local **monthly** minutes counter (it
+  resets each calendar month) plus an honest estimated-cost line
+  ("X / 60 free minutes this month; estimated $Y of the $300 credit"),
+  clearly labelled a *local estimate* with a link to the real Google
+  billing console (the true remaining credit is **not** readable from the
+  key). New config keys `gcloud_stt_minutes_used` /
+  `gcloud_stt_minutes_month` / `gcloud_stt_free_minutes_cap`.
+- **One-click Web / LAN access** — a new **Web / LAN access** tab
+  (`app/app.py` + `app/widgets/tabs.py`, backed by a `core/server`
+  `ServerHandle`) with a single **Start/Stop** toggle, a port field (with a
+  free-port fallback when the chosen port is busy), a **Share on local
+  network** checkbox (loopback by default vs `0.0.0.0` with a plain-language
+  firewall note), an optional **access password** (token), the reachable
+  URL(s) including the LAN IP, an **Open in browser** button, non-blocking
+  start/stop, and auto-stop on app exit. New config keys `server_share_lan`
+  / `server_token` (`server_port` / `server_max_upload_mb` already existed
+  from the Phase-1 `gui.py serve` work).
+- **About dialog enriched** (`app/app.py` `_show_about`) — a **What's new**
+  section plus plain-language descriptions of all the cloud options, the
+  Web / LAN access, the per-task controls, multi-monitor tiling, and the
+  update check / in-place upgrade, with clickable helpful links.
+
+#### Phase 3 (added later in the same local batch)
+
+- **Seek / scrub transport bar in the VLC transcript preview.** The
+  built-in transcript player now has a draggable position bar with a
+  live `MM:SS` time readout, ±5 s / ±10 s skip buttons, and keyboard
+  control, so you can scrub to a moment instead of only play/pause. It
+  degrades gracefully when VLC is absent (the transport bar simply isn't
+  shown).
+- **Web / LAN feature parity with the desktop app.** A browser job can now
+  carry the same **per-job advanced options** as the desktop (VAD, word
+  timestamps, diarization, clip range, etc.), applied via a per-job
+  `.whisperproject.json` override; a new `GET /api/jobs` lists all jobs;
+  **pause / resume** routes were added; outputs are taken from the
+  engine's `task.output_paths`; and the page is now a small **3-view
+  browser UI** (Submit / Jobs / Result with the transcript shown inline).
+  Uploads are **streamed to disk** (no full-RAM buffering). HTTP hardening:
+  the request body is drained on an early reject (no broken-pipe noise) and
+  the access token is compared in **constant time**. *(Security boundary:
+  the cloud / alternate backends are deliberately NOT per-job switchable
+  over the web — a remote submitter can't redirect your audio to a cloud
+  backend.)*
+- **"SMTV transcription" docx output format** (registry key `smtv_docx`,
+  UI label **"SMTV transcription"**). It fills the transcription team's
+  bundled Word template (`core/writers/templates/smtv_template.docx`) — a
+  4-column table (auto row number; `Time Code` as `HH:MM:SS.m`; `Foreign
+  Language` = the transcript text; `English Translation` left empty for the
+  human translator), with a title line
+  `"<work title> -Transcription in <language> – Translation in English"`
+  and the output filename matched to it. The table grows past the template's
+  31 pre-formatted rows, and a `.docx` extension is forced.
+- **Installer opt-out for Video Tiling.** `installer_embed.iss` adds a
+  **"do NOT include Video Tiling"** task; selecting it drops a
+  `{app}\no_tiling.flag` marker and the app then hides the Video Tiling tab
+  (`core.hub.tiling_tab_enabled()`).
+
+### Changed
+
+- **The model now downloads to a writable location by default.** The
+  first-run hub default moved from the install directory (under Program
+  Files — "access is denied" for a non-admin user) to
+  `%LOCALAPPDATA%\WhisperProject\Cache\models`. The model-download dialog
+  surfaces a typed `ModelDestinationNotWritable` and offers a re-pick, the
+  hub-folder picker probes writability when you click OK, and the default
+  hub is aligned with `model_folder_for`'s empty-hub fallback
+  (`HUB_SUBFOLDER_NAME = "models"`) so an existing `Cache\models` model is
+  **reused, not re-downloaded** (~3 GB saved). Verified on this machine with
+  a real `load_config()` probe.
+
+#### Phase 3
+
+- **Google Cloud STT defaults are now `chirp_2` / `us-central1`** (were
+  `long` / `global`). This was **live-verified** against the owner's
+  service-account JSON (project `crucial-context-297802`): the previous
+  `long` / `global` pairing rejected language auto-detect, whereas `chirp_2`
+  supports auto-detect and multilingual input. New config defaults
+  `gcloud_stt_model = "chirp_2"` and `gcloud_stt_location = "us-central1"`
+  in `config.py`.
+
+### Fixed
+
+- **GPU/CPU autodetect is hardened and self-healing.** A cheap cuDNN/cuBLAS
+  runtime-load gate means CUDA is only chosen when it's actually usable, and
+  a failed CUDA model load now falls back to **CPU int8** instead of
+  crashing the worker (and instead of falsely prompting a ~3 GB
+  re-download). The effective device is reported additively on the worker
+  `ready` event and shown as a live GPU/CPU badge (Transcribe header + Queue
+  status); a one-time "running on CPU (slower)" warning is gated to the
+  GPU-detected-but-unusable / downgrade case (config key
+  `cpu_warning_shown`).
+- **Network / UNC drag-and-drop no longer silently drops the file.** A
+  backslash-preserving, brace-aware splitter replaces `tk.splitlist`, which
+  was collapsing the leading `\\` of a `\\server\share\file` drop.
+
+#### Phase 3 (reported issues + a deep adversarial review)
+
+- **Every Web / LAN job crashed** with
+  `'_CancelledTask' object has no attribute 'paused'`. The server's task
+  object now mirrors the engine's read contract (renamed `_ServerTask`),
+  and the test fakes were hardened so the gap can't regress.
+- **"View transcript" closed the whole app.** The root cause was libvlc
+  `set_hwnd` on an *unrealized* Tk window — a native crash that bypassed
+  `try`/`except` entirely. The HWND bind is now **deferred until the window
+  is mapped**, with a graceful fallback; the viewer also now opens the
+  actual transcript `.json` instead of popping a spurious file-picker.
+- **"Re-detect hardware" froze the UI.** The probe ran on the Tk main
+  thread (plus an unbounded cuDNN/cuBLAS `ctypes.CDLL` probe). It now runs
+  **off-thread** behind a generation-token guard, with a **timeout-bounded**
+  DLL probe.
+- **The Queue per-task action bar was unusable** — the 500 ms `refresh()`
+  rebuilt the tree and wiped the row selection on every tick. Selection is
+  now **preserved across the rebuild**.
+- **Off-thread Tk writes fixed.** The Video Tiling log callback and four
+  Advanced-dialog worker handlers now marshal back through the main thread
+  via a new `App.log_threadsafe`; the tiling status colour is now applied.
+- **Smaller fixes** — a status-cell click defers via `after_idle`;
+  `start_tiling` guards a bad grid spinbox; `pause_download` only pauses a
+  *running* download; the theme + download-folder `save_config` calls are
+  guarded; `minimise_to_tray` / `telemetry_opt_in` were added to
+  `DEFAULT_CONFIG`; a multi-file enqueue gates the model **once**; the
+  Advanced mouse-wheel binding is released on close; and the server handle
+  is registered **before** `start()`.
+- **Google Cloud STT timing + language correctness** (live-verified with
+  the owner's service-account JSON). Language codes are mapped ISO → BCP-47
+  (Google v2 rejects a bare `"en"`); word time offsets are **always**
+  requested and the words are re-segmented into properly-timed phrases — a
+  real run produced **5 correctly-timed subtitle segments** instead of one
+  0–30 s blob.
+
+### Docs
+
+- **Evaluation: skip Google's Gemma 4 12B as a transcription backend.**
+  `docs/evaluations/GEMMA4_EVALUATION_2026-06.md` recommends a SKIP — a 30 s
+  audio cap, a torch/BF16/~24 GB-VRAM requirement, no word timestamps, and
+  no WER win over the current stack — while sketching a possible
+  future-adjunct path and a hardware gate.
+- **New `docs/CLOUD_STT_GOOGLE.md`** (Phase 2) — service-account setup,
+  the Standard-vs-Batch trade-off, the GCS-bucket requirement for batch,
+  and the honest "the real $300-credit balance is not readable from the
+  key" usage note. `docs/SERVER.md` updated for the one-click Web / LAN
+  access toggle (alongside the existing `gui.py serve` CLI).
+
+#### Phase 3
+
+- `docs/CONFIG.md` and `docs/CLOUD_STT_GOOGLE.md` updated for the new
+  `chirp_2` / `us-central1` Google Cloud STT defaults (was `long` /
+  `global`) and the auto-detect / multilingual reason behind the change.
+- `docs/SERVER.md` updated for the Web / LAN feature parity — per-job
+  advanced options, the `GET /api/jobs` list, the pause / resume routes,
+  the 3-view browser UI, and streamed uploads — plus the note that cloud /
+  alternate backends are **not** per-job switchable over the web.
+
 ## [1.3.7] — 2026-05-29
 
 Senior-architect deep audit (8 parallel read-only shards → fix batches).

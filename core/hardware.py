@@ -63,6 +63,106 @@ def hardware_json_path() -> Path:
 # ---------------------------------------------------------------- probes
 
 
+# The CUDA runtime libraries faster-whisper / CTranslate2 dlopen lazily at
+# WhisperModel(device="cuda") construction time — NOT when ctranslate2 itself
+# imports. ``contains_cuda_device()`` only checks that a CUDA *driver* + GPU
+# are present; it does NOT verify these runtime DLLs load. When they are
+# missing/broken (a very common state: NVIDIA driver installed but the
+# cuDNN/cuBLAS pip wheels absent, or a PATH mismatch), the model load raises a
+# RuntimeError like "Library cudnn_ops_infer64_8.dll is not found" / "Unable to
+# load libcudnn_ops" and the worker dies — historically misreported to the
+# user as a corrupt model needing a 3 GB re-download. We probe these names so
+# the autodetect can refuse CUDA up front and the model load can self-heal.
+_CUDA_RUNTIME_LIB_NAMES = (
+    # cuDNN ops (the one most often missing on a bare driver install)
+    "cudnn_ops_infer64_8.dll", "cudnn_ops64_9.dll",
+    "libcudnn_ops_infer.so.8", "libcudnn_ops.so.9", "libcudnn.so.8",
+    # cuBLAS
+    "cublas64_12.dll", "cublas64_11.dll",
+    "libcublas.so.12", "libcublas.so.11",
+)
+
+
+# Worst-case wall-clock budget for the cuDNN/cuBLAS dlopen probe. ctypes.CDLL
+# is usually instant, but on a broken CUDA stack a single load can block for
+# many seconds inside the OS loader (DLL search across a wedged path / a
+# half-installed driver). We run the probe in a helper thread and treat a
+# timeout as "not loadable" so it can never freeze the caller (the Hardware
+# Wizard probe ran this on the Tk main thread).
+_CUDA_DLL_PROBE_TIMEOUT_S = 3.0
+
+
+def _cuda_runtime_dlls_loadable() -> bool:
+    """True when at least one cuDNN AND one cuBLAS runtime lib dlopen cleanly.
+
+    Cheap in the common case: ``ctypes.CDLL`` just resolves + maps the shared
+    library (no GPU work, no model load). We only require *one* name from each
+    family to load because the exact soname/version varies across CUDA 11/12
+    and cuDNN 8/9. The dlopen itself can stall for seconds on a broken CUDA
+    install, so the work runs in a helper thread bounded by
+    ``_CUDA_DLL_PROBE_TIMEOUT_S``; a timeout is treated as "not loadable" (the
+    safe CPU-fallback). Never raises — any failure means "treat as not
+    loadable".
+    """
+    try:
+        import ctypes
+    except Exception:  # noqa: BLE001  (defensive; ctypes is stdlib)
+        return False
+
+    def _any_loads(names: tuple[str, ...]) -> bool:
+        for name in names:
+            try:
+                ctypes.CDLL(name)
+                return True
+            except OSError:
+                continue
+            except Exception:  # noqa: BLE001
+                continue
+        return False
+
+    cudnn_names = tuple(n for n in _CUDA_RUNTIME_LIB_NAMES if "cudnn" in n)
+    cublas_names = tuple(n for n in _CUDA_RUNTIME_LIB_NAMES if "cublas" in n)
+
+    result: dict[str, bool] = {}
+
+    def _probe() -> None:
+        try:
+            result["ok"] = _any_loads(cudnn_names) and _any_loads(cublas_names)
+        except Exception:  # noqa: BLE001
+            result["ok"] = False
+
+    import threading
+    t = threading.Thread(target=_probe, daemon=True)
+    t.start()
+    t.join(_CUDA_DLL_PROBE_TIMEOUT_S)
+    if t.is_alive():
+        # Loader is wedged on a broken CUDA stack — don't wait on it.
+        # The daemon thread is abandoned; treat CUDA as unusable.
+        return False
+    return bool(result.get("ok", False))
+
+
+def cuda_load_ok() -> bool:
+    """Cheap self-test: can the bundled backend actually load a CUDA model?
+
+    Returns True only when ctranslate2 reports a CUDA device *and* the
+    cuDNN/cuBLAS runtime libraries dlopen cleanly. When ctranslate2 sees a
+    device but the runtime DLLs are absent/broken, returns False — this is the
+    case that used to hard-crash the worker with a RuntimeError about
+    ``libcudnn_ops``/``cublas`` at ``WhisperModel(device="cuda")`` time.
+
+    Never raises (callers run it inside ``probe_tiers()`` which must stay fast
+    and swallow everything at startup).
+    """
+    try:
+        import ctranslate2  # type: ignore[import-not-found]
+        if not ctranslate2.contains_cuda_device():  # type: ignore[attr-defined]
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    return _cuda_runtime_dlls_loadable()
+
+
 def _gpu_name() -> str:
     """Best-effort NVIDIA GPU name; empty string when unknown."""
     try:
@@ -93,6 +193,18 @@ def _probe_cuda() -> list[Tier]:
     try:
         import ctranslate2  # type: ignore[import-not-found]
         if not ctranslate2.contains_cuda_device():  # type: ignore[attr-defined]
+            return []
+        # contains_cuda_device() only proves a driver + GPU exist; the
+        # cuDNN/cuBLAS runtime libs faster-whisper needs are loaded lazily at
+        # model construction. If they're missing/broken, selecting CUDA here
+        # makes the model load HARD-FAIL with no fallback. Refuse CUDA up front
+        # so the wizard / autodetect reports it as unusable instead.
+        if not _cuda_runtime_dlls_loadable():
+            logger.info(
+                "ctranslate2 reports a CUDA device but the cuDNN/cuBLAS "
+                "runtime libraries are not loadable; treating CUDA as "
+                "unavailable (would hard-fail at model load). source=cuda_probe"
+            )
             return []
         supported: set[str] = set()
         try:
@@ -336,6 +448,16 @@ def device_choice_from_hardware_file() -> tuple[str, str] | None:
                 return None
         except Exception:  # noqa: BLE001
             return None
+        # The device is present but the cuDNN/cuBLAS runtime may have been
+        # uninstalled / broken since the wizard ran. Honouring CUDA here would
+        # hand a doomed device to the model loader. Fall back to the auto-probe
+        # (which itself now refuses CUDA in that state) so we land on CPU.
+        if not _cuda_runtime_dlls_loadable():
+            logger.info(
+                "hardware.json picks CUDA but the cuDNN/cuBLAS runtime "
+                "libraries are not loadable now; falling back to auto-probe."
+            )
+            return None
     return device, compute_type
 
 
@@ -384,7 +506,7 @@ def detect_device_for(config: dict[str, Any]) -> tuple[str, str]:
         logger.exception("device_choice_from_hardware_file probe raised")
     try:
         import ctranslate2  # type: ignore[import-not-found]
-        if ctranslate2.contains_cuda_device():  # type: ignore[attr-defined]
+        if ctranslate2.contains_cuda_device() and _cuda_runtime_dlls_loadable():  # type: ignore[attr-defined]
             supported = set(ctranslate2.get_supported_compute_types("cuda"))
             for ct in ("float16", "int8_float16", "int8"):
                 if ct in supported:

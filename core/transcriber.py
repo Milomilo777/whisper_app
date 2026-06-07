@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -82,12 +83,29 @@ def _normalize_language(code: str | None) -> str | None:
 
 logger = logging.getLogger(__name__)
 
-config = load_config()
+# Skip the online-config fetch on this import-time read: transcriber.py is
+# imported inside the hot worker subprocess where a network stall on spawn is
+# harmful, and none of the online app-level keys (model catalog / stats /
+# ffplay links) are needed here. The parent App passes the effective config
+# (already online-merged) per task; this module-global is only the bootstrap
+# snapshot. See core.config.load_config(fetch_online=...).
+config = load_config(fetch_online=False)
 
 MODEL: Any = None
 PIPELINE: Any = None  # BatchedInferencePipeline wrapper when device == "cuda"
 MODEL_READY = False
 MODEL_ERROR: str | None = None
+
+# R3: effective-device tracking. ``device`` / ``compute_type`` (assigned just
+# below) are what we *requested*. After a load we read back what CTranslate2
+# actually ran on and stash it here so the worker can report it to the UI.
+# _DEVICE_DOWNGRADED flips True when a requested CUDA load failed and we
+# self-healed onto CPU int8 (instead of the old hard crash + bogus
+# "re-download the model" prompt).
+_DEVICE_DOWNGRADED = False
+_REQUESTED_DEVICE = ""
+_EFFECTIVE_DEVICE = ""
+_EFFECTIVE_COMPUTE_TYPE = ""
 
 # Pluggable backend instance for non-default engines (e.g. whisper.cpp).
 # The default faster_whisper path keeps using MODEL/PIPELINE globals so
@@ -168,6 +186,122 @@ def _wrap_for_batched(model: Any) -> Any:
         return None
 
 
+@dataclass(frozen=True)
+class EffectiveDevice:
+    """What the model actually loaded onto, vs. what was requested.
+
+    ``downgraded`` is True when a requested ``cuda`` load failed and we
+    self-healed onto CPU int8. ``device`` / ``compute_type`` are read back
+    from the underlying CTranslate2 object after a successful load (falling
+    back to the requested values when those attributes aren't exposed).
+    """
+    device: str
+    compute_type: str
+    requested_device: str
+    downgraded: bool
+
+
+def get_effective_device() -> EffectiveDevice:
+    """Return the device the loaded model is actually running on.
+
+    Safe to call before any load — reports the requested values with
+    ``downgraded=False`` until a load populates the effective state. When a
+    non-default backend is active (``_ALT_BACKEND``), prefer its self-reported
+    device info if it exposes the R3 accessors; otherwise fall back to its
+    plain ``device`` (other backends don't track a downgrade).
+    """
+    if _ALT_BACKEND is not None:
+        bdev = str(getattr(_ALT_BACKEND, "device", "") or "") or device
+        bcompute = str(getattr(_ALT_BACKEND, "compute_type", "") or "") or compute_type
+        breq = str(getattr(_ALT_BACKEND, "requested_device", "") or "") or bdev
+        bdown = bool(getattr(_ALT_BACKEND, "downgraded", False))
+        return EffectiveDevice(
+            device=bdev,
+            compute_type=bcompute,
+            requested_device=breq,
+            downgraded=bdown,
+        )
+    return EffectiveDevice(
+        device=_EFFECTIVE_DEVICE or device,
+        compute_type=_EFFECTIVE_COMPUTE_TYPE or compute_type,
+        requested_device=_REQUESTED_DEVICE or device,
+        downgraded=_DEVICE_DOWNGRADED,
+    )
+
+
+# CPU self-heal target — what we retry with when a CUDA load fails. int8 is the
+# universal CPU fallback used everywhere else in the hardware tiering.
+_CPU_FALLBACK = ("cpu", "int8")
+
+
+def _capture_effective_device(model: Any, req_device: str, req_compute: str) -> None:
+    """Record what the loaded model actually runs on (getattr-guarded).
+
+    The underlying ``model.model`` is a dynamically-typed CTranslate2 object;
+    its ``device`` / ``compute_type`` attributes are read defensively so a
+    wheel that doesn't expose them can't break the load. Keeps the module
+    ``device`` / ``compute_type`` globals in sync with reality so
+    ``_wrap_for_batched`` (which reads the global ``device``) and the worker's
+    UI report agree.
+    """
+    global device, compute_type, _EFFECTIVE_DEVICE, _EFFECTIVE_COMPUTE_TYPE
+    ct2 = getattr(model, "model", None)
+    eff_device = str(getattr(ct2, "device", "") or "") or req_device
+    eff_compute = str(getattr(ct2, "compute_type", "") or "") or req_compute
+    _EFFECTIVE_DEVICE = eff_device
+    _EFFECTIVE_COMPUTE_TYPE = eff_compute
+    # Keep the module globals authoritative so the batched-pipeline wrap and
+    # any later detect_device() readers see the device we truly loaded on.
+    device = eff_device
+    compute_type = eff_compute
+
+
+def _load_whisper_model_self_healing(
+    model_path: str,
+    req_device: str,
+    req_compute: str,
+    status_cb: Callable[[str], None] | None = None,
+) -> Any:
+    """Construct a WhisperModel, self-healing a failed CUDA load onto CPU.
+
+    Returns the loaded model. On a CUDA construction failure (the classic
+    missing-cuDNN/cuBLAS RuntimeError) this logs the real reason, flips the
+    module-level downgrade flag, and RETRIES with ("cpu", "int8") instead of
+    propagating — turning a hard crash + bogus re-download prompt into a
+    visible, graceful downgrade. A CPU load that fails still raises (nothing to
+    fall back to).
+    """
+    global device, compute_type, _DEVICE_DOWNGRADED, _REQUESTED_DEVICE
+    _REQUESTED_DEVICE = req_device
+    _DEVICE_DOWNGRADED = False
+    try:
+        model = WhisperModel(model_path, device=req_device, compute_type=req_compute)
+        _capture_effective_device(model, req_device, req_compute)
+        return model
+    except Exception as e:
+        if req_device != "cuda":
+            raise
+        cpu_device, cpu_compute = _CPU_FALLBACK
+        logger.warning(
+            "CUDA model load failed (%s); downgrading to %s/%s. This usually "
+            "means the cuDNN/cuBLAS runtime libraries are missing or broken, "
+            "NOT that the model is corrupt.",
+            e, cpu_device, cpu_compute,
+        )
+        if status_cb:
+            status_cb(
+                f"GPU unavailable ({e}); falling back to CPU (slower)."
+            )
+        model = WhisperModel(model_path, device=cpu_device, compute_type=cpu_compute)
+        # Reflect the downgrade in the module globals so _wrap_for_batched
+        # does NOT try to wrap a CPU model in a CUDA batched pipeline.
+        device = cpu_device
+        compute_type = cpu_compute
+        _DEVICE_DOWNGRADED = True
+        _capture_effective_device(model, cpu_device, cpu_compute)
+        return model
+
+
 def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
     """Load the model for the configured backend.
 
@@ -230,7 +364,9 @@ def load_existing_model(status_cb: Callable[[str], None] | None = None) -> bool:
             "device=%s compute_type=%s",
             model_path, device, compute_type,
         )
-        MODEL = WhisperModel(str(model_path), device=device, compute_type=compute_type)
+        MODEL = _load_whisper_model_self_healing(
+            str(model_path), device, compute_type, status_cb
+        )
         PIPELINE = _wrap_for_batched(MODEL)
         MODEL_READY = True
         if status_cb:
@@ -260,7 +396,9 @@ def load_model(
         if progress_cb:
             progress_cb({"phase": "load", "status": "Loading Whisper model...",
                          "percent": 100, "detail": "Preparing model for transcription"})
-        MODEL = WhisperModel(model_path, device=device, compute_type=compute_type)
+        MODEL = _load_whisper_model_self_healing(
+            model_path, device, compute_type, status_cb
+        )
         PIPELINE = _wrap_for_batched(MODEL)
         MODEL_READY = True
         if status_cb:
@@ -565,6 +703,44 @@ def _indexed_path(path: str, index: int) -> str:
     return f"{root} ({index}){ext}"
 
 
+# Registry-key -> on-disk extension overrides. A format whose name is
+# not a valid file extension (or that a tool can't open under its raw
+# name) needs an entry here; everything else uses its own name.
+#   * json      -> json (historical: the key already equalled the ext,
+#                   listed for documentation symmetry)
+#   * smtv_docx -> docx (a ".smtv_docx" file is not a Word document)
+_FMT_EXTENSIONS: dict[str, str] = {
+    "json": "json",
+    "smtv_docx": "docx",
+}
+
+
+def _smtv_output_path(base: str, lang: str) -> str:
+    """Path for the SMTV team file: a fixed, recognisable filename.
+
+    ``<work title> -Transcription in <language> – Translation in
+    English.docx`` next to the source media. ``base`` carries the source
+    directory + stem; the language name comes from the core-side ISO map
+    (falls back to the raw code, or ``...`` when unknown — matching the
+    template's own placeholder). Filesystem-illegal characters in the
+    language label are stripped so the name is always writable.
+    """
+    from .writers.smtv_docx_writer import language_name
+
+    directory = os.path.dirname(base)
+    stem = os.path.basename(base)
+    label = language_name(lang) or "..."
+    # Strip characters Windows forbids in filenames from the language
+    # label (the stem is reused verbatim from the existing source name,
+    # so it is already a legal filename).
+    for bad in '<>:"/\\|?*':
+        label = label.replace(bad, "")
+    label = label.strip() or "..."
+    # en-dash (U+2013) matches the template title exactly.
+    filename = f"{stem} -Transcription in {label} – Translation in English.docx"
+    return os.path.join(directory, filename) if directory else filename
+
+
 def _write_outputs(
     base: str,
     segments_data: list[dict[str, Any]],
@@ -614,10 +790,22 @@ def _write_outputs(
     for fmt_name in formats:
         if fmt_name not in available:
             continue
-        ext = "json" if fmt_name == "json" else fmt_name
-        planned.append((fmt_name, _render_filename_template(
-            template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
-        )))
+        # Map the registry key to the on-disk extension. Most formats
+        # use their own name; a couple need an override so the file is
+        # one a downstream tool can actually open. ``json`` already used
+        # this; ``smtv_docx`` MUST become ``.docx`` (a ".smtv_docx" file
+        # is not a Word document).
+        ext = _FMT_EXTENSIONS.get(fmt_name, fmt_name)
+        if fmt_name == "smtv_docx":
+            # The transcription team's file uses a fixed, recognisable
+            # name rather than the user's output_filename_template, so
+            # it never collides with a normal ".docx" export.
+            rendered = _smtv_output_path(base, lang)
+        else:
+            rendered = _render_filename_template(
+                template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
+            )
+        planned.append((fmt_name, rendered))
     index = 0
     while index < 10000 and any(
         os.path.exists(_indexed_path(p, index)) for _, p in planned
@@ -647,7 +835,22 @@ def _write_outputs(
             f"{path}.{os.getpid()}-{threading.get_ident()}.part"
         )
         try:
-            if is_binary(fmt_name):
+            if fmt_name == "smtv_docx":
+                # Special case: the SMTV writer needs the detected
+                # language + work title beyond the frozen 2-arg writer
+                # contract, so call it directly (the registry's 2-arg
+                # adapter raises). work_title = source stem; language =
+                # the ISO code threaded in via ``lang``.
+                from .writers import smtv_docx_writer
+                payload_b = smtv_docx_writer.write_bytes(
+                    segments_data,
+                    audio_path,
+                    language=lang,
+                    work_title=os.path.basename(base),
+                )
+                with open(part_path, "wb") as fb:
+                    fb.write(payload_b)
+            elif is_binary(fmt_name):
                 payload_b = get_binary_writer(fmt_name)(segments_data, audio_path)
                 with open(part_path, "wb") as fb:
                     fb.write(payload_b)
@@ -1089,6 +1292,35 @@ def _clip_timestamps_arg(task: TranscriptionTask) -> str | None:
     return f"{start_s}"
 
 
+def _shift_segments(segments: Any, offset: float) -> Any:
+    """Yield faster-whisper segments shifted by ``+offset`` seconds.
+
+    Used by the time-range path: we transcribe a PRE-SLICED span (whose times
+    start at 0) and shift the results back onto the ORIGINAL file timeline by
+    ``clip_start``. faster_whisper segments are NamedTuples, so we ``_replace``
+    start/end (and each word's start/end) without mutating the engine's objects.
+    """
+    for s in segments:
+        words = getattr(s, "words", None)
+        if words:
+            try:
+                words = [
+                    w._replace(start=w.start + offset, end=w.end + offset)
+                    for w in words
+                ]
+            except Exception:  # noqa: BLE001 — best-effort word shift
+                pass
+        try:
+            yield s._replace(start=s.start + offset, end=s.end + offset, words=words)
+        except Exception:  # noqa: BLE001 — non-NamedTuple fallback
+            try:
+                s.start = s.start + offset
+                s.end = s.end + offset
+            except Exception:  # noqa: BLE001
+                pass
+            yield s
+
+
 def transcribe(
     task: TranscriptionTask,
     progress_cb: Callable[[int], None] | None = None,
@@ -1166,8 +1398,9 @@ def transcribe(
         runner: Any = PIPELINE if use_batched else MODEL
         if use_batched:
             transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
-        if clip is not None:
-            transcribe_kwargs["clip_timestamps"] = clip
+        # NOTE: a time range is NOT passed as clip_timestamps (that makes
+        # faster-whisper decode the WHOLE file — it hung on a multi-hour
+        # input). It is handled by pre-slicing just below; see _clip_slice_path.
 
         # Progress is measured against the clip span — segment timestamps
         # stay on the original timeline, so without this the bar would
@@ -1180,7 +1413,47 @@ def transcribe(
             else duration
         )
 
-        segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
+        # Time range: pre-slice the [clip_start, clip_end] span with a fast
+        # ffmpeg -ss seek and transcribe ONLY that slice — not clip_timestamps,
+        # which decodes the whole file (it hung on a multi-hour input). The
+        # slice is only read during runner.transcribe(); delete it right after.
+        # Results are shifted back by +clip_start to stay on the original
+        # timeline, and outputs keep the original file's base name.
+        _ts_offset = 0.0
+        _clip_slice_path = ""
+        if clip is not None:
+            # Guard: a start at/after the media duration would slice nothing —
+            # surface a clear error instead of silently writing an empty output.
+            if duration and _clip_start_s >= float(duration):
+                raise RuntimeError(
+                    f"Time range start ({_clip_start_s:.0f}s) is at or beyond "
+                    f"the media length ({float(duration):.0f}s) — nothing to "
+                    "transcribe. Pick an earlier start."
+                )
+            _clip_end_arg = (
+                float(_clip_end_v)
+                if (_clip_end_v and float(_clip_end_v) > _clip_start_s)
+                else None
+            )
+            _clip_slice_path = _slice_audio_from(
+                audio_path, _clip_start_s, _checkpoint.partials_dir(),
+                end_seconds=_clip_end_arg,
+            )
+            audio_path = _clip_slice_path
+            _ts_offset = _clip_start_s
+
+        try:
+            segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
+        finally:
+            # The slice is only read during transcribe(); remove it whether the
+            # call succeeded or raised, so an error mid-transcribe never leaks it.
+            if _clip_slice_path:
+                try:
+                    os.remove(_clip_slice_path)
+                except OSError:
+                    pass
+        if _ts_offset:
+            segments = _shift_segments(segments, _ts_offset)
 
         if getattr(info, "language", None):
             lang_code = str(info.language)
@@ -1452,10 +1725,45 @@ def _transcribe_via_alt_backend(
     )
     # Success — drop the partial.
     _checkpoint.delete_checkpoint(task.file_path)
+    # Cloud backend only: accumulate the transcribed minutes locally so
+    # the Advanced dialog can show usage. The dollar free-credit balance
+    # is NOT readable from an API key, so this local minute counter is
+    # the only usage signal we can offer. Never touches the
+    # faster_whisper path's counters.
+    if backend_name == "cloud_stt":
+        _accumulate_cloud_minutes(duration, log_cb)
     if progress_cb:
         progress_cb(100)
     elapsed = time.time() - start
     log(f"Done in {elapsed:.2f}s", log_cb)
+
+
+def _accumulate_cloud_minutes(
+    duration_seconds: float, log_cb: Callable[[str], None] | None
+) -> None:
+    """Add ``duration_seconds`` to ``cloud_stt_minutes_used`` and persist.
+
+    Re-reads config from disk before writing so a concurrent worker /
+    UI save isn't clobbered, then updates the in-memory module config too
+    so a follow-up read in this process sees the new total. Best-effort:
+    a persistence error is logged, never raised (it must not fail a
+    successful transcription).
+    """
+    if duration_seconds <= 0:
+        return
+    minutes = duration_seconds / 60.0
+    try:
+        from .config import load_config as _load, save_config as _save
+        disk_cfg = _load()
+        prior = float(disk_cfg.get("cloud_stt_minutes_used") or 0.0)
+        new_total = round(prior + minutes, 4)
+        disk_cfg["cloud_stt_minutes_used"] = new_total
+        _save(disk_cfg)
+        config["cloud_stt_minutes_used"] = new_total
+        log(f"Cloud minutes used this file: {minutes:.2f} "
+            f"(total {new_total:.1f}).", log_cb)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not persist cloud_stt_minutes_used: %s", e)
 
 
 def _slice_audio_from(

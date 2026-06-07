@@ -23,12 +23,30 @@ def _karaoke_payload(seg: dict) -> str:
         # w.get("start", default) only returns the default when the key
         # is ABSENT; an explicit start=None (hand-edited / externally
         # produced JSON re-fed for re-export) would make float(None)
-        # raise and abort the whole VTT write. Coerce defensively.
+        # raise and abort the whole VTT write. A non-numeric string such
+        # as "abc" (also from a converted / hand-edited JSON) would make
+        # float("abc") raise ValueError and abort just the same. Coerce
+        # defensively: fall back to the segment start, then to 0.0.
         ts_val = w.get("start")
         if ts_val is None:
             ts_val = seg.get("start", 0.0)
-        ts = fmt_vtt_time(float(ts_val))
-        token = escape_cue_separator((w.get("word") or "").strip())
+        try:
+            ts_seconds = float(ts_val)
+        except (TypeError, ValueError):
+            try:
+                ts_seconds = float(seg.get("start", 0.0))
+            except (TypeError, ValueError):
+                ts_seconds = 0.0
+        ts = fmt_vtt_time(ts_seconds)
+        # The word text can be a non-string (e.g. a number) in a
+        # hand-edited / externally produced JSON re-fed for re-export.
+        # ``(w.get("word") or "")`` keeps that non-string truthy value,
+        # so the bare ``.strip()`` would AttributeError and abort the
+        # whole VTT write. Coerce to str defensively (mirroring
+        # speaker_prefix) before the string ops.
+        word_val = w.get("word")
+        word_text = "" if word_val is None else str(word_val)
+        token = escape_cue_separator(word_text.strip())
         if not token:
             continue
         if parts:

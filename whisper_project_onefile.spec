@@ -78,6 +78,14 @@ a = Analysis(
     datas=[
         ('bin', 'bin'),
         ('assets', 'assets'),
+        # Static page served by the optional LAN/web HTTP job server
+        # (gui.py serve -> core.server). Ship it so the frozen build can
+        # serve the browser UI.
+        ('core/server/static', 'core/server/static'),
+        # SMTV transcription writer's bundled Word template (the team's
+        # exact table styling). Resolved at runtime via
+        # core.paths.resource_base -> core/writers/templates/.
+        ('core/writers/templates', 'core/writers/templates'),
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
@@ -115,6 +123,8 @@ a = Analysis(
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
         'core.backends.parakeet',
+        'core.backends.cloud_stt',
+        'core.backends.google_cloud_stt',
         'core.chapters',
         'core.llm',
         'core.recorder',
@@ -135,6 +145,7 @@ a = Analysis(
         'tiktoken',
         'core.burn_subs',
         'core.config',
+        'core.convert',
         'core.diarization',
         'core.hallucination',
         'core.hardware',
@@ -142,13 +153,20 @@ a = Analysis(
         'core.hub',
         'core.logging_setup',
         'core.model_manager',
+        'core.monitors',
         'core.paths',
+        'core.stats',
         'core.task',
         'core.transcriber',
+        'core.updates',
         'core.watcher',
         'core.worker',
         'core.integrations.otranscribe',
         'core.integrations.smtv',
+        # Optional LAN/web HTTP job server (stdlib only).
+        'core.server',
+        'core.server.httpd',
+        'core.server.jobs',
         'core.writers',
         'core.writers.base',
         'core.writers.srt',
@@ -160,9 +178,15 @@ a = Analysis(
         'core.writers.md',
         'core.writers.docx_writer',
         'core.writers.pdf_writer',
+        'core.writers.smtv_docx_writer',
         'docx',
         'reportlab',
         'sherpa_onnx',
+        # Optional multi-monitor detection for Video Tiling. Lazy-imported in
+        # core.monitors with a ctypes Win32 fallback, so PyInstaller can't see
+        # it via static analysis — list it so the frozen build keeps the
+        # screeninfo path. Its absence only disables that one detection path.
+        'screeninfo',
     ],
     hookspath=[],
     runtime_hooks=[],

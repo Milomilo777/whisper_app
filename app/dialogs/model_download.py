@@ -8,8 +8,12 @@ from queue import Empty, Queue
 from tkinter import messagebox, ttk
 from typing import Any
 
-from core.config import load_config
-from core.model_manager import DownloadCancelled, ensure_model
+from core.config import load_config, save_config
+from core.model_manager import (
+    DownloadCancelled,
+    ModelDestinationNotWritable,
+    ensure_model,
+)
 
 
 def fmt_bytes(value: float | int | None) -> str:
@@ -45,6 +49,10 @@ class ModelDownloadDialog(tk.Toplevel):
         self.done = False
         self.success = False
         self.error: str | None = None
+        # Set when the model destination is not writable (e.g. a hub
+        # under Program Files for a non-admin user). Carries the
+        # offending directory so the poll handler can offer a re-pick.
+        self.not_writable_dir: str | None = None
         self.started = time.time()
 
         self.status_var = tk.StringVar(value="Starting model setup...")
@@ -84,9 +92,22 @@ class ModelDownloadDialog(tk.Toplevel):
         y = master.winfo_rooty() + (master.winfo_height() - self.winfo_height()) // 2
         self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
+        self._start_worker()
+        self.after(100, self._poll)
+
+    def _start_worker(self) -> None:
+        """(Re)launch the background download against the current config.
+
+        Reset per-attempt state first so a retry after a re-pick starts
+        clean. Reads the config fresh inside the thread so a hub-folder
+        change persisted between attempts is picked up.
+        """
+        self.done = False
+        self.success = False
+        self.error = None
+        self.not_writable_dir = None
         from core._threads import safe_thread
         safe_thread(self._worker, name="model-download-dialog")
-        self.after(100, self._poll)
 
     def _worker(self) -> None:
         def status(msg: str) -> None:
@@ -99,6 +120,16 @@ class ModelDownloadDialog(tk.Toplevel):
             ensure_model(load_config(), status, progress, self.cancel_event)
             self.success = True
         except DownloadCancelled:
+            self.success = False
+        except ModelDestinationNotWritable as e:
+            self.not_writable_dir = e.directory
+            self.success = False
+        except PermissionError as e:
+            # Bare permission error from anywhere in the download path
+            # that wasn't wrapped — treat it like a not-writable dest so
+            # the user gets the actionable re-pick prompt, not the raw
+            # OS string.
+            self.not_writable_dir = getattr(e, "filename", None) or str(e)
             self.success = False
         except Exception as e:  # noqa: BLE001
             self.error = str(e)
@@ -127,6 +158,16 @@ class ModelDownloadDialog(tk.Toplevel):
                 if self.success:
                     self.destroy()
                     return
+                if self.not_writable_dir is not None:
+                    # Offer a writable folder instead of the raw OS error.
+                    if self._handle_not_writable(self.not_writable_dir):
+                        # User picked a new folder — retry the download.
+                        self.status_var.set("Retrying with the new folder...")
+                        self._start_worker()
+                        self.after(100, self._poll)
+                        return
+                    self.destroy()
+                    return
                 if self.error:
                     messagebox.showerror("Model setup failed", self.error, parent=self)
                 self.destroy()
@@ -135,6 +176,55 @@ class ModelDownloadDialog(tk.Toplevel):
         elapsed = time.time() - self.started
         self.elapsed_var.set(f"Elapsed: {fmt_duration(elapsed)}")
         self.after(100, self._poll)
+
+    def _handle_not_writable(self, directory: str) -> bool:
+        """Offer the user a chance to pick a writable hub folder.
+
+        Returns True when the user picked + persisted a new folder (so
+        the caller should retry the download), False otherwise. Always
+        shows a clear, actionable message — never the raw OS string.
+        """
+        retry = messagebox.askyesno(
+            "Model folder not writable",
+            (
+                f"Whisper could not write to:\n\n{directory}\n\n"
+                "It may need administrator rights, or you can choose a "
+                "different folder under your user profile.\n\n"
+                "Pick a different folder now?"
+            ),
+            parent=self,
+        )
+        if not retry:
+            return False
+
+        # Open the hub picker on a fresh copy of the on-disk config so
+        # the user's new choice is persisted to disk before we re-read
+        # it in the retry worker.
+        try:
+            from app.dialogs.hub_setup import HubSetupDialog
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror(
+                "Model setup failed",
+                f"Could not open the folder picker: {e}",
+                parent=self,
+            )
+            return False
+
+        cfg = load_config()
+        picked: dict[str, str | None] = {"path": None}
+
+        def _on_done(path: str) -> None:
+            picked["path"] = path
+
+        dlg = HubSetupDialog(self, cfg, save=save_config, on_done=_on_done)
+        self.wait_window(dlg)
+
+        # Only retry if the user actually committed a new folder (OK /
+        # Use default). Cancel returns a session path but does not save,
+        # so don't loop back into the same failing location blindly.
+        if not dlg.saved:
+            return False
+        return True
 
     def _apply_progress(self, payload: dict[str, Any]) -> None:
         percent = payload.get("percent")

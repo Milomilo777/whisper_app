@@ -1,0 +1,99 @@
+name: macOS app build
+
+# Heavy build — MANUAL dispatch only (does not auto-run on push), so it never
+# burns private-repo macOS minutes by accident. Builds the macOS distribution
+# methods on a real Apple-silicon runner, smoke-launches the result, and uploads
+# the .app/.dmg as a downloadable artifact.
+on:
+  workflow_dispatch:
+  # Manual-only in practice: it fires solely on a push to the dedicated
+  # `macos-app-build` branch (NOT on macos-ci), so a normal macos-ci push never
+  # triggers this heavy build. To run it: push macos-ci's HEAD to macos-app-build.
+  push:
+    branches: [macos-app-build]
+
+jobs:
+  build-app:
+    name: Build macOS .app/.dmg + smoke (macos-15 / arm64)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps (slim — drop stable-ts/torch to match the shipped build) + PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pyinstaller
+
+      - name: Provide macOS ffmpeg/ffprobe in bin/
+        run: |
+          brew install ffmpeg
+          mkdir -p bin
+          cp "$(brew --prefix)/bin/ffmpeg"  bin/ffmpeg
+          cp "$(brew --prefix)/bin/ffprobe" bin/ffprobe
+          chmod +x bin/ffmpeg bin/ffprobe
+          file bin/ffmpeg
+          ls -la bin
+
+      # ---- Method 1: PyInstaller .app ----
+      - name: "Method 1 - build .app (PyInstaller)"
+        run: pyinstaller --noconfirm --clean platform/macos/pyinstaller/whisper_project_mac.spec
+
+      - name: "Method 1 - REAL smoke: the frozen .app is a valid native bundle and boots"
+        continue-on-error: true
+        run: |
+          set +e
+          APP="dist/Whisper Project.app"
+          BIN="$APP/Contents/MacOS/Whisper Project"
+          [ -d "$APP" ] && echo "OK .app bundle present"
+          [ -f "$APP/Contents/Info.plist" ] && echo "OK Info.plist present"
+          [ -x "$BIN" ] && echo "OK launcher present"
+          echo "--- file/arch ---"; file "$BIN"
+          echo "--- boot smoke: 'transcribe --help' under a 60s hard timeout ---"
+          "$BIN" transcribe --help & PID=$!
+          ( sleep 60 && kill -9 $PID 2>/dev/null ) & WD=$!
+          wait $PID; RC=$?
+          kill -9 $WD 2>/dev/null
+          echo "transcribe --help exit code: $RC (0 = the frozen app booted + imported on macOS)"
+
+      - name: "Method 1 - wrap into .dmg (create-dmg)"
+        continue-on-error: true
+        run: |
+          brew install create-dmg
+          bash platform/macos/pyinstaller/builddmg.command
+
+      # ---- Method 2: source-venv install.command ----
+      - name: "Method 2 - run install.command (source venv -> .app)"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          chmod +x platform/macos/install.command
+          bash platform/macos/install.command
+          echo "--- ~/Applications after install.command ---"
+          ls -la "$HOME/Applications" 2>/dev/null || true
+
+      # ---- Method 3: Homebrew formula ----
+      - name: "Method 3 - lint the Homebrew formula"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          brew audit --formula --strict platform/macos/homebrew/whisper-project.rb || true
+          echo "NOTE: a real 'brew install' is blocked until the repo is PUBLIC and a release"
+          echo "tarball with a real sha256 is published (the formula's sha256 is a placeholder)."
+
+      - name: Upload build artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            dist/*.app
+            dist/*.dmg
+          if-no-files-found: warn

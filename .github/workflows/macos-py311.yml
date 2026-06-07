@@ -1,0 +1,44 @@
+name: macOS py3.11 pin
+
+# One-off: pin the py3.11-only failure. The normal run CRASHES during pytest's
+# failure-report formatting on 3.11 ("cannot instantiate 'WindowsPath'"), which
+# hides the offending test. --tb=no suppresses that repr path; -rfE prints the
+# FAILED/ERROR test names in the summary so we can see exactly which test fails.
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos-py311]
+
+jobs:
+  pin:
+    name: pin py3.11 failure (macos-15 / py3.11)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install slim deps
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pytest responses
+      - name: Run with no-traceback so the failing test names are revealed
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: python -m pytest tests/ --ignore=tests/smoke -p no:randomly --tb=no -rfE -q
+      - name: Same, per-file (isolates which file triggers the WindowsPath crash)
+        continue-on-error: true
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: |
+          set +e
+          for f in $(find tests -name 'test_*.py' -not -path 'tests/smoke/*' | sort); do
+            out=$(python -m pytest "$f" --tb=no -q -rN 2>&1)
+            rc=$?
+            if [ $rc -ne 0 ]; then echo "PY311 FAIL/CRASH in $f (rc=$rc):"; echo "$out" | tail -5; fi
+          done
+          echo "per-file 3.11 scan done"

@@ -126,6 +126,37 @@ def test_viewer_invalid_json_shows_empty_list(tmp_path, monkeypatch):
         root.destroy()
 
 
+def test_viewer_dict_root_explains_wrong_file(tmp_path, monkeypatch):
+    """A dict-root JSON (e.g. a credentials/config file) must not crash;
+    it shows an empty list and surfaces a 'pick the .json' style error
+    rather than a raw 'root must be a list' message."""
+    from app.dialogs import transcript_viewer
+
+    cfg = tmp_path / "creds.json"
+    cfg.write_text(json.dumps({"token": "secret"}), encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    def _fake_showerror(title, message, **kw):
+        captured["title"] = title
+        captured["message"] = message
+
+    monkeypatch.setattr(transcript_viewer.messagebox, "showerror", _fake_showerror)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = transcript_viewer.TranscriptViewer(root, str(cfg))
+        viewer.withdraw()
+        try:
+            assert viewer.tree.get_children() == ()
+            assert "transcript JSON" in captured.get("message", "")
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
 # --- v0.7.0 enhancements (B1) ------------------------------------------------
 
 
@@ -448,3 +479,66 @@ def test_strip_fillers_collapses_space_before_punctuation():
     # Inline filler — punctuation that wasn't part of the filler
     # group survives the cleanup.
     assert _strip_fillers("Are you um sure?", pat) == "Are you sure?"
+
+
+# --- transport-bar pure helpers (seek slider / skip / MM:SS) ----------------
+# These are pure functions — no Tk, no VLC — so they run on every platform
+# regardless of whether libvlc or a display is present.
+
+
+def test_fmt_mmss_basic_and_hour_rollover():
+    from app.dialogs.transcript_viewer import _fmt_mmss
+
+    assert _fmt_mmss(0) == "00:00"
+    assert _fmt_mmss(1000) == "00:01"
+    assert _fmt_mmss(65000) == "01:05"
+    assert _fmt_mmss(59000) == "00:59"
+    # Past an hour switches to H:MM:SS form.
+    assert _fmt_mmss(3661000) == "1:01:01"
+
+
+def test_fmt_mmss_guards_unknown_length():
+    """libvlc returns -1 / 0 for an unknown time or length — those must
+    collapse to 00:00, never a negative clock."""
+    from app.dialogs.transcript_viewer import _fmt_mmss
+
+    assert _fmt_mmss(-1) == "00:00"
+    assert _fmt_mmss(-50000) == "00:00"
+    assert _fmt_mmss(0) == "00:00"
+
+
+def test_slider_fraction_round_trip_and_clamp():
+    from app.dialogs.transcript_viewer import (
+        _SEEK_SLIDER_MAX,
+        _fraction_to_slider,
+        _slider_to_fraction,
+    )
+
+    assert _slider_to_fraction(0) == 0.0
+    assert _slider_to_fraction(_SEEK_SLIDER_MAX) == 1.0
+    assert _slider_to_fraction(_SEEK_SLIDER_MAX / 2) == 0.5
+    # Out-of-range slider values clamp to the valid libvlc 0..1 domain.
+    assert _slider_to_fraction(-100) == 0.0
+    assert _slider_to_fraction(_SEEK_SLIDER_MAX * 2) == 1.0
+
+    assert _fraction_to_slider(0.0) == 0.0
+    assert _fraction_to_slider(1.0) == float(_SEEK_SLIDER_MAX)
+    assert _fraction_to_slider(0.25) == _SEEK_SLIDER_MAX * 0.25
+    # libvlc occasionally reports a position slightly past 1.0 near EOF.
+    assert _fraction_to_slider(1.5) == float(_SEEK_SLIDER_MAX)
+    assert _fraction_to_slider(-0.5) == 0.0
+
+
+def test_clamp_time_ms_skip_arithmetic():
+    from app.dialogs.transcript_viewer import _clamp_time_ms
+
+    # Forward skip in the middle of the media.
+    assert _clamp_time_ms(10_000, 5_000, 60_000) == 15_000
+    # Back-skip before the start floors at 0.
+    assert _clamp_time_ms(2_000, -5_000, 60_000) == 0
+    # Forward skip past the end caps at total-1 (libvlc rejects == length).
+    assert _clamp_time_ms(58_000, 10_000, 60_000) == 59_999
+    # Unknown length (libvlc -1 / 0) only enforces the lower bound.
+    assert _clamp_time_ms(10_000, 5_000, -1) == 15_000
+    assert _clamp_time_ms(10_000, 5_000, 0) == 15_000
+    assert _clamp_time_ms(1_000, -5_000, 0) == 0

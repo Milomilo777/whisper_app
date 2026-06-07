@@ -12,7 +12,7 @@
 ; Single version knob — drives AppVersion, the output filename, and the
 ; (version-stamped) shortcut name so the user can see which build is
 ; installed. Bump alongside core/__init__.py + pyproject.toml.
-#define MyAppVersion "1.3.7"
+#define MyAppVersion "1.3.8"
 
 [Setup]
 ; Stable AppId — keeps a single, upgradable Add/Remove Programs entry
@@ -48,6 +48,10 @@ Name: "{commondesktop}\Whisper Project {#MyAppVersion}"; Filename: "{app}\python
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
 Name: "shellext"; Description: "Add 'Transcribe with Whisper Project' to the Windows Explorer right-click menu"; GroupDescription: "Integration:"
+; Video Tiling (video wall) is on by default. Ticking this task drops a
+; no_tiling.flag marker in {app}; the app reads it at startup (core.hub
+; .tiling_tab_enabled) and hides the Video Tiling tab. Unchecked = included.
+Name: "notiling"; Description: "Do NOT include the Video Tiling (video wall) feature"; GroupDescription: "Optional features:"; Flags: unchecked
 
 [Registry]
 ; Same shell-extension hook as installer.iss, but the embedded
@@ -74,6 +78,7 @@ Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\Lib"
 Type: files; Name: "{app}\gui.py"
 Type: files; Name: "{app}\sitecustomize.py"
+Type: files; Name: "{app}\no_tiling.flag"
 Type: dirifempty; Name: "{app}"
 
 [Code]
@@ -82,6 +87,38 @@ Type: dirifempty; Name: "{app}"
 //  See that file for full commentary; this script keeps a copy so
 //  the two installers stay self-contained (Inno has no [Include]).
 // --------------------------------------------------------------------
+
+// --------------------------------------------------------------------
+//  Optional "Video Tiling" feature toggle.
+//
+//  Video Tiling is INCLUDED by default. If the user ticks the "notiling"
+//  task, we drop an empty marker file at {app}\no_tiling.flag during
+//  post-install. The app reads it at startup (core.hub.tiling_tab_enabled)
+//  and simply hides the Video Tiling tab — no code is removed, so the
+//  toggle is fully reversible by deleting the marker. The marker is also
+//  swept on uninstall (here + in [UninstallDelete]).
+// --------------------------------------------------------------------
+
+const
+  NoTilingMarker = '{app}\no_tiling.flag';
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  MarkerPath: string;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  MarkerPath := ExpandConstant(NoTilingMarker);
+  if WizardIsTaskSelected('notiling') then begin
+    if not SaveStringToFile(MarkerPath, '', False) then
+      Log('Could not create no_tiling.flag marker at ' + MarkerPath);
+  end else begin
+    // Defensive: on a reinstall/upgrade where the user previously opted
+    // out but now wants tiling, make sure a stale marker is gone.
+    if FileExists(MarkerPath) then
+      DeleteFile(MarkerPath);
+  end;
+end;
 
 function ExtractHubFolder(): string;
 var
@@ -133,8 +170,16 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  HubFolder, AppFolder, Msg: string;
+  HubFolder, AppFolder, Msg, MarkerPath: string;
 begin
+  // Remove the optional-feature marker (created post-install when the
+  // user opted out of Video Tiling). [UninstallDelete] also covers it,
+  // but delete it explicitly so a partial uninstall leaves nothing behind.
+  if CurUninstallStep = usUninstall then begin
+    MarkerPath := ExpandConstant(NoTilingMarker);
+    if FileExists(MarkerPath) then
+      DeleteFile(MarkerPath);
+  end;
   if CurUninstallStep <> usPostUninstall then
     Exit;
   HubFolder := ExtractHubFolder();

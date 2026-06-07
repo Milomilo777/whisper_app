@@ -132,6 +132,91 @@ class TranscriptionService:
             self.app.status_var.set(
                 f"Model ready ({ready_count} worker{'s' if ready_count != 1 else ''})"
             )
+        self._refresh_device_badge()
+
+    def _refresh_device_badge(self) -> None:
+        """Drive the GPU/CPU device badge + one-time CPU warning (R3).
+
+        Reads the effective device of the ready workers (newest wins) and
+        sets ``app.device_badge_var`` / ``device_badge_kind`` so the UI shows
+        a green GPU badge, an amber CPU badge, or an amber downgrade badge.
+        Defers the actual Tk text/colour update to the App (which owns the
+        widgets) via ``app.apply_device_badge`` when present.
+        """
+        app = self.app
+        ready = self.ready_workers()
+        if not ready:
+            return
+        # Prefer a worker that reported real device info; among those, a
+        # downgraded one is the most important to surface.
+        informed = [w for w in ready if w.get("device")]
+        chosen = None
+        for w in informed:
+            if w.get("downgraded"):
+                chosen = w
+                break
+        if chosen is None and informed:
+            chosen = informed[-1]
+        if chosen is None:
+            return
+
+        device = str(chosen.get("device") or "").lower()
+        compute_type = str(chosen.get("compute_type") or "")
+        downgraded = bool(chosen.get("downgraded"))
+
+        if device == "cuda":
+            kind = "gpu"
+            text = f"GPU - CUDA {compute_type}".strip()
+        elif downgraded:
+            kind = "cpu_downgraded"
+            text = f"GPU unavailable, using CPU - {compute_type or 'int8'} (slower)"
+        else:
+            kind = "cpu"
+            text = f"CPU - {compute_type or 'int8'} (slower)"
+
+        apply = getattr(app, "apply_device_badge", None)
+        if callable(apply):
+            apply(text, kind, chosen)
+
+        # One-time CPU warning: only when on CPU AND either a real downgrade
+        # happened OR a GPU tier was detected-but-unusable. Never nag on a
+        # genuine CPU-only box (nothing the user can act on).
+        if device != "cuda":
+            self._maybe_warn_cpu(downgraded, chosen)
+
+    def _maybe_warn_cpu(self, downgraded: bool, worker: dict[str, Any]) -> None:
+        """Show the one-time CPU warning the first time it's warranted.
+
+        Gated by the ``cpu_warning_shown`` config flag so it never repeats.
+        Only fires when the situation is actionable: a CUDA->CPU downgrade
+        happened, or a GPU tier was detected on the host but is unusable. A
+        plain CPU-only machine with no GPU at all is left alone.
+        """
+        app = self.app
+        if app.app_config.get("cpu_warning_shown"):
+            return
+        gpu_detected_unusable = False
+        if not downgraded:
+            # Was a GPU tier detected on this host but not actually usable?
+            try:
+                from core import hardware as _hw
+                tiers = _hw.probe_tiers()
+                gpu_detected_unusable = any(
+                    t.device == "cuda" for t in tiers
+                ) and not _hw.cuda_load_ok()
+            except Exception:  # noqa: BLE001
+                gpu_detected_unusable = False
+        if not (downgraded or gpu_detected_unusable):
+            return
+        warn = getattr(app, "warn_cpu_once", None)
+        if callable(warn):
+            warn(downgraded)
+        app.app_config["cpu_warning_shown"] = True
+        try:
+            from core.config import save_config
+            save_config(app.app_config)
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not persist cpu_warning_shown flag")
 
     # Lifecycle ---------------------------------------------------------------
     def start_standby(self) -> None:
@@ -279,6 +364,12 @@ class TranscriptionService:
                 "ready": False,
                 "task": None,
                 "temporary": temporary,
+                # R3: effective device reported by the worker's "ready"
+                # event. Defaults cover an OLD worker that omits the fields.
+                "device": "",
+                "compute_type": "",
+                "requested_device": "",
+                "downgraded": False,
                 # Audit A4: per-worker UUID echoed back in every event
                 # so PID recycling can't misroute an old event onto a
                 # new worker.
@@ -504,6 +595,15 @@ class TranscriptionService:
                 app.model_status(event.get("message", ""))
             elif event_type == "ready":
                 worker["ready"] = True
+                # R3: the worker's ready event additively carries the device
+                # it actually loaded onto. .get() defaults keep an OLD worker
+                # (no device fields) working — it just leaves these blank.
+                worker["device"] = str(event.get("device", "") or "")
+                worker["compute_type"] = str(event.get("compute_type", "") or "")
+                worker["requested_device"] = str(
+                    event.get("requested_device", "") or ""
+                )
+                worker["downgraded"] = bool(event.get("downgraded", False))
                 self.update_model_state()
                 # If this is the worker an ensure_worker_ready() call is
                 # awaiting, unblock it (headless Event) and close its modal.
@@ -563,7 +663,7 @@ class TranscriptionService:
             elif event_type == "worker_exit":
                 worker["ready"] = False
                 worker["process"] = None
-                if worker["task"] and worker["task"].status == "running":
+                if worker["task"] and worker["task"].status in ("running", "paused"):
                     worker["task"].status = "error"
                     app.log(f"Transcription worker exited with code {event.get('return_code')}")
                     self.finish_task(worker, keep_status=True)
@@ -806,6 +906,9 @@ class TranscriptionService:
         # Phase 3a — finalise the history row.
         app = self.app
         history = getattr(app, "history", None)
+        # Best-effort word count + audio duration from the produced JSON
+        # sidecar (computed once; reused by history + the usage-stats POST).
+        word_count, audio_duration = self._derive_transcript_stats(task)
         if history is not None and getattr(task, "history_id", 0):
             import time as _time
             try:
@@ -833,9 +936,13 @@ class TranscriptionService:
                     output_paths=paths,
                     duration_seconds=float(duration),
                     language=getattr(task, "detected_language", "") or "",
+                    word_count=word_count,
                 )
             except Exception as e:  # noqa: BLE001
                 app.log(f"history record update failed: {e}")
+        # P4-4 — opt-in usage stats POST (best-effort, daemon thread, swallows
+        # all errors). post_stats_async re-checks telemetry_opt_in + stats_url.
+        self._post_usage_stats(task, word_count, audio_duration)
         # If this task was auto-spawned from a download, the Download row
         # mirrored "transcribing" + live progress while it ran. It's
         # terminal now (finished / error / cancelled) — restore that row to
@@ -856,3 +963,64 @@ class TranscriptionService:
         app.update_overall_progress()
         if worker.get("temporary") and not any(t.status == "waiting" for t in app.queue):
             self.retire_worker(worker)
+
+    def _derive_transcript_stats(self, task: Any) -> tuple[int, float]:
+        """Best-effort ``(word_count, audio_duration)`` from a produced JSON
+        sidecar. Returns ``(0, 0.0)`` when no JSON output is found or it can't
+        be parsed — never raises (stats are best-effort)."""
+        from core import stats as _stats
+        try:
+            paths = list(getattr(task, "output_paths", None) or [])
+            json_path = next(
+                (p for p in paths if str(p).lower().endswith(".json")), ""
+            )
+            if not json_path and getattr(task, "file_path", ""):
+                cand = os.path.splitext(task.file_path)[0] + ".json"
+                if os.path.isfile(cand):
+                    json_path = cand
+            if not json_path or not os.path.isfile(json_path):
+                return 0, 0.0
+            with open(json_path, "r", encoding="utf-8") as f:
+                segments = json.load(f)
+            if not isinstance(segments, list):
+                return 0, 0.0
+            return (
+                _stats.count_words_in_segments(segments),
+                _stats.audio_duration_from_segments(segments),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("could not derive transcript stats: %s", e)
+            return 0, 0.0
+
+    def _post_usage_stats(
+        self, task: Any, word_count: int, audio_duration: float
+    ) -> None:
+        """Fire the opt-in usage-stats POST (best-effort, off-thread).
+
+        Gated inside ``core.stats.post_stats_async`` on
+        ``telemetry_opt_in`` + a non-empty ``stats_url`` — a no-op otherwise.
+        """
+        from core import stats as _stats
+        app = self.app
+        try:
+            import time as _time
+            ai_time = (
+                (_time.time() - task.start_time) if task.start_time else 0.0
+            )
+            model = str(
+                (app.app_config.get("model") or {}).get("name")
+                or app.app_config.get("whisper_model")
+                or ""
+            )
+            payload = _stats.build_stats_payload(
+                file_name=getattr(task, "file_path", "") or "",
+                model=model,
+                language=getattr(task, "detected_language", "") or "",
+                audio_duration=audio_duration,
+                transcription_time=ai_time,
+                status=getattr(task, "status", "") or "",
+                word_count=word_count,
+            )
+            _stats.post_stats_async(app.app_config, payload)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("usage stats wiring skipped: %s", e)

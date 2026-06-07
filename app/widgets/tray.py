@@ -93,6 +93,11 @@ class TrayController:
         self._icon: Any = None
         self._thread: threading.Thread | None = None
         self._active = False
+        # Set by stop() so the runner's finally can tell a deliberate
+        # teardown (on_exit) from an unexpected tray crash. On a crash we
+        # must un-strand a window that was minimised-to-tray; on a clean
+        # stop the app is exiting anyway, so we leave the window alone.
+        self._stopping = False
 
     def is_supported(self) -> bool:
         # macOS: pystray's AppKit backend must run its event loop on the
@@ -132,13 +137,13 @@ class TrayController:
                 finally:
                     # Mark the controller dead so later set_active /
                     # notify calls don't operate on a corpse. Bounce
-                    # back to the Tk thread to null out app.tray so
-                    # the rest of the app stops dispatching to us.
+                    # back to the Tk thread to null out app.tray (so the
+                    # rest of the app stops dispatching to us) and, on an
+                    # unexpected death, restore the window if it was
+                    # minimised-to-tray.
                     self._icon = None
                     try:
-                        self.app.post_to_main(
-                            lambda: setattr(self.app, "tray", None)
-                        )
+                        self.app.post_to_main(self._on_runner_exit)
                     except Exception:  # noqa: BLE001
                         pass
 
@@ -148,7 +153,38 @@ class TrayController:
             logger.warning("Could not start tray icon: %s", e)
             self._icon = None
 
+    def _on_runner_exit(self) -> None:
+        """Runs on the Tk main thread when the tray runner thread exits.
+
+        Always nulls ``app.tray`` so nothing else dispatches to a dead
+        controller. On an UNEXPECTED exit (not a deliberate ``stop()``),
+        also restore a window that was minimised to the tray: the tray
+        icon was the only way back, so leaving it withdrawn would strand
+        the app as an invisible background process the user can only kill
+        from Task Manager.
+        """
+        try:
+            setattr(self.app, "tray", None)
+        except Exception:  # noqa: BLE001
+            pass
+        if self._stopping:
+            return
+        # Un-strand a withdrawn (minimised-to-tray) window.
+        try:
+            state = self.app.state()
+        except Exception:  # noqa: BLE001
+            state = ""
+        if state == "withdrawn":
+            try:
+                self.app.deiconify()
+                self.app.lift()
+            except Exception:  # noqa: BLE001
+                pass
+
     def stop(self) -> None:
+        # Deliberate teardown: tell the runner's finally NOT to re-show
+        # the window (the app is exiting).
+        self._stopping = True
         if self._icon is None:
             return
         try:

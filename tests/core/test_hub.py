@@ -31,17 +31,72 @@ def test_resolve_app_dir_frozen_returns_exe_dir(monkeypatch, tmp_path):
     assert hub.resolve_app_dir() == tmp_path
 
 
+# ---------- tiling_tab_enabled ------------------------------------------------
+
+
+def test_tiling_tab_enabled_when_no_marker(monkeypatch, tmp_path):
+    """No no_tiling.flag in the app dir → Video Tiling is enabled (the
+    default; this is the dev / opted-in case)."""
+    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    assert (tmp_path / hub.NO_TILING_MARKER).exists() is False
+    assert hub.tiling_tab_enabled() is True
+
+
+def test_tiling_tab_disabled_when_marker_present(monkeypatch, tmp_path):
+    """A no_tiling.flag marker in the app dir (installer opt-out) →
+    Video Tiling is disabled / the tab is hidden."""
+    (tmp_path / hub.NO_TILING_MARKER).write_text("", encoding="utf-8")
+    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    assert hub.tiling_tab_enabled() is False
+
+
+def test_tiling_tab_enabled_defaults_on_filesystem_error(monkeypatch):
+    """A filesystem error while probing the marker must never block
+    startup — it defaults to enabled (the feature stays on)."""
+    def _boom() -> Path:
+        raise OSError("simulated FS failure")
+
+    monkeypatch.setattr(hub, "resolve_app_dir", _boom)
+    assert hub.tiling_tab_enabled() is True
+
+
 # ---------- default_hub_folder -------------------------------------------------
 
 
-def test_default_hub_folder_is_app_dir_slash_hub(monkeypatch, tmp_path):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
-    assert hub.default_hub_folder() == tmp_path / hub.HUB_SUBFOLDER_NAME
+def test_default_hub_folder_is_under_user_cache_not_app_dir(monkeypatch, tmp_path):
+    """The default hub must live under user_cache_dir() —
+    %LOCALAPPDATA%\\WhisperProject\\Cache\\models on Windows — NEVER under
+    the install / app dir. A Program Files default was not writable for
+    a standard (non-admin) user, so the first-run model download failed
+    with "Access is denied". Regression for R5.
+    """
+    from core import config as _cfg
+    cache_root = tmp_path / "cache"
+    monkeypatch.setattr(_cfg, "user_cache_dir", lambda: cache_root)
+    # Point resolve_app_dir() somewhere DIFFERENT so we can prove the
+    # default no longer derives from it.
+    app_dir = tmp_path / "app"
+    monkeypatch.setattr(hub, "resolve_app_dir", lambda: app_dir)
+
+    result = hub.default_hub_folder()
+    assert result == cache_root / hub.HUB_SUBFOLDER_NAME
+    # And it must NOT be under the app/install dir.
+    assert not hub.is_path_inside(result, app_dir)
 
 
-def test_default_hub_subfolder_name_is_hub():
-    """The user explicitly asked for the sub-folder to be named 'hub'."""
-    assert hub.HUB_SUBFOLDER_NAME == "hub"
+def test_default_hub_matches_model_cache_fallback():
+    """The default hub MUST equal model_folder_for's empty-hub fallback
+    (``user_cache_dir() / "models"``) so an existing model already in
+    %LOCALAPPDATA%\\WhisperProject\\Cache\\models is reused, not silently
+    re-downloaded (~3 GB) into a divergent folder. Regression for the R5
+    follow-up (the original fix used a separate 'hub' sub-folder).
+    """
+    assert hub.HUB_SUBFOLDER_NAME == "models"
+    # The bare fallback and the configured default must point to the same
+    # per-model directory.
+    assert hub.model_folder_for(None, "x") == hub.model_folder_for(
+        str(hub.default_hub_folder()), "x"
+    )
 
 
 # ---------- is_hub_configured -------------------------------------------------
@@ -70,7 +125,7 @@ def test_is_hub_configured_true_for_any_non_blank_value():
 
 
 def test_normalise_hub_path_empty_returns_default(monkeypatch, tmp_path):
-    monkeypatch.setattr(hub, "resolve_app_dir", lambda: tmp_path)
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     assert hub.normalise_hub_path("") == str(tmp_path / hub.HUB_SUBFOLDER_NAME)
     assert hub.normalise_hub_path(None) == str(tmp_path / hub.HUB_SUBFOLDER_NAME)  # type: ignore[arg-type]
 
@@ -145,8 +200,13 @@ def test_is_path_inside_false_for_unrelated_paths():
 
 def test_derive_hub_from_legacy_model_path():
     """Reverse-derive: hub = parent(model_path) when model_path looks
-    like ``hub/models--Systran--<name>``."""
-    model_path = r"C:\Users\me\AppData\Local\WhisperProject\Cache\models\models--Systran--faster-whisper-large-v3"
+    like ``hub/models--Systran--<name>``. Build the path with the native
+    separator (via Path) so the test exercises real derivation on both
+    Windows and POSIX; a hardcoded Windows string is one component on POSIX
+    and would never parse into parent parts."""
+    model_path = str(
+        Path("hub_root", "models", "models--Systran--faster-whisper-large-v3")
+    )
     out = hub.derive_hub_from_model_path(model_path)
     assert out.endswith("models")
     assert "Systran" not in out

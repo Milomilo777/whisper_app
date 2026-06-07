@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import math
 import os
 import shutil
 import sys
 import tempfile
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +42,15 @@ DEFAULT_CONFIG = {
     "download_subtitle_lang": "Automatic",
     "auto_update_yt_dlp": False,
     "last_yt_dlp_update_check": "",
+    # Optional, opt-in GitHub "update available" check (core.updates).
+    # When enabled, a quiet launch check (once per day, throttled via
+    # last_update_check) and a Help-menu manual check ask GitHub for the
+    # latest release tag and offer to open the download page — they NEVER
+    # auto-download or auto-install, and a private-repo 404 / offline box
+    # fails silently. last_update_check is the ISO date (YYYY-MM-DD) of
+    # the last quiet check, used only for the once-per-day throttle.
+    "update_check_enabled": True,
+    "last_update_check": "",
     # Browser to read cookies from for yt-dlp, so login-walled / age-gated
     # content downloads using the user's logged-in session (Facebook,
     # Instagram, TikTok stories; some YouTube Shorts). Empty = off. One of
@@ -45,6 +59,10 @@ DEFAULT_CONFIG = {
     "cookies_from_browser": "",
     "theme": "dark",
     "log_level": "INFO",
+    # R3: set once the first time a one-time "running on CPU (slower)"
+    # warning has been shown, so it never nags again. Defaulted here so
+    # reads are always a plain bool (no KeyError / wrong-type trap).
+    "cpu_warning_shown": False,
     # Phase 2a — Whisper masterpiece
     "vad_enabled": True,
     "vad_min_silence_ms": 500,
@@ -76,6 +94,69 @@ DEFAULT_CONFIG = {
     # default; whisper_cpp is opt-in via pywhispercpp; future backends slot in
     # here).
     "transcribe_backend": "faster_whisper",
+    # OPTIONAL cloud Speech-to-Text backend (Google Gemini API). Off
+    # unless the user selects transcribe_backend="cloud_stt". The API
+    # key is stored in CLEARTEXT here, consistent with how cookies and
+    # paths are already stored — config.json lives per-user under
+    # %LOCALAPPDATA%\WhisperProject and is not encrypted. Using this
+    # backend UPLOADS audio to Google (breaks the offline guarantee).
+    # cloud_stt_minutes_used is tracked LOCALLY (the $ free credit is
+    # NOT readable from an API key); cloud_stt_free_minutes_cap is just
+    # the informational free-tier figure shown in the UI.
+    "cloud_stt_api_key": "",
+    "cloud_stt_model": "gemini-3.5-flash",
+    "cloud_stt_minutes_used": 0.0,
+    "cloud_stt_free_minutes_cap": 60,
+    "cloud_stt_chunk_seconds": 480,
+    # OPTIONAL REAL Google **Cloud** Speech-to-Text v2 backend (distinct
+    # from the Gemini-API cloud_stt above). Off unless the user selects
+    # transcribe_backend="google_cloud_stt". Unlike Gemini, it authenticates
+    # with a service-account JSON FILE (NOT a pasted key) — the user picks
+    # the .json they downloaded from the Google Cloud console; project_id is
+    # read out of that file. Using this backend UPLOADS audio to Google
+    # (breaks the offline guarantee).
+    #   gcloud_stt_credentials_json: absolute path to the service-account
+    #     JSON key file (empty = not configured; the backend reports a clear
+    #     "pick your JSON file" error).
+    #   gcloud_stt_model: v2 model name. Default "chirp_2": the app's default
+    #     Transcribe language is "Auto", and chirp_2 supports BOTH auto
+    #     language detection AND explicit BCP-47 codes (the older "long" model
+    #     rejects "auto"). "short"/"long"/"telephony" also valid. Configurable
+    #     so a renamed/new model needs no code change.
+    #   gcloud_stt_location: API location/region. Default "us-central1":
+    #     chirp_2 is a REGIONAL model and does NOT exist in "global", so the
+    #     shipped default must be a region. "global" works for "long"/"short";
+    #     any non-"global" value uses the matching regional endpoint.
+    #   gcloud_stt_batch_mode: False = STANDARD online chunked-inline recognise
+    #     (~$0.016/min, no bucket needed, the default). True = cheaper GCS
+    #     BATCH (~$0.004/min, slower) — REQUIRES gcloud_stt_bucket.
+    #   gcloud_stt_bucket: a Google Cloud Storage bucket name the service
+    #     account can write to; required only for batch mode (the decoded
+    #     audio is uploaded there, transcribed, then the blob is deleted).
+    #   gcloud_stt_diarization: enable speaker diarization (adds a per-segment
+    #     "speaker" label). gcloud_stt_min/max_speakers bound the count
+    #     (0 = let Google decide).
+    #   gcloud_stt_chunk_seconds: STANDARD-mode chunk length; kept under the
+    #     ~1-minute online-recognise inline cap.
+    #   gcloud_stt_batch_timeout_s: how long to wait on the batch
+    #     long-running operation before giving up.
+    #   gcloud_stt_minutes_used / gcloud_stt_minutes_month: LOCAL monthly
+    #     minute counter (the 60-min/month free tier is NOT readable from a
+    #     service-account key, so we track it here and reset on a new month;
+    #     the UI displays it). The marker is a "YYYY-MM" string.
+    "gcloud_stt_credentials_json": "",
+    "gcloud_stt_model": "chirp_2",
+    "gcloud_stt_location": "us-central1",
+    "gcloud_stt_batch_mode": False,
+    "gcloud_stt_bucket": "",
+    "gcloud_stt_diarization": False,
+    "gcloud_stt_min_speakers": 0,
+    "gcloud_stt_max_speakers": 0,
+    "gcloud_stt_chunk_seconds": 55,
+    "gcloud_stt_batch_timeout_s": 3600,
+    "gcloud_stt_minutes_used": 0.0,
+    "gcloud_stt_minutes_month": "",
+    "gcloud_stt_free_minutes_cap": 60,
     # v0.8 — hallucination detector (BoH + repetition + optional VAD
     # disagreement). Flags segments in the JSON output and the viewer.
     "hallucination_detect_enabled": True,
@@ -111,11 +192,161 @@ DEFAULT_CONFIG = {
     # ``models--Vendor--name`` subdirectories. Empty by default so
     # ``app.dialogs.hub_setup`` fires its first-run picker. The
     # picker pre-fills ``core.hub.default_hub_folder()`` =
-    # ``<app_dir>/hub``. ``model_path`` (above) remains as a per-
-    # model override for users with an existing config; new
-    # installs derive ``model_path`` from ``hub_folder + model.name``.
+    # ``%LOCALAPPDATA%\WhisperProject\Cache\models`` (a per-user,
+    # always-writable location — NOT under the Program Files install
+    # dir, which is not writable for a standard user).
+    # ``model_path`` (above) remains as a per-model override for users
+    # with an existing config; new installs derive ``model_path`` from
+    # ``hub_folder + model.name``.
     "hub_folder": "",
+    # Video Tiling tab — persisted UI choices for the tiling engine
+    # (core.tiling.TilingController). quality is a band from
+    # core.tiling.QUALITY_CHOICES ("Auto"/"1080p"/…/"144p"); multi_monitor
+    # fans the one download out to one ffplay per selected monitor; the
+    # selected list holds spatial monitor indices from core.monitors
+    # (0 = left-most); auto_restart reconnects with backoff on a drop.
+    "tiling_quality": "Auto",
+    "tiling_mute": False,
+    "tiling_multi_monitor": False,
+    "tiling_selected_monitors": [],
+    "tiling_auto_restart": True,
+    # Optional local-network / web HTTP job server (``gui.py serve`` and the
+    # one-click toggle on the Web / LAN access tab).
+    # Defaulted here so reads never KeyError and pyright sees the type.
+    # ``server_port`` is the default listen port; ``server_max_upload_mb``
+    # caps a single upload (the worker's 1 MB command guard does NOT cover
+    # browser uploads). The server binds loopback by default — LAN access
+    # is an explicit opt-in (the only path that triggers the Windows firewall
+    # prompt):
+    #   server_share_lan  — when True the GUI toggle binds 0.0.0.0 (all
+    #     interfaces, so other devices on the network can reach it) instead
+    #     of 127.0.0.1 (this machine only). Persisted from the
+    #     "Share on local network" checkbox. The CLI uses --lan instead.
+    #   server_token  — optional shared secret. When non-empty, every request
+    #     must present it (X-Auth-Token header or ?token= query). Stored in
+    #     CLEARTEXT here, consistent with cookies / API keys — config.json is
+    #     per-user under %LOCALAPPDATA%\WhisperProject and is not encrypted.
+    "server_port": 8765,
+    "server_max_upload_mb": 512,
+    "server_share_lan": False,
+    "server_token": "",
+    # Window / privacy toggles set on the Advanced dialog's General tab and
+    # read at runtime. Defaulted here (both OFF) so reads are always a plain
+    # bool and they get the same merge + type-coercion protection as every
+    # other key:
+    #   minimise_to_tray  — when True the window's X button hides to the system
+    #     tray instead of exiting (app.py close handler + widgets.tray).
+    #   telemetry_opt_in  — when True an anonymous launch ping is sent
+    #     (app.observability); OFF means the telemetry module is inert.
+    "minimise_to_tray": False,
+    "telemetry_opt_in": False,
+    # --- Three-level config: ONLINE layer (P4-1) -------------------------
+    # URL of an app-level JSON config the maintainer hosts, fetched on
+    # startup so APP-LEVEL settings (model catalog, stats endpoint, latest
+    # version, ffplay download links) can change WITHOUT redistributing the
+    # program. The fetch is best-effort: a short timeout, a cached copy
+    # under user_cache_dir(), and a fall-through to the hard-coded defaults
+    # when offline — it NEVER blocks or crashes startup.
+    #
+    # OWNER ACTION: replace this placeholder with the real URL on the
+    # maintainer's host (e.g. a raw GitHub file or this smch.ir path). Until
+    # a valid JSON lives there, the app silently uses the built-in defaults.
+    "config_url": "https://smch.ir/whisper/app_config.json",
+    # Catalog of selectable Whisper models, in the same shape as
+    # core.model_manager.MODEL_REGISTRY (slug → {label, name, url, md5,
+    # approx_size_gb}). Empty by default: the built-in MODEL_REGISTRY is the
+    # baseline. The ONLINE config can ADD/OVERRIDE entries here so new models
+    # ship without an app update; a LOCAL override file can pin its own.
+    "model_catalog": {},
+    # App-level URLs/info that the ONLINE config is allowed to set. Defaulted
+    # here (empty/placeholder) so reads never KeyError. ``stats_url`` is the
+    # usage-stats POST endpoint; ``latest_version`` is the newest published
+    # version string; ``ffplay_downloads`` maps a platform key
+    # ("windows"/"macos"/...) to a download URL for the Video-Tiling ffplay
+    # binary (which is NOT bundled). All three are SAFE for the online layer
+    # to control.
+    "stats_url": "",
+    "latest_version": "",
+    # ffplay (Video Tiling) is NOT bundled. When it's missing, the app can
+    # auto-download it from the platform's URL here (see
+    # core.tiling.download_ffplay). The value maps a platform key
+    # ("windows"/"macos"/"linux") to either a DIRECT ffplay[.exe] URL or a
+    # .zip of a full ffmpeg build that CONTAINS ffplay[.exe] (the helper
+    # extracts just ffplay).
+    #
+    # OWNER ACTION — VERIFY / OVERRIDE THESE VIA THE ONLINE CONFIG. The
+    # defaults below point at well-known public static-ffmpeg builds, but
+    # third-party URLs rot and their archive layout can change. Confirm they
+    # still resolve to an ffmpeg build that includes ffplay, then host the
+    # canonical values in the online app config (config_url) so they can be
+    # corrected without an app update.
+    #
+    # The download helper only handles a direct ffplay[.exe] URL or a .ZIP
+    # that contains it (stdlib zipfile) — NOT .7z / .tar.xz. The Windows
+    # default below is a BtbN full build shipped as a .zip (contains
+    # bin/ffplay.exe); macOS evermeet.cx serves a per-binary ffplay .zip.
+    "ffplay_downloads": {
+        "windows": (
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+            "ffmpeg-master-latest-win64-gpl.zip"
+        ),
+        "macos": "https://evermeet.cx/ffmpeg/getrelease/ffplay/zip",
+        "linux": "",
+    },
 }
+
+
+# Keys the ONLINE config is allowed to set/override. The online layer must
+# NEVER touch user-private / local-only settings — paths, API keys,
+# credentials, the model hub folder, or any user preference. Only this
+# APP-LEVEL allowlist is honoured from the fetched JSON; everything else in
+# the online payload is dropped. (Precedence is still local > online >
+# hard-coded — see ``merge_config_sources``.)
+ONLINE_ALLOWED_KEYS: frozenset[str] = frozenset({
+    "model_catalog",
+    "stats_url",
+    "latest_version",
+    "ffplay_downloads",
+})
+
+
+# Hard cap on the online-config response body. config_url defaults to a
+# third-party host; a compromised/MITM endpoint streaming a multi-GB body
+# would otherwise be buffered whole into memory at startup. 2 MB is far
+# above any legitimate app-config JSON, so an oversized body is treated as
+# hostile and we fall through to the cache instead of parsing it.
+MAX_CONFIG_BYTES = 2 * 1024 * 1024
+
+
+def _reject_nonfinite(value: str) -> float:
+    """``json`` ``parse_constant`` hook that rejects Infinity/-Infinity/NaN.
+
+    Python's JSON parser accepts these non-standard literals by default,
+    which then poison numeric coercion downstream (``int(float('inf'))``
+    raises ``OverflowError``; NaN compares false to everything). Raising
+    here turns such a payload into a ``ValueError``, so the caller treats
+    the file as corrupt and reverts to defaults / the cache.
+    """
+    raise ValueError(f"non-finite JSON literal not allowed: {value!r}")
+
+
+def online_cache_path() -> Path:
+    """Path of the cached last-good online config under the cache dir."""
+    return user_cache_dir() / "app_config_cache.json"
+
+
+# Process-lifetime memo of the fetched online config, so the many
+# ``load_config()`` callers in one process (worker import, backends,
+# dialogs) don't each pay a network round-trip / timeout. Keyed by URL.
+# ``refresh_online_config()`` clears it for an explicit re-check.
+_ONLINE_MEMO: dict[str, dict[str, Any]] = {}
+_ONLINE_MEMO_LOCK = threading.Lock()
+
+
+def refresh_online_config() -> None:
+    """Forget the in-process online-config memo so the next load re-fetches."""
+    with _ONLINE_MEMO_LOCK:
+        _ONLINE_MEMO.clear()
 
 
 def _legacy_config_path() -> str:
@@ -228,17 +459,24 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
     # explicit model_path wins → hub_folder + model_name → the same
     # default_hub_folder() value the first-run dialog suggests.
     #
-    # Using default_hub_folder() (not user_cache_dir) as the empty-
-    # hub fallback fixes a re-download race: the hub-setup dialog is
-    # asynchronous, so the worker subprocess starts before the user
-    # has clicked OK. If the worker downloads to user_cache_dir and
-    # the user then accepts the dialog's <app_dir>/hub default, the
-    # next launch resolves model_path to <app_dir>/hub and triggers
-    # a full re-download. Aligning the fallback with the dialog
-    # default means "accept default" is a no-op for the model
-    # location.
+    # Using default_hub_folder() as the empty-hub fallback fixes a
+    # re-download race: the hub-setup dialog is asynchronous, so the
+    # worker subprocess starts before the user has clicked OK. If the
+    # worker resolved a different path than the dialog's default, the
+    # next launch (with hub_folder now saved) would resolve a new
+    # model_path and trigger a full re-download. Aligning the fallback
+    # with default_hub_folder() — now %LOCALAPPDATA%\...\Cache\models —
+    # means "accept default" is a no-op for the model location.
     if not model_path or not _drive_is_mounted(model_path):
-        model_name = (config.get("model") or {}).get("name") or "whisper-model"
+        # Defensive coercion: the top-level type pass in load_config only
+        # validates that ``model`` is a dict, not the nested ``name``. A
+        # hand-edited / externally-produced config of ``{"model": {"name":
+        # 123}}`` would reach hub.model_folder_for, whose ``name.strip()``
+        # then raises AttributeError and crashes launch. Treat any non-string
+        # name as absent and fall back to the placeholder.
+        raw_name = (config.get("model") or {}).get("name")
+        model_name = (raw_name.strip() if isinstance(raw_name, str) else "") \
+            or "whisper-model"
         effective_hub = hub_folder or str(_hub.default_hub_folder())
         source = "hub_folder" if hub_folder else "default_hub_fallback"
         try:
@@ -273,6 +511,10 @@ def _apply_runtime_fallbacks(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _merge_with_defaults(loaded: dict[str, Any]) -> dict[str, Any]:
+    # Retained as a single-layer (local-over-hardcoded) merge helper. The
+    # canonical effective-config path is now the three-layer
+    # ``merge_config_sources`` used by ``load_config``; this remains for
+    # callers/tests that want only the defaults+local overlay.
     merged = json.loads(json.dumps(DEFAULT_CONFIG))
     for key, value in loaded.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -282,40 +524,259 @@ def _merge_with_defaults(loaded: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def load_config() -> dict[str, Any]:
-    migrate_config_location()
+# --- Three-level merged configuration (P4-1) --------------------------------
+#
+# Sources, merged with priority ``local file > online config > hard-coded
+# DEFAULT_CONFIG`` (a key missing from a higher-priority source falls through
+# to the next). The online layer is restricted to ``ONLINE_ALLOWED_KEYS`` so
+# it can change APP-LEVEL settings (model catalog, stats endpoint, latest
+# version, ffplay links) WITHOUT touching user-private / local-only keys
+# (paths, API keys, hub folder, credentials, user preferences). The merge is
+# PURE/testable (the three dicts are injected); fetching the online layer is a
+# separate, best-effort helper that caches its last good result and never
+# blocks or crashes startup.
+
+
+def merge_config_sources(
+    hardcoded: dict[str, Any],
+    online: dict[str, Any] | None,
+    local: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge the three config layers by precedence: local > online > hardcoded.
+
+    - ``hardcoded`` is the full baseline (``DEFAULT_CONFIG``).
+    - ``online`` is the fetched app-level config; only keys in
+      ``ONLINE_ALLOWED_KEYS`` are honoured, so it can never override
+      user-private / local-only settings (paths, keys, hub folder, prefs).
+    - ``local`` is the user's ``config.json`` (highest priority); it may set
+      any key, including the local-only ones the online layer cannot touch.
+
+    Dict-valued keys are deep-merged so a partial override (e.g. one new
+    ``model_catalog`` slug, or ``model.name`` alone) keeps the sibling keys
+    from the lower layer. A key missing from a higher-priority source falls
+    through to the next. The function is pure: inputs are never mutated and a
+    fresh dict is returned.
+    """
+    merged: dict[str, Any] = json.loads(json.dumps(hardcoded))
+    if online:
+        safe_online = {
+            k: v for k, v in online.items() if k in ONLINE_ALLOWED_KEYS
+        }
+        deep_merge_dicts(merged, safe_online)
+    if local:
+        deep_merge_dicts(merged, local)
+    return merged
+
+
+def fetch_online_config(
+    url: str,
+    *,
+    timeout: float = 4.0,
+    cache_path: Path | None = None,
+) -> dict[str, Any]:
+    """Fetch the app-level online config JSON, with a cache fallback.
+
+    Best-effort and FAIL-SAFE — it never raises and never blocks startup for
+    long:
+      1. GET ``url`` (stdlib urllib only) with a short ``timeout``.
+      2. On a successful JSON-object response, write it to ``cache_path``
+         (the last-good cache) and return it.
+      3. On ANY failure (offline, timeout, HTTP error, bad JSON), fall back
+         to the cached copy at ``cache_path`` if present and valid.
+      4. If there is no usable cache either, return ``{}`` — the caller then
+         uses only the hard-coded + local layers.
+
+    ``cache_path`` defaults to ``online_cache_path()``. An empty ``url``
+    short-circuits to the cache (then to ``{}``), so disabling the online
+    layer is just clearing ``config_url``.
+    """
+    if cache_path is None:
+        cache_path = online_cache_path()
+
+    # Refuse non-http(s) config URLs: a file:// / ftp:// / custom scheme would let
+    # urlopen read a local file (or reach an internal host — SSRF) and cache it.
+    if url and urllib.parse.urlparse(url).scheme.lower() not in ("http", "https"):
+        logger.warning(
+            "online config_url %r uses a non-http(s) scheme; refusing it", url
+        )
+        url = ""
+
+    if url:
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "WhisperProject"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                # Reject an oversized body BEFORE buffering it whole: a
+                # hostile/MITM host could stream multiple GB and exhaust
+                # memory on the launch path. The Content-Length (if sent)
+                # is an early-out; the capped read defends against a body
+                # that lies about or omits its length. ``getattr`` keeps
+                # this tolerant of a response object without ``.headers``.
+                headers = getattr(resp, "headers", None)
+                clen = headers.get("Content-Length") if headers is not None else None
+                if isinstance(clen, str) and clen.strip().isdigit():
+                    if int(clen) > MAX_CONFIG_BYTES:
+                        raise ValueError(
+                            f"online config Content-Length {clen} exceeds "
+                            f"{MAX_CONFIG_BYTES} bytes"
+                        )
+                raw = resp.read(MAX_CONFIG_BYTES + 1)
+            if len(raw) > MAX_CONFIG_BYTES:
+                raise ValueError(
+                    f"online config body exceeds {MAX_CONFIG_BYTES} bytes"
+                )
+            data = json.loads(
+                raw.decode("utf-8"), parse_constant=_reject_nonfinite
+            )
+            if isinstance(data, dict):
+                try:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_text(
+                        json.dumps(data), encoding="utf-8"
+                    )
+                except OSError as e:
+                    logger.warning("Could not cache online config: %s", e)
+                return data
+            logger.warning("Online config at %s is not a JSON object", url)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            # URLError covers offline / timeout / HTTP errors; ValueError
+            # covers a JSON parse failure (and UnicodeDecodeError, a
+            # ValueError). Fall through to the cache.
+            logger.info(
+                "Online config fetch failed (%s); using cache if available", e
+            )
+
+    try:
+        cached = json.loads(
+            cache_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite,
+        )
+        if isinstance(cached, dict):
+            return cached
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _read_local_config() -> dict[str, Any]:
+    """Read the user's ``config.json`` and return it as a dict.
+
+    Returns ``{}`` when the file is missing (a fresh install) and on a
+    corrupt / non-object file (which is renamed aside to ``.corrupt`` so the
+    next launch starts clean). Never raises — a bad local file degrades to
+    "use the online + hard-coded layers", not a crashed launch.
+    """
     path = config_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
+            # parse_constant rejects the non-standard Infinity/-Infinity/NaN
+            # literals (which json.load accepts by default). A non-finite
+            # numeric poisons int()/float() coercion downstream (e.g.
+            # int(float('inf')) raises OverflowError on an int-typed key),
+            # so treat such a file as corrupt and revert to defaults.
+            loaded = json.load(f, parse_constant=_reject_nonfinite)
     except FileNotFoundError:
         logger.warning("config.json not found at %s; using defaults", path)
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
     except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as e:
         # UnicodeDecodeError is a ValueError that escapes the OSError
         # branch (e.g. cp1252 bytes saved by an external editor); the
         # original try/except missed it and crashed launch. ValueError
-        # also catches any other JSON parser-internal raises.
+        # also catches any other JSON parser-internal raises (including the
+        # non-finite-literal rejection above).
         logger.error("Failed to read config.json (%s); using defaults", e)
         try:
             os.replace(path, path + ".corrupt")
             logger.info("Moved corrupt config to %s.corrupt", path)
         except OSError:
             pass
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
 
     if not isinstance(loaded, dict):
         logger.error("config.json is not a JSON object; using defaults")
-        return _apply_runtime_fallbacks(json.loads(json.dumps(DEFAULT_CONFIG)))
+        return {}
+    return loaded
 
-    merged = _merge_with_defaults(loaded)
+
+def load_config(*, fetch_online: bool = True) -> dict[str, Any]:
+    """Return the effective config from the three merged layers.
+
+    Precedence: ``local config.json`` > ``online app config`` > hard-coded
+    ``DEFAULT_CONFIG`` (see ``merge_config_sources``). The online layer is
+    fetched best-effort with a cache fallback and is restricted to
+    ``ONLINE_ALLOWED_KEYS``; pass ``fetch_online=False`` (or clear
+    ``config_url``) to skip the network entirely and use only the local +
+    hard-coded layers — useful in tests and for an offline-only run.
+    """
+    migrate_config_location()
+    local = _read_local_config()
+
+    # The online config URL itself can be overridden locally (an expert can
+    # point at a staging URL); otherwise the hard-coded default is used.
+    # Distinguish "key absent" (use the default URL) from "key present and
+    # empty" (the user deliberately blanked it to opt out of the network
+    # fetch): an explicit "" must STAY empty so it short-circuits below,
+    # otherwise ``"" or default`` would silently restore the third-party URL
+    # and still phone home for a privacy/offline-conscious user.
+    config_url = ""
+    if fetch_online:
+        if "config_url" in local:
+            config_url = str(local["config_url"] or "")
+        else:
+            config_url = str(DEFAULT_CONFIG["config_url"])
+    online: dict[str, Any] = {}
+    if config_url:
+        with _ONLINE_MEMO_LOCK:
+            cached = _ONLINE_MEMO.get(config_url)
+        if cached is not None:
+            online = cached
+        else:
+            online = fetch_online_config(config_url)
+            with _ONLINE_MEMO_LOCK:
+                _ONLINE_MEMO[config_url] = online
+
+    merged = merge_config_sources(DEFAULT_CONFIG, online, local)
     # Coerce / drop wrong-type values for keys that ship a default —
     # e.g. parallel_workers="many" survives the merge and downstream
     # int() crashes later. Drop the bad value (restore default).
     for k, default in DEFAULT_CONFIG.items():
-        if k in merged and merged[k] is not None and not isinstance(
-            merged[k], type(default)
+        if k not in merged:
+            continue
+        # A null (JSON ``null`` / Python None) from the online or local layer
+        # used to slip past the type check below (it was gated on
+        # ``merged[k] is not None``), leaving None where a typed value is
+        # expected — a later int()/strip()/iteration then crashes. When the
+        # key ships a non-None default, drop the null and restore the default.
+        if merged[k] is None:
+            if default is not None:
+                logger.warning(
+                    "config key %r is null; reverting to default %r", k, default
+                )
+                merged[k] = json.loads(json.dumps(default))
+            continue
+        # Reject a non-finite numeric (inf / -inf / nan) for any key that
+        # ships a numeric default, even when its Python type already matches
+        # (e.g. a float-typed vad_threshold left as float('inf')). Such a
+        # value passes the isinstance check below but poisons everything
+        # downstream — int(inf) raises OverflowError, nan compares false to
+        # all bounds. ``bool`` is an int subclass but is always finite, so
+        # exclude it. _read_local_config already rejects these at parse time;
+        # this guards values arriving via the online layer or in-memory.
+        if (
+            isinstance(default, (int, float))
+            and not isinstance(default, bool)
+            and isinstance(merged[k], (int, float))
+            and not isinstance(merged[k], bool)
+            and not math.isfinite(merged[k])
         ):
+            logger.warning(
+                "config key %r is non-finite (%r); reverting to default %r",
+                k, merged[k], default,
+            )
+            merged[k] = json.loads(json.dumps(default))
+            continue
+        if not isinstance(merged[k], type(default)):
             # Special-case: bool defaults accept int (Python's bool is int).
             if isinstance(default, bool) and isinstance(merged[k], int):
                 merged[k] = bool(merged[k])
@@ -324,10 +785,13 @@ def load_config() -> dict[str, Any]:
             if isinstance(default, (int, float)) and isinstance(
                 merged[k], (int, float)
             ):
+                # OverflowError guards int(float('inf')); a non-finite that
+                # somehow reaches here (the finiteness check above normally
+                # handles it) reverts to the default rather than crashing.
                 try:
                     merged[k] = type(default)(merged[k])
                     continue
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     pass
             logger.warning(
                 "config key %r has wrong type %s (expected %s); "
@@ -363,21 +827,37 @@ def _persistable_model_path(config: dict[str, Any]) -> str:
     if not raw:
         return ""
     model = config.get("model")
-    model_name = (model.get("name") if isinstance(model, dict) else "") or "whisper-model"
+    raw_name = model.get("name") if isinstance(model, dict) else ""
+    # A non-string nested name (e.g. {"model": {"name": 123}}) must not reach
+    # hub.model_folder_for, whose name.strip() would raise AttributeError.
+    model_name = (raw_name.strip() if isinstance(raw_name, str) else "") \
+        or "whisper-model"
     hub_folder = (config.get("hub_folder") or "").strip()
 
     def _norm(p: str) -> str:
         return os.path.normcase(os.path.normpath(os.path.abspath(p)))
 
-    derived: set[str] = set()
+    def _same_path(a: str, b: str) -> bool:
+        # os.path.samefile (st_dev/st_ino) is authoritative on case-insensitive
+        # macOS (APFS) / Windows volumes when both paths exist; os.path.normcase
+        # only folds case on Windows (identity on POSIX), so use it only as the
+        # fallback for a path that is not yet on disk.
+        try:
+            if os.path.exists(a) and os.path.exists(b):
+                return os.path.samefile(a, b)
+        except OSError:
+            pass
+        return _norm(a) == _norm(b)
+
     for h in (hub_folder, str(_hub.default_hub_folder())):
         if not h:
             continue
         try:
-            derived.add(_norm(str(_hub.model_folder_for(h, model_name))))
+            if _same_path(raw, str(_hub.model_folder_for(h, model_name))):
+                return ""
         except ValueError:
             continue
-    return "" if _norm(raw) in derived else raw
+    return raw
 
 
 def _persistable_download_folder(config: dict[str, Any]) -> str:
@@ -392,17 +872,34 @@ def _persistable_download_folder(config: dict[str, Any]) -> str:
     until the drive returns. (Same spirit as _persistable_model_path:
     don't let a session-only repair leak into a permanent loss.)
     """
-    current = (config.get("download_folder") or "").strip()
+    # A non-string download_folder (e.g. a hand-edited config.json with
+    # an int or list) must not reach .strip(), which would raise an
+    # uncaught AttributeError and crash save_config. Mirror the
+    # model.name guard in _persistable_model_path: treat anything that
+    # is not a str as empty, so a corrupt value normalises to "".
+    def _as_str(value: Any) -> str:
+        return value.strip() if isinstance(value, str) else ""
+
+    current = _as_str(config.get("download_folder"))
     if current:
         return current
     try:
         with open(config_path(), "r", encoding="utf-8") as f:
-            on_disk = json.load(f)
+            # Mirror the non-finite guard used by _read_local_config /
+            # fetch_online_config: this re-reads the raw on-disk config
+            # directly, bypassing _read_local_config's guard, so without
+            # parse_constant an Infinity/-Infinity/NaN literal would be
+            # accepted here too — and a non-finite download_folder value
+            # then crashes the .strip() below (AttributeError, uncaught).
+            # Treat such a file as corrupt: _reject_nonfinite raises a
+            # ValueError, already handled by the except, so we fall back
+            # to the in-memory value.
+            on_disk = json.load(f, parse_constant=_reject_nonfinite)
     except (OSError, ValueError):
         return current
     if not isinstance(on_disk, dict):
         return current
-    prev = (on_disk.get("download_folder") or "").strip()
+    prev = _as_str(on_disk.get("download_folder"))
     if prev and not _drive_is_mounted(prev):
         return prev
     return current
@@ -547,10 +1044,20 @@ def deep_merge_dicts(dest: dict[str, Any], src: dict[str, Any]) -> dict[str, Any
     Unlike ``dict.update``, nested dicts are walked depth-first so a
     project override of ``{"model": {"name": "tiny"}}`` keeps every
     other key under ``model`` (``url``, ``md5`, …) intact.
+
+    A mutable value (dict / list) that has no dict counterpart in ``dest``
+    is deep-COPIED in, never aliased. Otherwise a nested object from ``src``
+    (e.g. a ``model_catalog`` slug entry absent from ``dest``) would be
+    shared by reference; a later merge that recurses into it would then
+    mutate the original ``src`` object in place. Since ``merge_config_sources``
+    feeds the memoized ``_ONLINE_MEMO`` value as a merge source, that aliasing
+    let a local override permanently rewrite the process-wide online cache.
     """
     for k, v in src.items():
         if isinstance(v, dict) and isinstance(dest.get(k), dict):
             deep_merge_dicts(dest[k], v)
+        elif isinstance(v, (dict, list)):
+            dest[k] = copy.deepcopy(v)
         else:
             dest[k] = v
     return dest

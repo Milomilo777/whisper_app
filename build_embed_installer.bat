@@ -84,6 +84,14 @@ xcopy /E /I /Y "%ROOT%core" "%BUILD%\core" >nul
 xcopy /E /I /Y "%ROOT%bin" "%BUILD%\bin" >nul
 copy "%ROOT%gui.py" "%BUILD%\" >nul
 
+REM The xcopy /E above already brings core\server\ (incl. static\) along.
+REM Verify the optional LAN/web server's static page shipped so a broken
+REM "gui.py serve" mode fails the build loudly instead of silently.
+if not exist "%BUILD%\core\server\static\index.html" (
+    echo [embed] ERROR: core\server\static\index.html missing from embed tree
+    exit /b 1
+)
+
 echo [embed] writing the portable launcher
 > "%BUILD%\Run Whisper Project.bat" echo @echo off
 >> "%BUILD%\Run Whisper Project.bat" echo cd /d "%%~dp0"
@@ -103,6 +111,23 @@ REM loudly instead of silently re-introducing the docx-never-written bug.
 "%BUILD%\python\python.exe" -c "import faster_whisper, ctranslate2, sv_ttk, platformdirs, tkinter, docx, reportlab; print('embed_import_ok')"
 if errorlevel 1 (
   echo [embed] sanity import failed — bundle is incomplete
+  exit /b 5
+)
+
+REM Import the newer core modules too (they are Tk-free + dependency-light)
+REM so a future prune or a syntax error in any of them fails the build
+REM loudly here instead of only crashing at runtime: the format converter,
+REM usage stats, LAN/web server, the Google Cloud STT backend, the SMTV
+REM docx writer, and the monitors / updates helpers.
+echo [embed] sanity import check (core modules)
+REM Run with the bundle root as cwd so the bundled core/ package is on
+REM sys.path (site-packages alone does not contain it).
+pushd "%BUILD%"
+"%BUILD%\python\python.exe" -c "import core.convert, core.stats, core.server, core.backends.google_cloud_stt, core.writers.smtv_docx_writer, core.monitors, core.updates; print('embed_core_import_ok')"
+set _CORE_RC=%errorlevel%
+popd
+if not "%_CORE_RC%"=="0" (
+  echo [embed] core sanity import failed — a core module is missing or broken
   exit /b 5
 )
 

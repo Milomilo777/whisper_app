@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whisper Project</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #161616; color: #e8e8e8; margin: 0; padding: 0;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px 16px 64px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: #8a8a8a; font-size: .85rem; margin: 0 0 16px; }
+  nav { display: flex; gap: 6px; margin: 0 0 18px; border-bottom: 1px solid #333; }
+  nav a {
+    color: #bbb; text-decoration: none; padding: 8px 14px; font-size: .9rem;
+    border-bottom: 2px solid transparent; cursor: pointer;
+  }
+  nav a.active { color: #9cf; border-bottom-color: #2d6cdf; }
+  fieldset { border: 1px solid #333; border-radius: 8px; margin: 0 0 16px; padding: 14px 16px; }
+  legend { padding: 0 6px; color: #9ad; font-size: .85rem; }
+  label { display: block; margin: 6px 0; }
+  input[type=text], input[type=url], input[type=number], select {
+    width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid #444; background: #222; color: #eee; font-size: .95rem;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > label { flex: 1 1 160px; }
+  .fmts { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 6px; }
+  .fmts label, .opt label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
+  .opt label { display: block; margin: 6px 0; }
+  details summary { cursor: pointer; color: #9ad; font-size: .9rem; padding: 6px 0; }
+  button {
+    background: #2d6cdf; color: #fff; border: 0; border-radius: 6px;
+    padding: 10px 18px; font-size: .95rem; cursor: pointer;
+  }
+  button.mini { padding: 4px 10px; font-size: .8rem; margin-right: 6px; }
+  button.ghost { background: #333; }
+  button:disabled { background: #444; cursor: default; }
+  .or { text-align: center; color: #666; margin: 4px 0; font-size: .8rem; }
+  #submitStatus { margin-top: 18px; }
+  .bar { height: 10px; background: #333; border-radius: 5px; overflow: hidden; margin: 8px 0; }
+  .bar > span { display: block; height: 100%; width: 0; background: #2d6cdf; transition: width .3s; }
+  .links a { display: inline-block; margin: 4px 10px 4px 0; color: #6cf; }
+  .err { color: #f77; }
+  .note { color: #8a8a8a; font-size: .8rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2a2a; vertical-align: top; }
+  th { color: #9ad; font-weight: 600; }
+  .src { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .minibar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; width: 90px; }
+  .minibar > span { display: block; height: 100%; background: #2d6cdf; }
+  .seg { margin: 0 0 8px; }
+  .seg .t { color: #6a9; font-size: .75rem; }
+  .seg .spk { color: #d9a; font-weight: 600; margin-right: 6px; }
+  .hidden { display: none; }
+  .tokbox { margin: 0 0 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Whisper Project</h1>
+  <p class="sub">Local transcription server. Upload a file or paste a link, pick options, and download the result.</p>
+
+  <nav>
+    <a data-view="submit" class="active">Submit</a>
+    <a data-view="jobs">Jobs</a>
+    <a data-view="result">Result</a>
+  </nav>
+
+  <fieldset class="tokbox">
+    <legend>Auth token (if the server requires one)</legend>
+    <input type="text" id="token" placeholder="leave blank if none">
+  </fieldset>
+
+  <!-- ============ Submit view ============ -->
+  <section id="view-submit">
+    <fieldset>
+      <legend>Source</legend>
+      <label>Upload audio/video<br>
+        <input type="file" id="file" accept="audio/*,video/*">
+      </label>
+      <div class="or">— or —</div>
+      <label>Link (YouTube, etc.)<br>
+        <input type="url" id="url" placeholder="https://...">
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Output formats</legend>
+      <div class="fmts" id="fmts"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Language</legend>
+      <label>Spoken language (Auto = detect)<br>
+        <select id="lang"></select>
+      </label>
+    </fieldset>
+
+    <details>
+      <summary>Advanced options</summary>
+      <fieldset class="opt">
+        <label><input type="checkbox" id="o_vad" checked> Voice activity detection (skip silence)</label>
+        <div class="row">
+          <label>VAD threshold (0–1)
+            <input type="number" id="o_vad_threshold" min="0" max="1" step="0.05" placeholder="0.5">
+          </label>
+          <label>VAD min silence (ms)
+            <input type="number" id="o_vad_min_silence_ms" min="0" step="50" placeholder="500">
+          </label>
+        </div>
+        <label><input type="checkbox" id="o_word_timestamps"> Per-word timestamps</label>
+        <label id="diar_row"><input type="checkbox" id="o_diarization_enabled"> Identify speakers (diarization)</label>
+        <label>Number of speakers (blank / -1 = auto)
+          <input type="number" id="o_diarization_num_speakers" min="-1" step="1" placeholder="auto">
+        </label>
+        <label><input type="checkbox" id="o_demucs_enabled"> Demucs vocal separation (slower)</label>
+        <label><input type="checkbox" id="o_hallucination_detect_enabled" checked> Flag likely hallucinations</label>
+        <label><input type="checkbox" id="o_auto_chapters_enabled" checked> Auto-chapter markers</label>
+        <div class="row">
+          <label>Clip start (sec, optional)
+            <input type="number" id="o_clip_start" min="0" step="1" placeholder="">
+          </label>
+          <label>Clip end (sec, optional)
+            <input type="number" id="o_clip_end" min="0" step="1" placeholder="">
+          </label>
+        </div>
+      </fieldset>
+    </details>
+
+    <button id="start">Start transcription</button>
+    <div id="submitStatus"></div>
+    <p class="note" id="caveat"></p>
+  </section>
+
+  <!-- ============ Jobs view ============ -->
+  <section id="view-jobs" class="hidden">
+    <p class="note">Auto-refreshes every 2 seconds while this tab is open.</p>
+    <table>
+      <thead>
+        <tr><th>Source</th><th>Status</th><th>Progress</th><th>Formats</th><th>Controls</th></tr>
+      </thead>
+      <tbody id="jobsBody"></tbody>
+    </table>
+    <p class="note" id="jobsEmpty"></p>
+  </section>
+
+  <!-- ============ Result view ============ -->
+  <section id="view-result" class="hidden">
+    <fieldset>
+      <legend>Job</legend>
+      <label>Job id
+        <input type="text" id="resultJobId" placeholder="paste or open from Jobs">
+      </label>
+      <button id="loadResult" class="ghost">Load</button>
+    </fieldset>
+    <div id="resultStatus"></div>
+    <fieldset id="transcriptBox" class="hidden">
+      <legend>Transcript</legend>
+      <div id="transcript"></div>
+    </fieldset>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- token plumbing (unchanged auth contract) ----
+  function tokenVal() { return document.getElementById("token").value.trim(); }
+  function authHeaders() {
+    var t = tokenVal();
+    return t ? { "X-Auth-Token": t } : {};
+  }
+  function tokenQuery(sep) {
+    var t = tokenVal();
+    return t ? (sep + "token=" + encodeURIComponent(t)) : "";
+  }
+
+  // ---- view routing (hash based) ----
+  var views = ["submit", "jobs", "result"];
+  var jobsTimer = null;
+  function showView(name) {
+    if (views.indexOf(name) < 0) { name = "submit"; }
+    views.forEach(function (v) {
+      document.getElementById("view-" + v).classList.toggle("hidden", v !== name);
+    });
+    document.querySelectorAll("nav a").forEach(function (a) {
+      a.classList.toggle("active", a.getAttribute("data-view") === name);
+    });
+    if (jobsTimer) { clearInterval(jobsTimer); jobsTimer = null; }
+    if (name === "jobs") { refreshJobs(); jobsTimer = setInterval(refreshJobs, 2000); }
+  }
+  document.querySelectorAll("nav a").forEach(function (a) {
+    a.addEventListener("click", function () {
+      location.hash = a.getAttribute("data-view");
+    });
+  });
+  window.addEventListener("hashchange", function () {
+    showView((location.hash || "#submit").slice(1));
+  });
+
+  // ---- Submit view ----
+  var fmtBox = document.getElementById("fmts");
+  var langSel = document.getElementById("lang");
+  var startBtn = document.getElementById("start");
+  var submitStatus = document.getElementById("submitStatus");
+  var submitPollTimer = null;
+
+  var LANG_NAMES = {
+    "": "Auto-detect", en: "English", ar: "Arabic", zh: "Chinese", cs: "Czech",
+    da: "Danish", nl: "Dutch", fi: "Finnish", fr: "French", de: "German",
+    el: "Greek", he: "Hebrew", hi: "Hindi", hu: "Hungarian", id: "Indonesian",
+    it: "Italian", ja: "Japanese", ko: "Korean", no: "Norwegian", fa: "Persian",
+    pl: "Polish", pt: "Portuguese", ro: "Romanian", ru: "Russian", es: "Spanish",
+    sv: "Swedish", th: "Thai", tr: "Turkish", uk: "Ukrainian", vi: "Vietnamese"
+  };
+
+  function loadOptions() {
+    fetch("/api/options", { headers: authHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var formats = d.formats || ["srt", "txt", "json"];
+        var defaults = { srt: true, txt: true };
+        fmtBox.innerHTML = "";
+        formats.forEach(function (f) {
+          var lab = document.createElement("label");
+          lab.innerHTML = '<input type="checkbox" value="' + f + '"' +
+            (defaults[f] ? " checked" : "") + "> " + f;
+          fmtBox.appendChild(lab);
+        });
+        var langs = d.languages || [""];
+        langSel.innerHTML = "";
+        langs.forEach(function (code) {
+          var opt = document.createElement("option");
+          opt.value = code;
+          opt.textContent = LANG_NAMES[code] || code;
+          langSel.appendChild(opt);
+        });
+        if (d.diarization_available === false) {
+          var dr = document.getElementById("diar_row");
+          document.getElementById("o_diarization_enabled").disabled = true;
+          dr.appendChild(document.createTextNode(" (unavailable on this server)"));
+        }
+      })
+      .catch(function () { fmtBox.textContent = "Could not reach the server."; });
+  }
+
+  function chosenFormats() {
+    var out = [];
+    fmtBox.querySelectorAll("input:checked").forEach(function (cb) { out.push(cb.value); });
+    return out;
+  }
+
+  function numOrUndef(id) {
+    var v = document.getElementById(id).value.trim();
+    if (v === "") { return undefined; }
+    var n = Number(v);
+    return isNaN(n) ? undefined : n;
+  }
+
+  function gatherOptions() {
+    var o = {
+      vad_enabled: document.getElementById("o_vad").checked,
+      word_timestamps: document.getElementById("o_word_timestamps").checked,
+      diarization_enabled: document.getElementById("o_diarization_enabled").checked,
+      demucs_enabled: document.getElementById("o_demucs_enabled").checked,
+      hallucination_detect_enabled: document.getElementById("o_hallucination_detect_enabled").checked,
+      auto_chapters_enabled: document.getElementById("o_auto_chapters_enabled").checked
+    };
+    var vt = numOrUndef("o_vad_threshold");
+    if (vt !== undefined) { o.vad_threshold = vt; }
+    var vms = numOrUndef("o_vad_min_silence_ms");
+    if (vms !== undefined) { o.vad_min_silence_ms = vms; }
+    var ns = numOrUndef("o_diarization_num_speakers");
+    if (ns !== undefined) { o.diarization_num_speakers = ns; }
+    var cs = numOrUndef("o_clip_start");
+    if (cs !== undefined) { o.clip_start = cs; }
+    var ce = numOrUndef("o_clip_end");
+    if (ce !== undefined) { o.clip_end = ce; }
+    return o;
+  }
+
+  function setSubmitStatus(html) { submitStatus.innerHTML = html; }
+
+  function start() {
+    var file = document.getElementById("file").files[0];
+    var url = document.getElementById("url").value.trim();
+    var formats = chosenFormats();
+    var lang = langSel.value;
+    if (!file && !url) { setSubmitStatus('<p class="err">Pick a file or paste a link.</p>'); return; }
+    if (!formats.length) { setSubmitStatus('<p class="err">Choose at least one format.</p>'); return; }
+
+    startBtn.disabled = true;
+    setSubmitStatus("<p>Submitting...</p>");
+    var opts = gatherOptions();
+
+    var req = { method: "POST", headers: authHeaders() };
+    if (file) {
+      var fd = new FormData();
+      fd.append("file", file);
+      fd.append("formats", formats.join(","));
+      fd.append("language", lang);
+      Object.keys(opts).forEach(function (k) { fd.append(k, String(opts[k])); });
+      req.body = fd;
+    } else {
+      req.headers = Object.assign({ "Content-Type": "application/json" }, authHeaders());
+      var payload = { url: url, formats: formats, language: lang };
+      Object.keys(opts).forEach(function (k) { payload[k] = opts[k]; });
+      req.body = JSON.stringify(payload);
+    }
+
+    fetch("/api/jobs", req)
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.d.error || "submit failed"); }
+        pollSubmit(res.d.job_id);
+      })
+      .catch(function (e) {
+        setSubmitStatus('<p class="err">' + e.message + "</p>");
+        startBtn.disabled = false;
+      });
+  }
+
+  function pollSubmit(jobId) {
+    if (submitPollTimer) { clearInterval(submitPollTimer); }
+    submitPollTimer = setInterval(function () {
+      fetch("/api/jobs/" + jobId, { headers: authHeaders() })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { renderSubmit(jobId, j); })
+        .catch(function () { /* transient */ });
+    }, 1500);
+  }
+
+  function downloadLink(jobId, fmt, name) {
+    var href = "/api/jobs/" + jobId + "/result?fmt=" + encodeURIComponent(fmt) +
+      tokenQuery("&");
+    return '<a href="' + href + '" download>' + name + "</a>";
+  }
+
+  function renderSubmit(jobId, j) {
+    var html = "<p>Status: <b>" + j.status + "</b>" + (j.paused ? " (paused)" : "") + "</p>";
+    html += '<div class="bar"><span style="width:' + (j.progress || 0) + '%"></span></div>';
+    if (j.status === "error") { html += '<p class="err">' + (j.error || "failed") + "</p>"; }
+    if (j.status === "finished" || j.status === "error" || j.status === "cancelled") {
+      clearInterval(submitPollTimer);
+      startBtn.disabled = false;
+    }
+    if (j.outputs && j.outputs.length) {
+      html += '<div class="links">';
+      j.outputs.forEach(function (o) { html += downloadLink(jobId, o.fmt, o.name); });
+      html += "</div>";
+      html += '<p class="note"><a data-open="' + jobId + '" class="openresult">View transcript →</a></p>';
+    }
+    setSubmitStatus(html);
+    var open = submitStatus.querySelector(".openresult");
+    if (open) {
+      open.style.cursor = "pointer"; open.style.color = "#6cf";
+      open.addEventListener("click", function () {
+        document.getElementById("resultJobId").value = jobId;
+        location.hash = "result";
+        loadResult();
+      });
+    }
+  }
+
+  // ---- Jobs view ----
+  var jobsBody = document.getElementById("jobsBody");
+  var jobsEmpty = document.getElementById("jobsEmpty");
+
+  function refreshJobs() {
+    fetch("/api/jobs", { headers: authHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { renderJobs(d.jobs || []); })
+      .catch(function () { jobsEmpty.textContent = "Could not reach the server."; });
+  }
+
+  function ctrlBtn(label, jobId, action, cls) {
+    return '<button class="mini ' + (cls || "ghost") + '" data-act="' + action +
+      '" data-id="' + jobId + '">' + label + "</button>";
+  }
+
+  function renderJobs(jobs) {
+    if (!jobs.length) { jobsBody.innerHTML = ""; jobsEmpty.textContent = "No jobs yet."; return; }
+    jobsEmpty.textContent = "";
+    var rows = jobs.map(function (j) {
+      var terminal = (j.status === "finished" || j.status === "error" || j.status === "cancelled");
+      var ctrls = "";
+      if (!terminal) {
+        ctrls += j.paused ? ctrlBtn("Resume", j.job_id, "resume")
+                          : ctrlBtn("Pause", j.job_id, "pause");
+        ctrls += ctrlBtn("Cancel", j.job_id, "cancel");
+      } else {
+        ctrls += '<a class="openjob" data-id="' + j.job_id + '" style="color:#6cf;cursor:pointer">Result</a>';
+      }
+      var statusTxt = j.status + (j.paused ? " (paused)" : "");
+      return "<tr><td class=\"src\" title=\"" + escapeHtml(j.source) + "\">" + escapeHtml(j.source) +
+        "</td><td>" + statusTxt + "</td><td><div class=\"minibar\"><span style=\"width:" +
+        (j.progress || 0) + "%\"></span></div></td><td>" + (j.formats || []).join(", ") +
+        "</td><td>" + ctrls + "</td></tr>";
+    });
+    jobsBody.innerHTML = rows.join("");
+    jobsBody.querySelectorAll("button[data-act]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var id = b.getAttribute("data-id"), act = b.getAttribute("data-act");
+        fetch("/api/jobs/" + id + "/" + act, { method: "POST", headers: authHeaders() })
+          .then(refreshJobs).catch(function () {});
+      });
+    });
+    jobsBody.querySelectorAll(".openjob").forEach(function (a) {
+      a.addEventListener("click", function () {
+        document.getElementById("resultJobId").value = a.getAttribute("data-id");
+        location.hash = "result";
+        loadResult();
+      });
+    });
+  }
+
+  // ---- Result view ----
+  var resultStatus = document.getElementById("resultStatus");
+  var transcriptBox = document.getElementById("transcriptBox");
+  var transcriptEl = document.getElementById("transcript");
+
+  function loadResult() {
+    var jobId = document.getElementById("resultJobId").value.trim();
+    if (!jobId) { resultStatus.innerHTML = '<p class="err">Enter a job id.</p>'; return; }
+    transcriptBox.classList.add("hidden");
+    resultStatus.innerHTML = "<p>Loading...</p>";
+    fetch("/api/jobs/" + jobId, { headers: authHeaders() })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { throw new Error(res.d.error || "not found"); }
+        renderResult(jobId, res.d);
+      })
+      .catch(function (e) { resultStatus.innerHTML = '<p class="err">' + e.message + "</p>"; });
+  }
+
+  function renderResult(jobId, j) {
+    var html = "<p>Status: <b>" + j.status + "</b></p>";
+    if (j.outputs && j.outputs.length) {
+      html += '<div class="links">';
+      j.outputs.forEach(function (o) { html += downloadLink(jobId, o.fmt, o.name); });
+      html += "</div>";
+    } else {
+      html += '<p class="note">No outputs yet.</p>';
+    }
+    resultStatus.innerHTML = html;
+    var hasJson = (j.outputs || []).some(function (o) { return o.fmt === "json"; });
+    if (hasJson) { fetchTranscript(jobId); }
+  }
+
+  function fetchTranscript(jobId) {
+    fetch("/api/jobs/" + jobId + "/result?fmt=json", { headers: authHeaders() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) { renderTranscript(data); } })
+      .catch(function () { /* json may not be a requested format */ });
+  }
+
+  function fmtTime(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    var m = Math.floor(s / 60), sec = s % 60;
+    return m + ":" + (sec < 10 ? "0" : "") + sec;
+  }
+
+  function renderTranscript(data) {
+    // Tolerate either {segments:[...]} or a bare array.
+    var segs = (data && data.segments) ? data.segments : (Array.isArray(data) ? data : []);
+    if (!segs.length) { return; }
+    var parts = segs.map(function (seg) {
+      var t = '<span class="t">[' + fmtTime(seg.start) + "]</span> ";
+      var spk = seg.speaker ? '<span class="spk">' + escapeHtml(String(seg.speaker)) + "</span>" : "";
+      return '<p class="seg">' + t + spk + escapeHtml(String(seg.text || "").trim()) + "</p>";
+    });
+    transcriptEl.innerHTML = parts.join("");
+    transcriptBox.classList.remove("hidden");
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  // ---- wire up ----
+  document.getElementById("caveat").textContent =
+    "Note: your audio is uploaded to the host running this server, and link " +
+    "(URL) jobs are fetched by the server itself. Use only on a trusted network.";
+  startBtn.addEventListener("click", start);
+  document.getElementById("loadResult").addEventListener("click", loadResult);
+  loadOptions();
+  showView((location.hash || "#submit").slice(1));
+})();
+</script>
+</body>
+</html>

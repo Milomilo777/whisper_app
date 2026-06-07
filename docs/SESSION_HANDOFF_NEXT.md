@@ -5,19 +5,391 @@ this repo. Read this file before anything else.
 
 ---
 
-## 0. Latest session — senior-architect deep audit (2026-05-29)
+## ⭐ CURRENT STATE (2026-06-07, end of the completeness push) — read this first
+
+- **Unified branch is `macos-ci`** (tip ~`5a632c3`). It carries EVERYTHING: this
+  session's Windows-side work + the macOS session's commits (convert/config/spec/CI/QA
+  + their tiny-model E2E). Local `master` was reset to equal `origin/macos-ci`, so they
+  are reconverged — future commits go on `master` and push as a fast-forward to `macos-ci`.
+  `origin/master` is still `53fc8b2` ON PURPOSE (never pushed — it fires the costly ci.yml
+  matrix; the macos-ci → master merge + the v1.3.8 release are the OWNER's call).
+- **Bug state:** a find-until-dry adversarial sweep ran to convergence — 6 rounds fixed
+  ~20 real bugs (5+4+3+3+3+2), severity collapsing HIGH/security/data-loss → all-LOW → dry.
+  Plus the earlier 44-bug fixpack + the macОS 88-candidate triage. Every fix has a hermetic
+  regression test. pyright `app/ core/` = 0/0/0. Hermetic suite green (the only non-green is a
+  Python-3.14 multi-Tk-root dev-env flake that passes in isolation; the shipped 3.11 runtime +
+  the macOS CI 3.11/3.12 don't have it). **macOS CI build is GREEN on real hardware.**
+- **Artifacts:** `dist_installer/WhisperProject-v1.3.8-Setup-Standard.exe` + `-Portable.zip`,
+  rebuilt from the unified tree, launch-smoke verified (window "Whisper Project v1.3.8").
+- **Bundled Google Cloud key (owner-authorized, trusted-distribution):** both Windows builds
+  bundle the service-account JSON at `creds/gcloud_stt.json`; the backend
+  (`bundled_credentials_path()` in `core/backends/google_cloud_stt.py`) auto-uses it when no
+  user key is set, so a friend can pick "Google Cloud STT" without pasting a key. Default
+  backend stays **offline** (faster_whisper). **SECURITY: the key file is NEVER committed**
+  (gitignored: `creds/` + `gcloud_stt.json`); it lives ONLY in the local build tree
+  `embed_build/creds/`. So the macOS `.app` built on CI does NOT carry the key (the CI checkout
+  has no `creds/`) — if friends need cloud STT on macOS too, the macOS session must drop the
+  same JSON into its build. The key is revocable: rotate the SA in GCP if any build leaks; scope
+  the SA to Speech-to-Text only + set a GCP budget cap.
+
+---
+
+## 0b. Post-1.3.8 fixes (2026-06-07) — found by live end-to-end testing, on `macos-ci`
+
+Two real defects surfaced by a real offline+online+network E2E run on a 30s clip, a 3-hour
+file, and the LAN server — both fixed, tested, and pushed to `macos-ci` (NOT master):
+- **Server download of non-ASCII output names** (`core/server/httpd.py`): downloading the SMTV
+  `.docx` (en-dash in the name) over `/api/jobs/<id>/result` crashed the handler (http.server
+  latin-1 header encoding). Fixed with RFC 6266 `filename*` + ASCII fallback
+  (`content_disposition_attachment`) + test. Verified: the `.docx` now downloads (valid 4-col table).
+- **Offline time-range on huge files** (`core/transcriber.py`): a time range was passed as
+  faster_whisper `clip_timestamps`, which decodes the WHOLE file — a 3h file hung. Now the
+  offline path PRE-SLICES `[clip_start, clip_end]` via `_slice_audio_from` (fast ffmpeg seek),
+  transcribes only the slice, deletes it, and shifts timestamps back to the original timeline
+  (`_shift_segments`). Whole-file + resume paths untouched. Tests in
+  `tests/core/test_fixpack_timerange_slice.py`. Verified live: a [5,15] range emits an SRT
+  starting at 00:00:05. E2E test inputs live in `%TEMP%\wp_e2e_*`; drivers in `.claude/e2e_*.py`.
+
+These are committed on local `master` too. Remember: push only to `macos-ci` (fetch+rebase via a
+temp branch, never force-push) until the macOS build is green and we merge `macos-ci` → `master` once.
+
+### Round 2 (2026-06-07) — frontend edge-case hunt + macOS-report triage (on `macos-ci`)
+A 50-agent frontend edge-case hunt (16 confirmed) + a 6-cluster triage of the macOS session's
+`BUG_CANDIDATES_for_feature_session.md` (88 candidates, their auto-voting was unreliable so each was
+re-verified against CURRENT code). FIXED + tested + pushed:
+- **Frontend (HIGH):** re-run/resume of a CLIPPED transcription dropped clip_start/clip_end →
+  transcribed the whole file (now preserved in _rerun_task/resume_task/_bulk_rerun/_bulk_resume);
+  App.cancel() now ignores a terminal task; worker_exit marks a PAUSED task as error (was stranded).
+- **Time-range hardening:** start ≥ media duration now errors clearly; pre-slice temp file removed via try/finally.
+- **Security/privacy:** Gemini API key moved from the `?key=` URL into the `x-goog-api-key` header
+  (was leaking into logs); uploaded Gemini Files-API blobs now DELETED after use.
+- **Cloud accounting:** usage minutes no longer billed on cancel / over-counted (bills actual transcribed seconds).
+- **Concurrency:** worker `emit()` now serialises stdout writes (was interleaving/corrupting the frozen
+  JSON protocol); the stdin reader enforces the 1 MB cap WHILE reading (OOM guard was defeated).
+- **LAN server:** multipart text fields placed AFTER the file part were dropped (every upload silently
+  fell back to [srt]+auto) — now re-scanned; a trailing-CRLF appended 2 junk bytes to saved media — fixed.
+- **Data loss:** Recorder.stop() no longer truncates the WAV a still-alive capture thread is writing.
+- **POSIX:** kill_process_tree(force=False) now escalates SIGTERM→SIGKILL (only Windows did before);
+  checkpoint key is now case-folded so resume works on case-insensitive FS.
+Tests in tests/core/test_fixpack_{frontend_edges,cloud,gcloud,worker,server,recorder,proc_ckpt}.py.
+`macos-ci` tip after this round: ~4697e3a. pyright app core 0/0/0.
+
+**REMAINING BACKLOG (lower priority — verified-real but not yet fixed):**
+- Frontend mediums/lows from the hunt (full list in the wf_c7cb6f91-7a6 run output): duplicate concurrent
+  re-run of the same file; stale SMTV episode reused for a different URL; tiling grid size not persisted;
+  server port out-of-range not clamped on Start; directory/empty/non-http/multi-URL drop = silent no-op;
+  download slider knobs can cross; Advanced "Download now" leaks the mousewheel bind; LAN-IP-detect-fail
+  status wording.
+- macOS-report mediums/lows (41+26) NOT triaged this round — e.g. _checkpoint language-validation (needs a
+  signature change), config UNC `.exists()` startup hang, smtv CDN filename sanitize, history lastrowid=0,
+  tiling lock/zombie reaping, writers/base time formatting. Triage each against CURRENT code (lines are stale)
+  before fixing; many may already be guarded.
+
+## 0. Latest session — Phases 1–6 + 44-bug audit fixpack → v1.3.8 (2026-06-06)
+
+**Current state: v1.3.8.** On top of the v1.3.7 baseline: Phase 1 (9
+changes) + Phase 2 (cloud + web/LAN) + Phase 3 (bug fixes + features) +
+Phase 4 (config / multi-model / convert / stats / ffplay) + Phase 5
+(frontend bug-hunt fixes) + Phase 6 (macOS support) + a **44-finding
+adversarial audit fixpack** (each finding skeptic-verified and covered by
+a hermetic regression test). Version bumped to **1.3.8** in the 4 knobs.
+pyright `app/ core/` is 0/0/0 and the FULL hermetic suite is green in
+deterministic order (the two `test_resume_from_cancellation` tests were
+fixed — they now capture the checkpoint fingerprint in-scope, so they pass
+mid-suite and no longer need deselecting).
+
+**Branch / push status (2026-06-06):**
+- All work lives on local `master`. The owner authorised publishing it to
+  the `macos-ci` branch (NOT `master`) so a sibling macOS-CI session can
+  build/test the `.app` on real Apple hardware via GitHub Actions.
+- `macos-ci` was pushed (first at 9c5f1db, then updated with the fixpack +
+  v1.3.8). Pushing `macos-ci` does NOT fire `ci.yml` (its push triggers are
+  master / release/** / feature/** / chore/**), so it does not burn the
+  Windows+Ubuntu Actions minutes. Do NOT push to `master` until the macOS
+  build is green; `macos-ci` → `master` is merged ONCE at the end.
+- Coordination: fetch + rebase onto `macos-ci`'s tip before pushing; never
+  force-push / clobber the macOS session's commits (it owns
+  `.github/workflows/macos-build.yml` and any Mac runtime fixes).
+
+**Artifacts:** rebuild the Setup-Standard + Portable as **v1.3.8** from the
+embed tree (the v1.3.7 artifacts under `dist_installer\` predate the
+fixpack). Incremental rebuild = re-copy HEAD `app/`+`core/`+`gui.py` over
+the tested `embed_build\` runtime → sanity import → ISCC `installer_embed.iss`
+→ `shutil.make_archive` Portable → launch smoke. Helper: `.claude\rebuild_137.ps1`
+(update the version strings to 1.3.8 first, or use a 1.3.8 copy).
+
+> **Reiterate (do not skip):** everything in §0 (Phases 1–3) is **local
+> only** — committed on `master`, **not pushed**, **no version bump / tag**.
+> A release would still need the version bump in the **4 usual places**
+> (`core/__init__.py` `__version__`, `pyproject.toml`, `installer.iss`,
+> `installer_embed.iss` `#define MyAppVersion`) — see §3 — and is only cut
+> when the owner authorises it.
+
+The Phase-1 9 changes (grouped):
+
+- **Model hub default → `%LOCALAPPDATA%\WhisperProject\Cache\models`**
+  (was the install dir → "access is denied" for non-admin users). Added a
+  typed `ModelDestinationNotWritable` + a re-pick flow in the
+  model-download dialog, a writability probe in the hub picker, and aligned
+  the default hub with `model_folder_for`'s empty-hub fallback
+  (`HUB_SUBFOLDER_NAME = "models"`) so an existing `Cache\models` model is
+  **reused, not re-downloaded** (~3 GB). Verified with a real
+  `load_config()` probe on this machine.
+- **GPU/CPU autodetect hardening** — a cheap cuDNN/cuBLAS runtime-load gate
+  (CUDA only when usable); a self-healing model load that falls back to CPU
+  int8 instead of crashing the worker (or falsely prompting a ~3 GB
+  re-download); the effective device reported additively on the worker
+  `ready` event; a live GPU/CPU badge + a one-time "running on CPU (slower)"
+  warning gated to the GPU-detected-but-unusable case (`cpu_warning_shown`).
+- **Always-visible per-task action bars** under both Queue tabs
+  (Pause / Resume / Cancel / Re-run / Remove) + a status-cell click toggle;
+  right-click menu + Esc kept. Download "pause" is stop-and-continue (keeps
+  the `.part`, resumes via yt-dlp `-c`/`--continue`); disabled for SMTV
+  downloads (no resume point).
+- **Network / UNC drag-and-drop fix** — a backslash-preserving, brace-aware
+  splitter so a `\\server\share\file` drop is no longer silently dropped
+  (`tk.splitlist` was collapsing the leading `\\`).
+- **Optional LAN/web server** — `python gui.py serve [--port] [--host]
+  [--lan] [--token] [--max-upload-mb]`. Loopback by default (no firewall
+  prompt); `--lan` is the explicit opt-in. Browser page + JSON API
+  (upload OR URL jobs, progress poll, result download); in-process
+  sequential transcription keeps the model hot; bounded queue + upload cap
+  + optional token; jobs recorded to history. New Tk-free `core/server/`
+  package; new keys `server_port` / `server_max_upload_mb`. Verified live
+  here (`/api/health`, `/api/formats`, `/` all 200).
+- **Multi-monitor Video Tiling rewrite** — a Tk-free engine (ported from
+  the maintainer's `video-tiler` v1.1): one download fanned out to one
+  `ffplay` per selected monitor, `poll()` liveness, exponential-backoff
+  reconnect, self-heal `yt-dlp -U`, robust extraction, http(s) validation,
+  clean teardown via `core._proc.kill_process_tree`. New `core/monitors.py`
+  (screeninfo → ctypes Win32 → single-monitor fallback). New keys
+  `tiling_quality` / `tiling_mute` / `tiling_multi_monitor` /
+  `tiling_selected_monitors` / `tiling_auto_restart`. New optional dep:
+  **screeninfo**.
+- **Optional Google Gemini cloud STT backend** (`cloud_stt`) — paste a free
+  AI Studio API key, transcribe via the Gemini API over stdlib REST
+  (default `gemini-3.5-flash`, configurable), chunked upload via the Files
+  API. Honest *local* minutes counter + a billing-console link. Loud
+  privacy opt-in (uploads audio to Google → breaks the offline guarantee).
+  New keys `cloud_stt_api_key` / `_model` / `_minutes_used` /
+  `_free_minutes_cap` / `_chunk_seconds`.
+- **Opt-in GitHub update check** (notify-only, never auto-installs) in
+  `core/updates.py` + a Help-menu "Check for updates" + a throttled quiet
+  launch check; silent on private-repo/offline/up-to-date. Documented that
+  the Standard installer already upgrades **in place** (stable Inno
+  `AppId`). New keys `update_check_enabled` / `last_update_check`.
+- **Docs-only** — `docs/evaluations/GEMMA4_EVALUATION_2026-06.md`:
+  recommends SKIP of Gemma 4 12B for transcription (30 s cap,
+  torch/BF16/~24 GB VRAM, no word timestamps, no WER win), with a
+  future-adjunct path + hardware-gate sketch.
+
+### Phase 2 — real Google Cloud STT + one-click Web/LAN (same 2026-06-06 batch)
+
+Committed locally on top of the Phase-1 nine (see the `git log` tail:
+`9fd5b3b` … `a2d05f9`). Still LOCAL ONLY, still 1.3.7-labelled.
+
+- **Real Google Cloud Speech-to-Text backend** (`google_cloud_stt`, new
+  `core/backends/google_cloud_stt.py`) — a second, more capable cloud
+  option next to the simple Gemini one. Authenticates with a
+  **service-account JSON file** (NOT a pasted key) via the official
+  `google-cloud-speech` **v2** client, installed **on demand on first use**
+  (`core/optional_deps.py`) — NOT bundled. Two modes: (a) Standard/online —
+  decode via ffmpeg, chunk the local file into ≤ ~55 s pieces, `recognize()`
+  inline per chunk, offset + stitch timestamps, no Cloud Storage (~$0.016/min);
+  (b) Batch — v2 `BatchRecognize` via a user-supplied GCS bucket (`gs://`),
+  `DYNAMIC_BATCHING`, ~$0.004/min (~75 % cheaper) but up to ~24 h turnaround.
+  Word-level timestamps + speaker diarization supported. The earlier Gemini
+  backend (`cloud_stt`) is KEPT as the simple paste-a-key alternative; both
+  labelled in the UI.
+- **Cloud STT settings UI** (`app/dialogs/advanced.py`) — backend dropdown
+  with human labels for both cloud options; a Google Cloud section with a
+  service-account JSON picker, a "How do I get this file?" step-by-step help
+  dialog (clickable links to the exact console pages), a non-blocking
+  **Test connection** button (installs the libs on demand + validates the
+  JSON/auth), a Batch-mode toggle + GCS bucket field, a diarization toggle,
+  and a LIVE usage display.
+- **Free-tier usage tracking** — a LOCAL **monthly** minutes counter (resets
+  each calendar month) + an honest estimated-cost line ("X / 60 free minutes
+  this month; estimated $Y of the $300 credit"), labelled a local estimate
+  with a billing-console link (the real remaining credit is NOT readable
+  from the key). New keys `gcloud_stt_minutes_used` /
+  `gcloud_stt_minutes_month` / `gcloud_stt_free_minutes_cap`.
+- **One-click Web / LAN access** (`app/app.py` + `app/widgets/tabs.py`, a
+  `core/server` `ServerHandle`) — a new **Web / LAN access** tab with a
+  single Start/Stop toggle, a port field (free-port fallback when busy), a
+  **Share on local network** checkbox (loopback default vs `0.0.0.0` with a
+  plain firewall note), an optional access password (token), the reachable
+  URL(s) incl. LAN IP, an **Open in browser** button, non-blocking
+  start/stop, and auto-stop on exit. New keys `server_share_lan` /
+  `server_token` (`server_port` / `server_max_upload_mb` already existed).
+- **About dialog enriched** (`app/app.py` `_show_about`) — a "What's new"
+  section + plain-language descriptions of all the cloud options, Web/LAN
+  access, per-task controls, multi-monitor tiling, and the update check /
+  in-place upgrade, with clickable helpful links.
+- **New docs** — `docs/CLOUD_STT_GOOGLE.md` (service-account setup + batch +
+  honest usage note); `docs/SERVER.md` updated for the one-click toggle. All
+  new `gcloud_stt_*` / `server_*` keys documented in `docs/CONFIG.md`.
+
+### Phase 3 — bug fixes + features + live-verified Google Cloud STT (same 2026-06-06 batch)
+
+Committed locally on top of Phase 2. Still LOCAL ONLY, still 1.3.7-labelled,
+NOT pushed, NO version bump. From a reported-issues list + a deep
+adversarial review. Full user-facing bullets in `docs/CHANGELOG.md`
+`[Unreleased]` (`#### Phase 3` blocks under Added / Changed / Fixed / Docs).
+
+Bug fixes:
+- **Web / LAN: every job crashed** with `'_CancelledTask' object has no
+  attribute 'paused'` — the server task object now mirrors the engine's
+  read contract (renamed `_ServerTask`); test fakes hardened.
+- **"View transcript" closed the whole app** — libvlc `set_hwnd` on an
+  unrealized Tk window (a native crash that bypassed `try`/`except`). Fixed
+  by deferring the HWND bind until the window is mapped + a graceful
+  fallback; the viewer now opens the actual transcript `.json` (no spurious
+  file-picker).
+- **"Re-detect hardware" froze the UI** — the probe ran on the Tk main
+  thread (+ an unbounded cuDNN/cuBLAS `ctypes.CDLL` probe). Fixed: runs
+  off-thread behind a generation-token guard + a timeout-bounded DLL probe.
+- **Queue per-task action bar was unusable** — the 500 ms `refresh()`
+  rebuilt the tree and wiped the selection; selection is now preserved
+  across the rebuild.
+- **Off-thread Tk writes fixed** — the Video Tiling log callback + 4
+  Advanced-dialog worker handlers now marshal through the main thread (new
+  `App.log_threadsafe`); tiling status colour now applied.
+- **Smaller** — status-cell click defers via `after_idle`; `start_tiling`
+  guards a bad grid spinbox; `pause_download` only pauses a running
+  download; theme + download-folder `save_config` guarded;
+  `minimise_to_tray` / `telemetry_opt_in` added to `DEFAULT_CONFIG`;
+  multi-file enqueue gates the model once; Advanced mouse-wheel binding
+  released on close; server handle registered before `start()`.
+
+Features:
+- **VLC transcript preview seek/scrub transport bar** — draggable position,
+  `MM:SS` readout, ±5 s / ±10 s skip, keyboard; degrades gracefully without
+  VLC.
+- **Web / LAN feature parity** — per-job advanced options (VAD, word
+  timestamps, diarization, clip range, …) via a per-job
+  `.whisperproject.json` override; `GET /api/jobs` list; pause / resume
+  routes; outputs from the engine's `task.output_paths`; a 3-view browser
+  UI (Submit / Jobs / Result with inline transcript); streaming uploads (no
+  full-RAM buffering); HTTP hardening (body-drain on early reject,
+  constant-time token compare). Cloud / alt backends are NOT per-job
+  switchable over the web (security boundary).
+- **"SMTV transcription" docx output format** (registry key `smtv_docx`, UI
+  label "SMTV transcription") — fills the bundled template
+  `core/writers/templates/smtv_template.docx`: a 4-column table (auto row #;
+  `Time Code` `HH:MM:SS.m`; `Foreign Language` = transcript; `English
+  Translation` empty for the human), title line
+  `"<work title> -Transcription in <language> – Translation in English"`,
+  filename matched; grows the table past 31 rows; forces a `.docx` extension.
+- **Google Cloud STT fixes — LIVE-VERIFIED** with the owner's
+  service-account JSON (project `crucial-context-297802`): default
+  model/location is now `chirp_2` / `us-central1` (supports auto-detect +
+  multilingual; the old `long` / `global` rejected `"auto"`); language codes
+  mapped ISO → BCP-47 (Google v2 rejects a bare `"en"`); word time offsets
+  always requested + words re-segmented into properly-timed phrases (a real
+  run produced 5 correctly-timed subtitle segments instead of one 0–30 s
+  blob). `config.py` `gcloud_stt_model` / `gcloud_stt_location` defaults
+  updated; `docs/CONFIG.md` + `docs/CLOUD_STT_GOOGLE.md` updated.
+- **Installer Video-Tiling opt-out** — a "do NOT include Video Tiling" task
+  in `installer_embed.iss` drops a `{app}\no_tiling.flag` marker; the app
+  hides the Video Tiling tab when present (`core.hub.tiling_tab_enabled()`).
+
+**SETUP NOTE — the app now DEFAULTS to Google Cloud transcription
+(uploads audio to Google):** the owner's service-account JSON at
+`C:\Users\Owner\Desktop\whisper_project_claude\crucial-context-297802-71bbe43c6f33.json`
+is set as the app default in the user config
+(`transcribe_backend = google_cloud_stt` + `gcloud_stt_credentials_json` +
+`gcloud_stt_model = chirp_2` / `gcloud_stt_location = us-central1`). This is
+the **dev machine's** config, not a shipped default — but be aware the app
+here uploads audio to Google by default. **To switch back to offline:**
+Advanced > Backend → `faster_whisper`. `google-cloud-speech` installs on
+first use (on demand); **batch mode** additionally needs a GCS bucket +
+**Storage Object Admin**.
+
+### P4 BACKLOG — planned, NOT yet implemented
+
+New requests from
+`C:\Users\Owner\Desktop\new jobs\claude_request_v1.38.txt`. Recorded as
+planned for a future session; nothing below is built yet.
+
+- **P4-1 — three-level merged configuration** (hard-coded → online-URL →
+  local-file) so model URLs / the usage-stats URL / latest-version /
+  ffplay links can change **without redistributing** the app.
+- **P4-2 — config-driven multi-model + an Advanced model selector** — add
+  `faster-whisper-medium`, `large-v3-turbo`, `distil-large-v3.5`;
+  `large-v3` stays the default.
+- **P4-3 — transcription format CONVERSION** — JSON ↔ SRT / VTT / TSV / TXT
+  (+ `.otr` import), with the faster-whisper JSON as the middle format.
+- **P4-4 — usage stats** — a "word count" column in the sqlite
+  transcription table + a PHP online stats tracker (IP / geoip via
+  `smch.ir`, filename, model, language, duration, AI time, status) + the
+  app POSTing stats.
+- **P4-5 — ffplay download links in config** for auto-fetch on Windows /
+  macOS.
+
+**Build/spec bookkeeping done:** the PyInstaller hidden-import lists in
+both `whisper_project_onefile.spec` and `whisper_project_onedir.spec` carry
+all the new modules — Phase-1 (`core.server.*`, `core.monitors`,
+`core.backends.cloud_stt`, `core.updates`) + **screeninfo** AND the Phase-2
+backend (`core.backends.google_cloud_stt`) — both verified present this
+session. The `google-cloud-speech` / `google-cloud-storage` libs install on
+demand at runtime, so they are deliberately NOT bundled (only the backend
+module that imports them lazily is).
+
+**OPEN caveats for the next session (re-check; don't assume done):**
+- **R6 Gemini path is UNTESTED end-to-end** — no API key in this
+  environment. The owner must live-test with their own key: paste key →
+  "Test key" → run one file → confirm a transcript lands and the local
+  minutes counter advances.
+- **The real Google Cloud STT (`google_cloud_stt`) network path is UNTESTED
+  here** — no service-account JSON in the dev environment. The owner must
+  live-test: in **Advanced > Backend** pick the JSON file → click **Test
+  connection** → run a file. **Standard mode** needs only the JSON + the
+  **Cloud Speech-to-Text User** role + the Speech-to-Text API enabled.
+  **Batch mode** additionally needs a GCS bucket + **Storage Object Admin**
+  on it. The `google-cloud-speech` (+ `google-cloud-storage` for batch) libs
+  install on **first use** (on demand), NOT bundled — so the first run with
+  this backend will pause to pip-install them.
+- **screeninfo is a NEW optional dependency** — multi-monitor tiling
+  degrades to single-monitor without it; it's pruned/absent in some build
+  trees, so confirm the Monitors chooser behaves when it's missing.
+
+**A build was produced this session** (the build path is appended
+separately) — still **v1.3.7-labelled, unreleased, local only**.
+
+**PRE-EXISTING test issues (NOT introduced this session — present at the
+baseline commit `53fc8b2`, so not a regression):**
+- `tests/core/test_resume_from_cancellation.py` is **order-dependent** —
+  it fails in isolation even at baseline `53fc8b2`; passes under the full
+  suite ordering.
+- `tests/core/test_v08_real_file_e2e.py` is a **real-model E2E** that
+  ERRORs under full-suite session ordering (needs the real model + a
+  hot worker; not hermetic).
+- A Tk-root **"Can't find a usable tk.tcl"** flake on the local Python
+  3.14 box (environment quirk, not our code).
+- These are why the deferred test-gap items (§0.1 below) still need a
+  heavier harness; do NOT treat their flakes as new breakage.
+
+**A release would still need the version bump in the 4 usual places**
+(`core/__init__.py` `__version__`, `pyproject.toml`, `installer.iss`,
+`installer_embed.iss` `#define MyAppVersion`) before building — see §3.
+
+---
+
+## 0.1. Earlier session — senior-architect deep audit (2026-05-29)
 
 A read-only audit fanned out 8 parallel shards (concurrency, resource
 leaks, security, error-handling, data-integrity, cross-platform,
 test-gaps, maintainability) → 53 raw findings → 20 verified-real + 32
 P2 + 1 rejected. Fixed in 8 themed commit batches, each gated on
 `pyright app/ core/` 0/0/0 + the hermetic suite green, pushed to
-`master`. Full list in `docs/CHANGELOG.md` `[Unreleased]`. Method +
-raw findings: `.claude/audit_findings.md` (workspace, untracked).
+`master`. Full list in `docs/CHANGELOG.md` `[1.3.7]` (this batch SHIPPED as
+v1.3.7 on 2026-05-29). Method + raw findings: `.claude/audit_findings.md`
+(workspace, untracked).
 
 **Shipped behaviour:** no change to Windows spawn flags; the fixes are
-teardown/robustness/correctness. **Not yet released** — these are
-batched for a future version bump per the slow-release policy.
+teardown/robustness/correctness. **Released as v1.3.7** (this was the batch
+deferred at the time; it has since shipped).
 
 **Deferred, with reason (re-check; don't assume done):**
 - **Test-gaps not yet covered** (cover already-shipped code, lower risk,
@@ -55,14 +427,14 @@ modal-close changes (batches A/C) didn't disturb the cooperative path.
 
 | Item | Value |
 |---|---|
-| Branch | `master` — **the single mainline**. Carries **v1.3.7** (deep-audit hardening, see §0), all committed + pushed. Every commit is attributed to `translation-robot` (GitHub no-reply), no `Co-Authored-By` trailers; local `git config` identity matches. |
-| Version | pyproject = 1.3.7; `core.__version__` = 1.3.7; both `.iss` = 1.3.7 |
-| Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
+| Branch | `master` — **the single mainline**. Published tip is **v1.3.7** (deep-audit hardening, see §0.1). On top of that sit the **2026-06-06 LOCAL-ONLY changes — Phase 1 (9 changes) + Phase 2 (real Google Cloud STT, one-click Web/LAN, enriched About) (see §0) — committed, NOT pushed, NOT released.** Owner will authorise the push/release later. |
+| Version | **unchanged — still 1.3.7** in all 4 places (pyproject, `core.__version__`, both `.iss`). This session deliberately did NOT bump — the Phase-1 + Phase-2 changes are unreleased; bump only when the owner authorises the release. |
+| Last PUBLISHED release | **v1.3.7** on GitHub (Standard 219 MB + Portable 325 MB) — the deep-audit security/leak/robustness/correctness pass (§0.1); built + slim past-bug E2E PASS + live cancel/pause E2E PASS + hermetic suite green + pyright 0/0/0; published 2026-05-29. |
 | GitHub releases now | `v1.3.7` (latest) + `basic-v0.1.0` (separate edition). **POLICY (2026-05-26 owner): keep ONLY the latest release — prune the rest on each release.** v1.3.6 release object was pruned on the v1.3.7 release; its git tag + the local `dist_installer/WhisperProject-v1.3.6-*` artefacts remain as backup. |
 | Installed test copy | none built (validated by `tools/e2e_slim_pastbugs.py` + `tools/e2e_cancel_pause.py` against the real worker). The user installs the published EXE themselves. |
 | Default GitHub branch | `master` (now the ONLY branch — origin has just `master`) |
-| Working tree | clean (only `.claude/` untracked) |
-| Gate | `run_tests.bat` → pyright 0/0/0 (app/ + core/) + hermetic suite — last run **ALL GREEN** |
+| Working tree | local commits ahead of `origin/master` (the §0 nine-change batch + the docs/test-cleanup); untracked tooling (`.claude/`, `PROJECT_INDEX.md`, `AGENTS.md`, `.cursorrules`, `tools/index_refresh.py`) left as-is |
+| Gate | `pyright app core` → **0/0/0** (re-verified this session). Full `run_tests.bat` hermetic suite NOT re-run this session — see the PRE-EXISTING test flakes in §0 before reading any red as a regression. |
 | Build prereqs (this PC) | Inno Setup `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` ✓ · test video `E:\3029-NWN-Daily-Scroll-2m_0002.mp4` ✓ · extracted model under `%LOCALAPPDATA%\WhisperProject` ✓ |
 | Version source of truth | `core/__init__.py` `__version__` (bundled; About dialog + telemetry read it). Bump it with pyproject + both `.iss` every release. |
 
@@ -184,7 +556,7 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
   Residual (NOT addressed): `ensure_worker_ready(headless=True)` could
   still deadlock if ever called on the Tk main thread — low risk (the
   headless path is only invoked off the main thread today).
-- **Resource leaks — RESOLVED 2026-05-29 (deep audit, see §0).** Worker/
+- **Resource leaks — RESOLVED 2026-05-29 (deep audit, see §0.1).** Worker/
   yt-dlp now tree-killed via `core/_proc.py` (no orphaned ffmpeg/demucs);
   `partials/` swept at startup + cleared on declined crash-resume;
   HistoryDB closed in on_exit; demucs cache bounded; recorder streams to
@@ -194,7 +566,7 @@ for login-walled sites (Facebook); **ffprobe "N/A"** tolerated;
   shipped is the ERROR SURFACING. Once a user retries Dailymotion on
   v1.3.2 and the queue shows the actual error, fix that specific cause
   (don't change the selector blind — risks the proven YouTube path).
-- **burn_subs filter escaping — RESOLVED 2026-05-29 (deep audit, see §0).**
+- **burn_subs filter escaping — RESOLVED 2026-05-29 (deep audit, see §0.1).**
   Subtitles now burn from a temp copy with a graph-safe ASCII name, so
   `' [ ] , ;` in a (downloaded) title can't break/inject the ffmpeg filter
   graph; the colon-escape is gated to Windows. New `tests/core/test_burn_subs.py`.

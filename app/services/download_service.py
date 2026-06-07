@@ -287,7 +287,11 @@ def build_download_command(
     command = [yt_dlp_path]
     if bin_path:
         command += ["--ffmpeg-location", bin_path]
-    command += ["--newline", "-o", output]
+    # ``-c`` / ``--continue`` so a resumed download (R2 stop-and-continue
+    # "pause") picks up the existing .part fragment instead of restarting
+    # from zero. yt-dlp continues by default for plain downloads, but being
+    # explicit also covers the modes where it would otherwise overwrite.
+    command += ["--newline", "-c", "-o", output]
     command.extend(_cookies_from_browser_args(cookies_from_browser))
     if progress_template:
         command.extend(["--progress-template", progress_template])
@@ -542,7 +546,41 @@ class DownloadService:
         if not folder:
             messagebox.showwarning("Missing folder", "Select a download folder first.", parent=app)
             return
-        if not audio_label or audio_label not in app.audio_format_map:
+
+        # Resolve the SMTV episode up front: an SMTV news/short clip ships
+        # WITHOUT an mp3 (only video qualities), so audio_format_map is empty
+        # for it. The audio-format gate below must not reject such a clip in
+        # video mode (smtv-research.md R3) — so we need is_smtv before the
+        # validation runs, not after it (as it used to be ordered).
+        # Match the stashed episode against THIS url's page_url, not just
+        # "is it some SMTV episode". The format lookup is debounced 800ms,
+        # so a user who pastes SMTV url A, then replaces it with a DIFFERENT
+        # SMTV url B and clicks Download before B's lookup fires, would
+        # otherwise reuse episode A's CDN urls/transcript for B. A real
+        # episode (fetch_episode) always carries its already-stripped
+        # page_url, and url is stripped above, so reject the reuse only when
+        # the episode HAS a page_url that disagrees — an episode with no
+        # page_url (never produced in practice) keeps the old behaviour.
+        raw_episode = getattr(app, "_smtv_episode", None)
+        episode_page_url = (getattr(raw_episode, "page_url", "") or "").strip()
+        smtv_episode: smtv_mod.SmtvEpisode | None = (
+            raw_episode
+            if isinstance(raw_episode, smtv_mod.SmtvEpisode)
+               and smtv_mod.is_smtv_url(url)
+               and (not episode_page_url or episode_page_url == url)
+            else None
+        )
+        is_smtv = smtv_episode is not None
+
+        # An audio format is only required when audio is actually downloaded:
+        #   * "Audio" mode (audio-only output) always needs one;
+        #   * a non-SMTV "Audio and video" download still merges a separate
+        #     audio stream, so it needs one too.
+        # An SMTV video download carries its audio inside the muxed video
+        # file (there is no separate audio stream), and a news/short clip has
+        # no mp3 variant at all, so an empty audio map must NOT block it.
+        audio_required = mode == "Audio" or not is_smtv
+        if audio_required and (not audio_label or audio_label not in app.audio_format_map):
             messagebox.showwarning("Missing audio format",
                                    "Wait for formats to load, then select an audio format.", parent=app)
             return
@@ -554,7 +592,20 @@ class DownloadService:
             messagebox.showwarning("Missing output", "Select an output format.", parent=app)
             return
 
-        os.makedirs(folder, exist_ok=True)
+        # The saved folder can have gone stale (a USB/network drive that is
+        # now unplugged, a read-only or no-longer-existing path). os.makedirs
+        # and save_config can both raise OSError straight out of the Download
+        # button callback; guard them so the non-technical operator gets an
+        # actionable message instead of a console traceback / silent no-op.
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as e:
+            messagebox.showwarning(
+                "Folder unavailable",
+                f"Cannot create or write the download folder:\n{folder}\n\n{e}",
+                parent=app,
+            )
+            return
         app.app_config["download_folder"] = folder
         title = app.current_video_title or url
         subtitles_enabled = app.download_subtitles_var.get()
@@ -562,24 +613,39 @@ class DownloadService:
         sub_lang_code = next((code for name, code in SUBTITLE_LANGUAGES if name == sub_lang_name), "")
         app.app_config["download_subtitles_enabled"] = subtitles_enabled
         app.app_config["download_subtitle_lang"] = sub_lang_name
-        save_config(app.app_config)
+        try:
+            save_config(app.app_config)
+        except OSError:
+            # The download itself can still proceed; only the preference
+            # persistence failed. Log it (FB-01: never silent) and continue
+            # rather than abort the enqueue the user explicitly asked for.
+            logger.exception("Failed to persist download preferences")
         label_extra = f" + subs ({sub_lang_name})" if subtitles_enabled else ""
         format_label = f"{mode} -> {output}{label_extra}"
         format_info = {
             "mode": mode,
-            "audio": app.audio_format_map[audio_label],
+            # audio_label may be absent for an SMTV video-only clip; guard
+            # the lookup so it never KeyErrors when audio isn't required.
+            "audio": app.audio_format_map.get(audio_label),
             "video": app.video_format_map.get(video_label),
             "output": output,
         }
 
-        raw_episode = getattr(app, "_smtv_episode", None)
-        smtv_episode: smtv_mod.SmtvEpisode | None = (
-            raw_episode
-            if isinstance(raw_episode, smtv_mod.SmtvEpisode)
-               and smtv_mod.is_smtv_url(url)
-            else None
-        )
-        is_smtv = smtv_episode is not None
+        # When the stashed episode was rejected (stale page_url != url, so
+        # is_smtv is False) the format maps were NOT necessarily rebuilt yet —
+        # the 800ms lookup for the new url may not have fired. The maps can
+        # still hold the rejected episode's kind=='smtv' selector dicts (with
+        # episode A's CDN url). Routing keys off _is_smtv_task, which trips on
+        # ANY kind=='smtv' sub-dict, so leaving one in format_info would stream
+        # the stale CDN file while writing this url's transcript. The 'episode'
+        # key was already guarded above; scrub the audio/video selectors too so
+        # no kind=='smtv' sub-dict survives into a non-SMTV task.
+        if not is_smtv:
+            for key in ("audio", "video"):
+                sub = format_info.get(key)
+                if isinstance(sub, dict) and sub.get("kind") == "smtv":
+                    format_info[key] = None
+
         if smtv_episode is not None:
             format_info["episode"] = smtv_episode
             format_label = f"SMTV {audio_label if mode == 'Audio' else video_label}"
@@ -615,6 +681,25 @@ class DownloadService:
             section_start = None
         if not section_end:
             section_end = None
+        # Drop any bound at/beyond the probed video length. A user can TYPE a
+        # timecode past the end (the slider clamps, the entry field doesn't);
+        # an end >= duration is just "to the end" so dropping it is exactly
+        # equivalent, and a start >= duration is an empty slice that would
+        # build a "*<dur>-" arg yt-dlp can't honour (it downloads nothing /
+        # errors). Only act on a positive, known duration so a live/unknown
+        # length (0) never touches a valid range. SMTV ignores the slice
+        # entirely, so skip the guard there too.
+        probed_duration = 0.0
+        if not is_smtv:
+            try:
+                probed_duration = float(getattr(app, "_download_duration", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                probed_duration = 0.0
+        if probed_duration > 0:
+            if section_start is not None and section_start >= probed_duration:
+                section_start = None
+            if section_end is not None and section_end >= probed_duration:
+                section_end = None
         any_range = section_start is not None or section_end is not None
 
         # Decorate the visible title with the trim badge so the
@@ -720,6 +805,18 @@ class DownloadService:
     def _run_task(self, task: "VideoDownloadTask") -> None:
         app = self.app
         app.download_events.put(("subtitle_status", task, ""))
+        # Per-run generation token. Pause tree-kills the process but the old
+        # _run_task daemon keeps draining stdout, then runs its finally:
+        # _reap_process(task.process). A resume re-uses the SAME task object
+        # and spawns a NEW _run_task that assigns task.process = Popen(...).
+        # If the old finally then reads task.process it would see (and
+        # tree-kill) the freshly-respawned process — a silently dead resume.
+        # Bump + capture a generation so the finally only reaps/nulls when
+        # task.process still belongs to THIS run. (Mirrors the per-worker
+        # token the transcription side already uses.)
+        my_gen = getattr(task, "_run_generation", 0) + 1
+        task._run_generation = my_gen  # type: ignore[attr-defined]
+
         # Phase 3a — record start in history.
         history = getattr(app, "history", None)
         if history is not None:
@@ -731,14 +828,22 @@ class DownloadService:
             except Exception:  # noqa: BLE001
                 task.history_id = 0
 
+        def _finalize_own_process() -> None:
+            # Only this run's process may be reaped/nulled. A newer run
+            # (resume) has bumped _run_generation; touching its task.process
+            # here would kill the just-started download.
+            if getattr(task, "_run_generation", my_gen) != my_gen:
+                return
+            _reap_process(task.process)
+            task.process = None
+
         if _is_smtv_task(task):
             try:
                 self._run_smtv_task(task)
             except Exception as e:  # noqa: BLE001
                 app.download_events.put(("error", task, str(e)))
             finally:
-                _reap_process(task.process)
-                task.process = None
+                _finalize_own_process()
             return
 
         try:
@@ -753,8 +858,7 @@ class DownloadService:
         except Exception as e:  # noqa: BLE001
             app.download_events.put(("error", task, str(e)))
         finally:
-            _reap_process(task.process)
-            task.process = None
+            _finalize_own_process()
 
     def _build_smtv_sibling_tasks(
         self,
@@ -876,9 +980,21 @@ class DownloadService:
         else:
             episode = smtv_mod.fetch_episode(task.url, timeout=30.0)
 
-        basename = _smtv_basename_from_url(cdn_url) or smtv_mod.filename_for(
-            episode, chosen.get("mode", "video-best")
-        )
+        raw_basename = _smtv_basename_from_url(cdn_url)
+        if raw_basename:
+            # The CDN basename comes from the page's ?file= value, which is
+            # attacker-influenceable; an NTFS ADS colon ("a:b") or a Windows
+            # reserved device stem (CON/PRN/NUL/COM1...) would otherwise reach
+            # os.path.join and yield a zero-byte / redirected file or an
+            # OSError on write. Run it through the same sanitiser smtv.py
+            # already applies in filename_for()/transcript_filename(), and
+            # fall back to a safe default if it sanitises down to nothing.
+            basename = smtv_mod._sanitise_filename(raw_basename) or "smtv_episode"
+        else:
+            # filename_for() already sanitises its CDN/title-derived name.
+            basename = smtv_mod.filename_for(
+                episode, chosen.get("mode", "video-best")
+            )
         target_path = os.path.join(task.folder, basename)
         part_path = target_path + ".part"
 
@@ -965,18 +1081,29 @@ class DownloadService:
                             percent = (downloaded / total) * 100.0
                             app.download_events.put(("progress", task, percent))
                             last_emit = now
+                if task.cancelled:
+                    return
                 # A clean EOF before Content-Length bytes have arrived
                 # means the CDN dropped the connection mid-transfer — no
                 # exception is raised in that case. Treat the partial file
                 # as a failed download; otherwise _run_smtv_task renames
                 # it to the final name and auto-transcribes a corrupt clip.
-                if not task.cancelled and total is not None and downloaded < total:
+                if total is not None and downloaded < total:
                     raise RuntimeError(
                         f"SMTV CDN download truncated: received {downloaded} "
                         f"of {total} bytes"
                     )
-                if total:
-                    app.download_events.put(("progress", task, 100.0))
+                # When the CDN omits Content-Length (chunked transfer) total
+                # is None and a connection dropped mid-stream looks like
+                # success; and a "Content-Length: 0" error/edge body yields
+                # total==0 (falsy), slipping past every `if total` gate and
+                # the `0 < 0` truncation check. In both cases a zero-byte
+                # file would be finalised as a valid download. Reject it.
+                if downloaded == 0:
+                    raise RuntimeError(
+                        "SMTV CDN download empty: received 0 bytes"
+                    )
+                app.download_events.put(("progress", task, 100.0))
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"SMTV CDN HTTP {e.code}: {e.reason}") from e
         except urllib.error.URLError as e:
@@ -1099,6 +1226,12 @@ class DownloadService:
         return_code = task.process.wait()
         if task.cancelled:
             app.download_events.put(("done", task, "cancelled"))
+        elif getattr(task, "paused", False):
+            # R2 stop-and-continue "pause": the process was tree-killed by
+            # pause_download, so the wait() returns nonzero — but this is a
+            # deliberate hold, not a failure. Land on "paused" and keep the
+            # partial .part so a later resume continues via -c/--continue.
+            app.download_events.put(("done", task, "paused"))
         elif return_code:
             # Surface the real reason (yt-dlp's ERROR line) rather than a
             # bare exit code, so a login-walled site (Facebook → enable
@@ -1138,7 +1271,20 @@ class DownloadService:
                 break
 
             if kind == "progress":
-                task.progress = min(100, int(payload))
+                # Defensive coercion: a non-numeric / NaN / inf percent
+                # (a malformed yt-dlp progress JSON, a future event source)
+                # would make int(payload) raise ValueError/OverflowError.
+                # poll() has no surrounding try/except, so that exception
+                # would skip the after(300) re-arm at the end and WEDGE the
+                # pump — no further progress/done/error events for ANY task.
+                # Finite values behave exactly as before.
+                try:
+                    pct = float(payload)
+                except (TypeError, ValueError):
+                    pct = 0.0
+                if pct != pct or pct in (float("inf"), float("-inf")):
+                    pct = 0.0
+                task.progress = min(100, max(0, int(pct)))
             elif kind == "log":
                 app.log(payload)
             elif kind == "subtitle_status":
@@ -1206,6 +1352,12 @@ class DownloadService:
 
     def _finish(self, task: "VideoDownloadTask", status: str, saved_path: str | None) -> None:
         app = self.app
+        # Stale-pause guard: a paused task that the user already resumed has
+        # been re-dispatched (status running/waiting) and may even be the
+        # current download again. The torn-down thread's late "paused" event
+        # must not clobber that fresh run back to "paused".
+        if status == "paused" and getattr(task, "status", "") in ("running", "waiting"):
+            return
         task.status = status
         # Freeze the Elapsed column the moment the task is terminal,
         # regardless of which status it ended in (finished / error /

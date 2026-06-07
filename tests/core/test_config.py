@@ -245,6 +245,11 @@ def test_user_overrides_merge_with_defaults(isolated_dirs, monkeypatch):
     assert config["model"]["url"] == cfg.DEFAULT_CONFIG["model"]["url"]
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Unmounted drive-letter fallback is a Windows-only scenario: POSIX "
+    "has no drive letters and _drive_is_mounted() is always True there.",
+)
 def test_unmounted_model_path_falls_back(isolated_dirs, monkeypatch):
     monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
     payload = dict(cfg.DEFAULT_CONFIG)
@@ -314,6 +319,68 @@ def test_load_config_coerces_wrong_type(isolated_dirs, monkeypatch):
     assert config["chime_on_complete"] is True
 
 
+def test_load_config_drops_null_for_known_key(isolated_dirs, monkeypatch):
+    """A null value for an allowlisted/known key must NOT survive the merge.
+
+    Regression: the coercion pass was gated on ``merged[k] is not None``, so a
+    JSON ``null`` slipped through and a later int()/strip()/iteration crashed.
+    A null for a key that ships a non-None default reverts to the default.
+    """
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = {"parallel_workers": None, "chime_on_complete": None}
+    Path(cfg.config_path()).write_text(json.dumps(payload), encoding="utf-8")
+    config = cfg.load_config(fetch_online=False)
+    assert config["parallel_workers"] == cfg.DEFAULT_CONFIG["parallel_workers"]
+    assert config["parallel_workers"] is not None
+    assert config["chime_on_complete"] is cfg.DEFAULT_CONFIG["chime_on_complete"]
+
+
+def test_merge_sources_online_null_reverts_to_default():
+    """An online-config null for an allowlisted key falls back, not None.
+
+    The full coercion runs in load_config, but verify the layering does not
+    let a null occupy an allowlisted key when no local value exists. We then
+    run the same drop-null rule load_config applies.
+    """
+    pick = next(iter(cfg.ONLINE_ALLOWED_KEYS))
+    merged = cfg.merge_config_sources(
+        cfg.DEFAULT_CONFIG, {pick: None}, None
+    )
+    # The online null deep-merges in; the coercion (exercised end-to-end by
+    # test_load_config_drops_null_for_known_key) is what restores the default.
+    assert pick in merged
+
+
+def test_tray_and_telemetry_keys_have_bool_defaults():
+    # BUG H: minimise_to_tray + telemetry_opt_in are read at runtime (app.py,
+    # tray.py, observability.py) and written by the Advanced dialog, so they
+    # must be declared in DEFAULT_CONFIG (both OFF) to get merge + coercion.
+    assert cfg.DEFAULT_CONFIG["minimise_to_tray"] is False
+    assert cfg.DEFAULT_CONFIG["telemetry_opt_in"] is False
+
+
+def test_tray_and_telemetry_merged_into_old_config(isolated_dirs, monkeypatch):
+    # An older config.json predating these keys must still load them at their
+    # bool defaults (not KeyError) so the runtime .get() calls are typed bools.
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    Path(cfg.config_path()).write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+    config = cfg.load_config()
+    assert config["minimise_to_tray"] is False
+    assert config["telemetry_opt_in"] is False
+
+
+def test_tray_and_telemetry_wrong_type_coerced(isolated_dirs, monkeypatch):
+    # A hand-edited STRING value (no sane bool coercion) is rejected back to
+    # the default; an INT is coerced to bool (Python bool is int) — the same
+    # rules every other bool key gets now that these are declared (BUG H).
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = {"minimise_to_tray": "yes", "telemetry_opt_in": 1}
+    Path(cfg.config_path()).write_text(json.dumps(payload), encoding="utf-8")
+    config = cfg.load_config()
+    assert config["minimise_to_tray"] is False   # string rejected -> default
+    assert config["telemetry_opt_in"] is True    # int 1 coerced to bool
+
+
 def test_save_config_lock_serialises_concurrent_calls(isolated_dirs, monkeypatch):
     """Two threads calling save_config concurrently must not crash
     or corrupt the destination on Windows. The _SAVE_LOCK serialises
@@ -339,7 +406,173 @@ def test_save_config_lock_serialises_concurrent_calls(isolated_dirs, monkeypatch
     for t in threads:
         t.join(timeout=5)
     assert not errors, f"save_config raced: {errors}"
-    final = cfg.load_config()
+    final = cfg.load_config(fetch_online=False)
     # Final on-disk value must match one of the input themes —
     # exact one is racy but must be SOME valid value.
     assert final["theme"] in {p["theme"] for p in payloads}
+
+
+# ---------- P4-1: three-level merged configuration --------------------------
+
+
+def test_merge_precedence_local_over_online_over_hardcoded():
+    """local > online > hard-coded; a key missing from a higher layer falls
+    through to the next."""
+    hardcoded = {"latest_version": "1.0.0", "theme": "dark", "stats_url": "hc"}
+    online = {"latest_version": "2.0.0", "stats_url": "https://online/stats"}
+    local = {"latest_version": "3.0.0"}  # theme + stats_url fall through
+    merged = cfg.merge_config_sources(hardcoded, online, local)
+    assert merged["latest_version"] == "3.0.0"          # local wins
+    assert merged["stats_url"] == "https://online/stats"  # online (no local)
+    assert merged["theme"] == "dark"                    # hard-coded (no higher)
+
+
+def test_merge_online_only_touches_allowlisted_keys():
+    """The online layer must NEVER override user-private / local-only keys
+    (paths, api keys, hub folder, prefs) — only ONLINE_ALLOWED_KEYS."""
+    hardcoded = {
+        "hub_folder": "C:/user/hub",
+        "cloud_stt_api_key": "secret",
+        "theme": "dark",
+        "stats_url": "",
+    }
+    # A hostile/buggy online payload tries to set local-only keys.
+    online = {
+        "hub_folder": "\\\\evil\\share",
+        "cloud_stt_api_key": "leaked",
+        "theme": "light",
+        "stats_url": "https://online/stats",
+    }
+    merged = cfg.merge_config_sources(hardcoded, online, local=None)
+    # Local-only keys are untouched by the online layer...
+    assert merged["hub_folder"] == "C:/user/hub"
+    assert merged["cloud_stt_api_key"] == "secret"
+    assert merged["theme"] == "dark"
+    # ...only the allowlisted app-level key comes through.
+    assert merged["stats_url"] == "https://online/stats"
+    assert "stats_url" in cfg.ONLINE_ALLOWED_KEYS
+    assert "hub_folder" not in cfg.ONLINE_ALLOWED_KEYS
+
+
+def test_merge_local_can_override_local_only_key():
+    """A local override file (highest priority) CAN set a local-only key the
+    online layer cannot."""
+    hardcoded = {"hub_folder": "C:/default", "stats_url": ""}
+    online = {"hub_folder": "\\\\evil\\share"}  # ignored (not allowlisted)
+    local = {"hub_folder": "D:/my/models"}
+    merged = cfg.merge_config_sources(hardcoded, online, local)
+    assert merged["hub_folder"] == "D:/my/models"
+
+
+def test_merge_deep_merges_dict_keys():
+    """Dict-valued keys deep-merge so a partial override keeps siblings."""
+    hardcoded = {"model_catalog": {"a": {"name": "A"}}, "model": {"name": "x", "url": "u"}}
+    online = {"model_catalog": {"b": {"name": "B"}}}
+    local = {"model": {"name": "y"}}
+    merged = cfg.merge_config_sources(hardcoded, online, local)
+    assert set(merged["model_catalog"].keys()) == {"a", "b"}  # online adds b
+    assert merged["model"]["name"] == "y"   # local override
+    assert merged["model"]["url"] == "u"    # sibling preserved from hardcoded
+
+
+def test_merge_does_not_mutate_inputs():
+    hardcoded = {"theme": "dark", "model": {"name": "x"}}
+    online = {"stats_url": "s"}
+    local = {"theme": "light"}
+    cfg.merge_config_sources(hardcoded, online, local)
+    assert hardcoded == {"theme": "dark", "model": {"name": "x"}}
+    assert online == {"stats_url": "s"}
+    assert local == {"theme": "light"}
+
+
+def test_fetch_online_returns_parsed_json(tmp_path, monkeypatch):
+    import io
+    payload = {"stats_url": "https://x/stats", "latest_version": "9.9.9"}
+
+    def _fake_urlopen(req, timeout=0):  # noqa: ARG001
+        return io.BytesIO(json.dumps(payload).encode("utf-8"))
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _fake_urlopen)
+    cache = tmp_path / "cache.json"
+    result = cfg.fetch_online_config("https://host/app.json", cache_path=cache)
+    assert result == payload
+    # A successful fetch is written to the cache for offline fallback.
+    assert json.loads(cache.read_text(encoding="utf-8")) == payload
+
+
+def test_fetch_online_falls_back_to_cache_on_error(tmp_path, monkeypatch):
+    cached = {"stats_url": "https://cached/stats"}
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps(cached), encoding="utf-8")
+
+    def _boom(req, timeout=0):  # noqa: ARG001
+        raise cfg.urllib.error.URLError("offline")
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _boom)
+    result = cfg.fetch_online_config("https://host/app.json", cache_path=cache)
+    assert result == cached  # served from cache when the network fails
+
+
+def test_fetch_online_returns_empty_when_no_cache_and_error(tmp_path, monkeypatch):
+    def _boom(req, timeout=0):  # noqa: ARG001
+        raise cfg.urllib.error.URLError("offline")
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _boom)
+    cache = tmp_path / "missing.json"
+    result = cfg.fetch_online_config("https://host/app.json", cache_path=cache)
+    assert result == {}  # no network, no cache -> empty (use hardcoded+local)
+
+
+def test_fetch_online_empty_url_short_circuits_to_cache(tmp_path, monkeypatch):
+    """An empty config_url skips the network entirely and uses the cache."""
+    cached = {"latest_version": "1.2.3"}
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps(cached), encoding="utf-8")
+
+    def _must_not_call(req, timeout=0):  # noqa: ARG001
+        raise AssertionError("urlopen must not be called for an empty URL")
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _must_not_call)
+    assert cfg.fetch_online_config("", cache_path=cache) == cached
+
+
+def test_load_config_no_fetch_uses_local_and_hardcoded(isolated_dirs, monkeypatch):
+    """fetch_online=False must never hit the network and still merge local
+    over hard-coded."""
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+
+    def _must_not_call(req, timeout=0):  # noqa: ARG001
+        raise AssertionError("urlopen must not be called when fetch_online=False")
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _must_not_call)
+    Path(cfg.config_path()).write_text(
+        json.dumps({"theme": "light"}), encoding="utf-8"
+    )
+    config = cfg.load_config(fetch_online=False)
+    assert config["theme"] == "light"                                  # local
+    assert config["parallel_workers"] == cfg.DEFAULT_CONFIG["parallel_workers"]  # hardcoded
+
+
+def test_load_config_merges_online_allowlisted_key(isolated_dirs, monkeypatch):
+    """End-to-end: an online app_config sets an allowlisted key that flows
+    into the effective config; a local file still wins for its own keys."""
+    import io
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    cfg.refresh_online_config()  # clear the in-process memo
+
+    online_payload = {
+        "stats_url": "https://online/stats",
+        "hub_folder": "\\\\evil\\should-be-ignored",  # not allowlisted
+    }
+
+    def _fake_urlopen(req, timeout=0):  # noqa: ARG001
+        return io.BytesIO(json.dumps(online_payload).encode("utf-8"))
+
+    monkeypatch.setattr(cfg.urllib.request, "urlopen", _fake_urlopen)
+    Path(cfg.config_path()).write_text(
+        json.dumps({"hub_folder": "D:/local/hub"}), encoding="utf-8"
+    )
+    config = cfg.load_config(fetch_online=True)
+    assert config["stats_url"] == "https://online/stats"  # from online
+    assert config["hub_folder"] == "D:/local/hub"          # local wins; online ignored
+    cfg.refresh_online_config()  # leave the memo clean for other tests

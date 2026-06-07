@@ -48,6 +48,12 @@ class FasterWhisperBackend(Backend):
         self._error: str | None = None
         self._device = "cpu"
         self._compute_type = "int8"
+        # R3: requested vs. effective device. ``_device`` tracks the
+        # effective device (downgraded to cpu if a CUDA load self-heals);
+        # ``_requested_device`` preserves the original ask, and
+        # ``_downgraded`` records that a fallback happened so the UI can warn.
+        self._requested_device = "cpu"
+        self._downgraded = False
 
     def is_ready(self) -> bool:
         return self._ready
@@ -58,6 +64,18 @@ class FasterWhisperBackend(Backend):
     @property
     def device(self) -> str:
         return self._device
+
+    @property
+    def compute_type(self) -> str:
+        return self._compute_type
+
+    @property
+    def requested_device(self) -> str:
+        return self._requested_device
+
+    @property
+    def downgraded(self) -> bool:
+        return self._downgraded
 
     @property
     def model(self) -> Any:
@@ -76,9 +94,57 @@ class FasterWhisperBackend(Backend):
             logger.info("BatchedInferencePipeline unavailable: %s", e)
             return None
 
+    def _capture_effective_device(self, req_device: str, req_compute: str) -> None:
+        """Read back what CTranslate2 actually loaded onto (getattr-guarded)."""
+        ct2 = getattr(self._model, "model", None)
+        self._device = str(getattr(ct2, "device", "") or "") or req_device
+        self._compute_type = (
+            str(getattr(ct2, "compute_type", "") or "") or req_compute
+        )
+
+    def _load_self_healing(
+        self,
+        model_path: str,
+        status_cb: Callable[[str], None] | None,
+    ) -> None:
+        """Build ``self._model``, self-healing a failed CUDA load onto CPU.
+
+        Mirrors ``core.transcriber._load_whisper_model_self_healing``: a CUDA
+        construction failure (typically a missing cuDNN/cuBLAS runtime) logs
+        the real reason, flips ``self._downgraded``, and retries with
+        ("cpu", "int8") rather than crashing the worker.
+        """
+        req_device = self._requested_device
+        req_compute = self._compute_type
+        try:
+            self._model = WhisperModel(
+                model_path, device=req_device, compute_type=req_compute
+            )
+            self._capture_effective_device(req_device, req_compute)
+            return
+        except Exception as e:
+            if req_device != "cuda":
+                raise
+            logger.warning(
+                "CUDA model load failed (%s); downgrading to cpu/int8. This "
+                "usually means the cuDNN/cuBLAS runtime libraries are missing "
+                "or broken, NOT that the model is corrupt.",
+                e,
+            )
+            if status_cb:
+                status_cb(f"GPU unavailable ({e}); falling back to CPU (slower).")
+            self._device, self._compute_type = "cpu", "int8"
+            self._model = WhisperModel(
+                model_path, device="cpu", compute_type="int8"
+            )
+            self._downgraded = True
+            self._capture_effective_device("cpu", "int8")
+
     def load_existing(self, status_cb: Callable[[str], None] | None = None) -> bool:
-        config = load_config()
+        config = load_config(fetch_online=False)  # worker path: local keys only
         self._device, self._compute_type = _detect_device(config)
+        self._requested_device = self._device
+        self._downgraded = False
         self._ready = False
         self._error = None
         model_path = Path(config["model_path"])
@@ -90,9 +156,7 @@ class FasterWhisperBackend(Backend):
         try:
             if status_cb:
                 status_cb("Loading existing Whisper model...")
-            self._model = WhisperModel(
-                str(model_path), device=self._device, compute_type=self._compute_type
-            )
+            self._load_self_healing(str(model_path), status_cb)
             self._pipeline = self._wrap_for_batched()
             self._ready = True
             if status_cb:
@@ -110,8 +174,10 @@ class FasterWhisperBackend(Backend):
         progress_cb: Callable[[dict[str, Any]], None] | None = None,
         cancel_event: threading.Event | None = None,
     ) -> bool:
-        config = load_config()
+        config = load_config(fetch_online=False)  # worker path: local keys only
         self._device, self._compute_type = _detect_device(config)
+        self._requested_device = self._device
+        self._downgraded = False
         self._ready = False
         self._error = None
         try:
@@ -125,9 +191,7 @@ class FasterWhisperBackend(Backend):
                     "phase": "load", "status": "Loading Whisper model...",
                     "percent": 100, "detail": "Preparing model for transcription",
                 })
-            self._model = WhisperModel(
-                model_path, device=self._device, compute_type=self._compute_type
-            )
+            self._load_self_healing(model_path, status_cb)
             self._pipeline = self._wrap_for_batched()
             self._ready = True
             if status_cb:

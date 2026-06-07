@@ -112,6 +112,86 @@ def marquee_cell(frame: int, percent: float | int = 0) -> str:
     return "".join(track) + f" {pct:>3d}%"
 
 
+# Transcription action keys surfaced by the per-row action bar AND the
+# right-click context menu. Keep this list in sync with the buttons built
+# in build_queue_tab so a status with no valid action disables them all.
+QUEUE_ACTION_KEYS = ("pause", "resume", "cancel", "rerun", "remove")
+
+
+def button_states_for_status(
+    status: str, has_checkpoint: bool = False
+) -> dict[str, bool]:
+    """Which transcription actions are valid for a task in ``status``.
+
+    The single source of truth shared by the Queue action bar and the
+    right-click ``menu_row`` so the two can never drift. Returns a dict
+    mapping each key in :data:`QUEUE_ACTION_KEYS` to whether that action
+    should be ENABLED for a task in this state. Pure (no Tk), so it is
+    unit-testable without a Tk root.
+
+    Mirrors ``App.menu_row``:
+      * waiting  -> Cancel
+      * running  -> Pause, Cancel
+      * paused   -> Resume, Cancel
+      * terminal (finished / cancelled / error) -> Re-run, Remove
+        (cancelled also offers Resume when a resumable checkpoint exists)
+
+    ``has_checkpoint`` only matters for the ``cancelled`` state — it maps
+    to the "Resume" entry ``menu_row`` adds above "Re-run".
+    """
+    states = {k: False for k in QUEUE_ACTION_KEYS}
+    if status == "waiting":
+        states["cancel"] = True
+    elif status == "running":
+        states["pause"] = True
+        states["cancel"] = True
+    elif status == "paused":
+        states["resume"] = True
+        states["cancel"] = True
+    elif status in ("finished", "cancelled", "error"):
+        states["rerun"] = True
+        states["remove"] = True
+        if status == "cancelled" and has_checkpoint:
+            states["resume"] = True
+    return states
+
+
+# Download action keys for the per-row Download action bar.
+DOWNLOAD_ACTION_KEYS = ("pause", "resume", "cancel", "rerun", "remove", "open")
+
+
+def download_button_states_for_status(
+    status: str, *, is_smtv: bool = False, has_saved_file: bool = False
+) -> dict[str, bool]:
+    """Which download actions are valid for a task in ``status``.
+
+    Single source of truth for the Download action bar (Phase 2). Pure (no
+    Tk) so it is unit-testable without a Tk root. Mirrors download_menu_row:
+      * waiting / running / transcribing -> Cancel  (and Pause for a running
+        non-SMTV download — yt-dlp can stop-and-continue; SMTV cannot)
+      * running paused                   -> Resume, Cancel
+      * terminal (finished/cancelled/error) -> Re-run, Remove (and Open when
+        a saved file exists on disk)
+
+    ``is_smtv`` disables Pause (SMTV CDN has no HTTP Range resume point).
+    ``has_saved_file`` gates Open to a finished download with a real file.
+    """
+    states = {k: False for k in DOWNLOAD_ACTION_KEYS}
+    if status in ("waiting", "running", "transcribing"):
+        states["cancel"] = True
+        if status == "running" and not is_smtv:
+            states["pause"] = True
+    elif status == "paused":
+        states["resume"] = True
+        states["cancel"] = True
+    elif status in ("finished", "cancelled", "error"):
+        states["rerun"] = True
+        states["remove"] = True
+        if status == "finished" and has_saved_file:
+            states["open"] = True
+    return states
+
+
 def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     """Beginner-friendly Transcribe tab.
 
@@ -284,6 +364,18 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         command=app.open_advanced_dialog,
     ).pack(side="right")
 
+    # R3: GPU/CPU device badge — primary placement, next to the CTA so users
+    # see it where they start a job. Driven by app.device_badge_var (set in
+    # TranscriptionService.update_model_state). Registers with the App so
+    # apply_device_badge can recolour it + attach the hover tooltip.
+    device_badge = ttk.Label(
+        cta_row, textvariable=app.device_badge_var, anchor="center",
+    )
+    device_badge.pack(side="right", padx=(0, 16))
+    app.register_device_badge_label(
+        device_badge, tier_label="Open the Hardware wizard for accelerator details."
+    )
+
     parent.columnconfigure(0, weight=1)
     parent.columnconfigure(1, weight=1)
     parent.columnconfigure(2, weight=1)
@@ -357,12 +449,58 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     app.pb = ttk.Progressbar(parent, length=400)
     app.pb.pack(fill="x", padx=10, pady=10)
 
-    ttk.Label(parent, textvariable=app.status_var).pack()
+    status_line = ttk.Frame(parent)
+    status_line.pack()
+    ttk.Label(status_line, textvariable=app.status_var).pack(side="left")
+    # R3: mirror the GPU/CPU device badge next to the queue status line.
+    queue_device_badge = ttk.Label(
+        status_line, textvariable=app.device_badge_var,
+    )
+    queue_device_badge.pack(side="left", padx=(12, 0))
+    app.register_device_badge_label(queue_device_badge)
     app.tree.bind("<Button-3>", app.menu_row)
     # Double-click on a finished row -> open the file's containing
     # folder. Discoverable shortcut for the right-click menu entry.
     app.tree.bind("<Double-Button-1>", app.queue_row_double_click)
     app.row_map = {}
+
+    # R2 — always-visible per-task action bar. The right-click context
+    # menu is not discoverable for a non-technical operator, so mirror its
+    # actions as plain buttons that operate on the selected row(s). Enabled
+    # state is recomputed from the selected task's status (the same logic
+    # menu_row uses, via button_states_for_status) on every selection change
+    # AND inside App.refresh (which rebuilds the tree each tick).
+    action_bar = ttk.Frame(parent)
+    action_bar.pack(fill="x", padx=10, pady=(0, 6))
+    app.queue_action_buttons = {
+        "pause": ttk.Button(
+            action_bar, text="Pause",
+            command=lambda: app._action_bar_apply(app.pause, active_only=True),
+        ),
+        "resume": ttk.Button(
+            action_bar, text="Resume",
+            command=app._action_bar_resume,
+        ),
+        "cancel": ttk.Button(
+            action_bar, text="Cancel",
+            command=lambda: app._action_bar_apply(app.cancel, active_only=True),
+        ),
+        "rerun": ttk.Button(
+            action_bar, text="Re-run",
+            command=lambda: app._action_bar_apply(app._rerun_task, active_only=False),
+        ),
+        "remove": ttk.Button(
+            action_bar, text="Remove",
+            command=lambda: app._action_bar_apply(app.remove_task, active_only=False),
+        ),
+    }
+    for key in ("pause", "resume", "cancel", "rerun", "remove"):
+        app.queue_action_buttons[key].pack(side="left", padx=(0, 6))
+        app.queue_action_buttons[key].state(["disabled"])
+    # A single-click on a running/paused row's status or progress cell
+    # toggles pause/resume — a discoverable shortcut on top of the menu.
+    app.tree.bind("<Button-1>", app.queue_status_cell_click, add="+")
+    app.tree.bind("<<TreeviewSelect>>", lambda _e: app._update_queue_action_bar())
 
 
 def build_download_tab(app: "App", parent: ttk.Frame) -> None:
@@ -570,6 +708,49 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     # See `app.row_map` above — annotation belongs on the class.
     app.download_row_map = {}
 
+    # R2 — Download action bar mirroring the Queue tab. Pause is the
+    # stop-and-continue semantics (tooltip below); SMTV downloads disable it.
+    dl_action_bar = ttk.Frame(parent, padding=(10, 0, 10, 4))
+    dl_action_bar.pack(fill="x")
+    app.download_action_buttons = {
+        "pause": ttk.Button(
+            dl_action_bar, text="Pause",
+            command=lambda: app._download_action_apply(app.pause_download),
+        ),
+        "resume": ttk.Button(
+            dl_action_bar, text="Resume",
+            command=lambda: app._download_action_apply(app.resume_download),
+        ),
+        "cancel": ttk.Button(
+            dl_action_bar, text="Cancel",
+            command=lambda: app._download_action_apply(app.cancel_download),
+        ),
+        "rerun": ttk.Button(
+            dl_action_bar, text="Re-run",
+            command=lambda: app._download_action_apply(app._rerun_download),
+        ),
+        "remove": ttk.Button(
+            dl_action_bar, text="Remove",
+            command=lambda: app._download_action_apply(app.remove_download),
+        ),
+        "open": ttk.Button(
+            dl_action_bar, text="Open",
+            command=app._download_action_open,
+        ),
+    }
+    for key in ("pause", "resume", "cancel", "rerun", "remove", "open"):
+        app.download_action_buttons[key].pack(side="left", padx=(0, 6))
+        app.download_action_buttons[key].state(["disabled"])
+    ttk.Label(
+        dl_action_bar,
+        text="(Pause stops the download but keeps the partial file; "
+             "Resume continues it)",
+        foreground="#888",
+    ).pack(side="left", padx=(8, 0))
+    app.download_tree.bind(
+        "<<TreeviewSelect>>", lambda _e: app._update_download_action_bar()
+    )
+
     app.update_download_mode()
     app.update_subtitle_state()
     app.after(200, app.format_service.poll)
@@ -577,7 +758,10 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
 
 
 def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
-    """Video Tiling: fill the screen with an N×N grid of one live stream."""
+    """Video Tiling: fill the screen(s) with an N×N grid of one live stream."""
+    from core.tiling import QUALITY_CHOICES, ffplay_available
+
+    cfg = app.app_config
     frame = ttk.Frame(parent, padding=16)
     frame.pack(fill="both", expand=True)
 
@@ -587,10 +771,11 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Label(
         frame,
         text=(
-            "Play one live stream as a full-screen N×N grid (a video wall). "
-            "Paste a stream URL (YouTube, X / Twitter, and the other yt-dlp "
-            "sites), pick the grid size, and Start. Press Q or Esc in the "
-            "video window — or the Stop button — to end it."
+            "Play one live stream as a full-screen N×N grid (a video wall), "
+            "optionally across several monitors. Paste a stream URL (YouTube, "
+            "X / Twitter, and the other yt-dlp sites), pick the grid size, and "
+            "Start. Press Q or Esc in the video window — or the Stop button — "
+            "to end it. Reconnect is automatic with backoff."
         ),
         wraplength=620, justify="left", foreground="#666",
     ).pack(anchor="w", pady=(4, 10))
@@ -606,29 +791,249 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     row2 = ttk.Frame(frame)
     row2.pack(fill="x", pady=(0, 8))
     ttk.Label(row2, text="Grid (N×N):").pack(side="left")
-    app.tiling_divisions_var = tk.IntVar(value=3)
+    from core.tiling import clamp_divisions
+    app.tiling_divisions_var = tk.IntVar(
+        value=clamp_divisions(app.app_config.get("tiling_divisions", 3))
+    )
     ttk.Spinbox(
-        row2, from_=1, to=8, width=5, textvariable=app.tiling_divisions_var,
+        row2, from_=1, to=64, width=5, textvariable=app.tiling_divisions_var,
     ).pack(side="left", padx=(8, 0))
+
+    ttk.Label(row2, text="Quality:").pack(side="left", padx=(16, 0))
+    saved_quality = cfg.get("tiling_quality", "Auto")
+    if saved_quality not in QUALITY_CHOICES:
+        saved_quality = "Auto"
+    app.tiling_quality_var = tk.StringVar(value=saved_quality)
+    quality_combo = ttk.Combobox(
+        row2, textvariable=app.tiling_quality_var, state="readonly",
+        values=QUALITY_CHOICES, width=8,
+    )
+    quality_combo.pack(side="left", padx=(8, 0))
+    quality_combo.bind(
+        "<<ComboboxSelected>>", lambda _e: app._save_tiling_prefs()
+    )
+
     ttk.Button(row2, text="Start tiling", command=app.start_tiling).pack(
         side="left", padx=(16, 4)
     )
     ttk.Button(row2, text="Stop", command=app.stop_tiling).pack(side="left")
 
-    app.tiling_status_var = tk.StringVar(value="")
-    ttk.Label(
-        frame, textvariable=app.tiling_status_var, foreground="#666",
-    ).pack(anchor="w", pady=(6, 0))
+    # Options row: Mute, Multi-monitor, Auto-restart, Monitors chooser.
+    row3 = ttk.Frame(frame)
+    row3.pack(fill="x", pady=(0, 8))
+    app.tiling_mute_var = tk.BooleanVar(value=bool(cfg.get("tiling_mute", False)))
+    ttk.Checkbutton(
+        row3, text="Mute", variable=app.tiling_mute_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left")
+    app.tiling_multi_monitor_var = tk.BooleanVar(
+        value=bool(cfg.get("tiling_multi_monitor", False))
+    )
+    ttk.Checkbutton(
+        row3, text="Multi-monitor", variable=app.tiling_multi_monitor_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left", padx=(16, 0))
+    app.tiling_auto_restart_var = tk.BooleanVar(
+        value=bool(cfg.get("tiling_auto_restart", True))
+    )
+    ttk.Checkbutton(
+        row3, text="Auto-restart", variable=app.tiling_auto_restart_var,
+        command=app._save_tiling_prefs,
+    ).pack(side="left", padx=(16, 0))
+    ttk.Button(
+        row3, text="Monitors…", command=app.choose_tiling_monitors,
+    ).pack(side="left", padx=(16, 0))
 
-    from core.tiling import ffplay_available
+    # Restore the saved monitor selection (spatial indices from core.monitors).
+    saved_sel = cfg.get("tiling_selected_monitors") or []
+    app.tiling_selected_monitors = [
+        int(i) for i in saved_sel if isinstance(i, int)
+    ]
+
+    app.tiling_monitors_info_var = tk.StringVar(value="")
+    ttk.Label(
+        frame, textvariable=app.tiling_monitors_info_var, foreground="#888",
+    ).pack(anchor="w", pady=(2, 0))
+    app.refresh_tiling_monitor_info()
+
+    app.tiling_status_var = tk.StringVar(value="")
+    # Keep a handle on the label so _tiling_status can recolour it to match
+    # the engine's state colour (green Playing / orange Reconnecting / grey
+    # Stopped). Without the handle the colour the engine emits is discarded
+    # and the line stays a fixed grey.
+    app.tiling_status_label = ttk.Label(
+        frame, textvariable=app.tiling_status_var, foreground="#666",
+    )
+    app.tiling_status_label.pack(anchor="w", pady=(6, 0))
+
+    # ffplay presence: keep a handle on the notice frame so the Download
+    # button can hide it once ffplay lands. When a download URL is configured
+    # we offer a one-click "Download ffplay"; otherwise we keep the existing
+    # "drop ffplay in bin" guidance.
+    from core.tiling import select_ffplay_url
+
+    app.tiling_ffplay_notice = ttk.Frame(frame)
+    app.tiling_ffplay_notice.pack(anchor="w", pady=(10, 0), fill="x")
     if not ffplay_available():
         ffplay_name = "ffplay.exe" if os.name == "nt" else "ffplay"
-        ttk.Label(
-            frame,
-            text=(
-                f"Note: Video Tiling needs ffplay, which isn't bundled. Put "
-                f"{ffplay_name} in the app's bin folder (it comes with the "
-                f"full ffmpeg build) or install ffmpeg so ffplay is on PATH."
-            ),
-            wraplength=620, justify="left", foreground="#b5651a",
-        ).pack(anchor="w", pady=(10, 0))
+        has_url = bool(select_ffplay_url(cfg.get("ffplay_downloads")))
+        if has_url:
+            ttk.Label(
+                app.tiling_ffplay_notice,
+                text=(
+                    "Video Tiling needs ffplay, which isn't bundled. "
+                    "Click below to download it automatically."
+                ),
+                wraplength=620, justify="left", foreground="#b5651a",
+            ).pack(anchor="w")
+            app.tiling_download_ffplay_btn = ttk.Button(
+                app.tiling_ffplay_notice, text="Download ffplay",
+                command=app.download_ffplay,
+            )
+            app.tiling_download_ffplay_btn.pack(anchor="w", pady=(6, 0))
+        else:
+            ttk.Label(
+                app.tiling_ffplay_notice,
+                text=(
+                    f"Note: Video Tiling needs ffplay, which isn't bundled. Put "
+                    f"{ffplay_name} in the app's bin folder (it comes with the "
+                    f"full ffmpeg build) or install ffmpeg so ffplay is on PATH."
+                ),
+                wraplength=620, justify="left", foreground="#b5651a",
+            ).pack(anchor="w")
+
+
+def build_server_tab(app: "App", parent: ttk.Frame) -> None:
+    """Web / LAN access: a one-click toggle to let a browser transcribe.
+
+    Turning this on starts a small web page (served by this app) so you —
+    or other people on your network — can drop a file or paste a link in a
+    browser and get subtitles back, without installing anything. One
+    obvious Start/Stop button; everything else has a plain-language note.
+    """
+    cfg = app.app_config
+    frame = ttk.Frame(parent, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame, text="Web / LAN access", font=("TkDefaultFont", 13, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text=(
+            "Turn this on to open a simple web page that uses this app to "
+            "transcribe. Open it in a browser on this computer, or share it "
+            "with phones and other PCs on your network. It stays off until "
+            "you start it, and there is nothing to install on the other "
+            "devices."
+        ),
+        wraplength=620, justify="left", foreground="#888",
+    ).pack(anchor="w", pady=(4, 12))
+
+    # --- the one obvious control: Start / Stop -------------------------------
+    toggle_row = ttk.Frame(frame)
+    toggle_row.pack(fill="x", pady=(0, 6))
+    app.server_toggle_btn = ttk.Button(
+        toggle_row, text="Start web access", command=app.toggle_server,
+    )
+    app.server_toggle_btn.pack(side="left")
+    app.server_open_btn = ttk.Button(
+        toggle_row, text="Open in browser",
+        command=app.open_server_in_browser, state="disabled",
+    )
+    app.server_open_btn.pack(side="left", padx=(8, 0))
+
+    # Status line ("Off" / "Running...").
+    app.server_status_var = tk.StringVar(value="Off")
+    ttk.Label(
+        frame, textvariable=app.server_status_var,
+        font=("TkDefaultFont", 10, "bold"),
+    ).pack(anchor="w", pady=(2, 0))
+
+    # The reachable address(es) — shown so the user can type them on a
+    # phone or another PC. Selectable so they can copy it.
+    app.server_url_var = tk.StringVar(value="")
+    url_label = ttk.Label(
+        frame, textvariable=app.server_url_var, foreground="#3a7bd5",
+        justify="left",
+    )
+    url_label.pack(anchor="w", pady=(2, 12))
+
+    # --- options -------------------------------------------------------------
+    opts = ttk.LabelFrame(frame, text="Options", padding=12)
+    opts.pack(fill="x", pady=(0, 8))
+
+    # Port.
+    port_row = ttk.Frame(opts)
+    port_row.pack(fill="x", pady=(0, 8))
+    ttk.Label(port_row, text="Port:").pack(side="left")
+    saved_port = cfg.get("server_port", 8765)
+    try:
+        saved_port = int(saved_port)
+    except (TypeError, ValueError):
+        saved_port = 8765
+    if not 1 <= saved_port <= 65535:
+        saved_port = 8765
+    app.server_port_var = tk.IntVar(value=saved_port)
+    ttk.Spinbox(
+        port_row, from_=1, to=65535, width=8,
+        textvariable=app.server_port_var,
+        command=app._save_server_prefs,
+    ).pack(side="left", padx=(8, 0))
+    ttk.Label(
+        port_row,
+        text="(the number after the address; leave the default if unsure)",
+        foreground="#888",
+    ).pack(side="left", padx=(8, 0))
+
+    # Share on local network.
+    app.server_share_lan_var = tk.BooleanVar(
+        value=bool(cfg.get("server_share_lan", False))
+    )
+    ttk.Checkbutton(
+        opts, text="Share on local network (other devices can use it)",
+        variable=app.server_share_lan_var,
+        command=app._save_server_prefs,
+    ).pack(anchor="w")
+    ttk.Label(
+        opts,
+        text=(
+            "Off: only this computer can use it (no firewall prompt).\n"
+            "On: Windows may ask to allow it through the firewall — click "
+            "Allow. Anyone on your network will be able to use it."
+        ),
+        wraplength=560, justify="left", foreground="#888",
+    ).pack(anchor="w", padx=(22, 0), pady=(0, 8))
+
+    # Optional access password (the --token mechanism).
+    pw_row = ttk.Frame(opts)
+    pw_row.pack(fill="x")
+    ttk.Label(pw_row, text="Access password (optional):").pack(side="left")
+    app.server_token_var = tk.StringVar(value=str(cfg.get("server_token", "")))
+    pw_entry = ttk.Entry(
+        pw_row, textvariable=app.server_token_var, width=24, show="•",
+    )
+    pw_entry.pack(side="left", padx=(8, 0))
+    pw_entry.bind("<FocusOut>", lambda _e: app._save_server_prefs())
+    ttk.Label(
+        opts,
+        text=(
+            "Leave blank for no password. If you set one, share it with the "
+            "people you want to let in — they will need to add it to the "
+            "address as  ?token=YOURPASSWORD"
+        ),
+        wraplength=560, justify="left", foreground="#888",
+    ).pack(anchor="w", padx=(0, 0), pady=(4, 0))
+
+    # --- safety note ---------------------------------------------------------
+    ttk.Label(
+        frame,
+        text=(
+            "Use this only on a network you trust (your home or office "
+            "Wi-Fi). It has no accounts and is not encrypted — anyone who "
+            "can reach the address (and knows the password, if you set one) "
+            "can use it. The first time you turn it on it may need to "
+            "download the speech model; jobs will wait for that."
+        ),
+        wraplength=620, justify="left", foreground="#b5651a",
+    ).pack(anchor="w", pady=(10, 0))

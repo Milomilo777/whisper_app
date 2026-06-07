@@ -46,6 +46,20 @@ def transcriber(monkeypatch, tmp_path):
     # import time).
     monkeypatch.setattr(cfg, "user_data_dir", lambda: tmp_path)
     monkeypatch.setattr(cp, "user_data_dir", lambda: tmp_path)
+
+    # Per-test isolation of leaky module-global state. ``core.transcriber``
+    # is imported once and shared across the whole session, so another test
+    # file can leave ``t.config`` mutated in place (e.g. a cloud backend) or
+    # the model globals dirty. ``resume_transcription`` reads
+    # ``config['transcribe_backend']`` up front and bails to False for any
+    # non-faster_whisper backend — which made these tests pass in isolation
+    # but fail mid-suite (order-dependent). Reset a clean baseline here so
+    # every test starts from the same known state regardless of run order.
+    monkeypatch.setitem(t.config, "transcribe_backend", "faster_whisper")
+    monkeypatch.setattr(t, "MODEL", None, raising=False)
+    monkeypatch.setattr(t, "PIPELINE", None, raising=False)
+    monkeypatch.setattr(t, "MODEL_READY", False, raising=False)
+    monkeypatch.setattr(t, "MODEL_ERROR", None, raising=False)
     return t
 
 
@@ -293,10 +307,18 @@ def test_resume_offsets_segments_correctly(transcriber, monkeypatch, tmp_path):
         {"start": 80.0, "end": 100.0, "text": "c"},
     ]
 
-    # Match the current fingerprint so validation passes.
-    fp = _checkpoint.config_fingerprint(transcriber.config)
-    model_name = str(transcriber.config.get("model", {}).get("name", "")) \
-        or str(transcriber.config.get("whisper_model", ""))
+    # Capture the fingerprint the SAME way the production periodic-checkpoint
+    # writer does — INSIDE ``_runtime_overrides_scope`` — because the scope
+    # applies runtime-override defaults (diarisation / alignment keys) that
+    # change config_fingerprint. resume_transcription validates in-scope too,
+    # so a fingerprint captured outside the scope mismatches ("config changed")
+    # and resume (correctly) bails to False. Build the task up front so the
+    # scope sees the right file path.
+    task = TranscriptionTask(audio)
+    with transcriber._runtime_overrides_scope(task):
+        fp = _checkpoint.config_fingerprint(transcriber.config)
+        model_name = str(transcriber.config.get("model", {}).get("name", "")) \
+            or str(transcriber.config.get("whisper_model", ""))
     _checkpoint.write_checkpoint(
         audio,
         backend="faster_whisper",
@@ -338,7 +360,6 @@ def test_resume_offsets_segments_correctly(transcriber, monkeypatch, tmp_path):
     # Ensure the slicer's "always cleanup" os.unlink doesn't raise.
     (tmp_path / "slice.wav").write_bytes(b"\0")
 
-    task = TranscriptionTask(audio)
     result = transcriber.resume_transcription(task)
     assert result is True
 
@@ -363,9 +384,15 @@ def test_resume_path_deletes_checkpoint_on_success(transcriber, monkeypatch, tmp
     from core.task import TranscriptionTask
 
     audio = _make_audio_file(tmp_path)
-    fp = _checkpoint.config_fingerprint(transcriber.config)
-    model_name = str(transcriber.config.get("model", {}).get("name", "")) \
-        or str(transcriber.config.get("whisper_model", ""))
+    # Capture the fingerprint in-scope, exactly as the production checkpoint
+    # writer does (the scope applies runtime-override defaults that change the
+    # fingerprint; resume validates in-scope, so an out-of-scope fingerprint
+    # would mismatch and resume would bail to False). See the offsets test.
+    task = TranscriptionTask(audio)
+    with transcriber._runtime_overrides_scope(task):
+        fp = _checkpoint.config_fingerprint(transcriber.config)
+        model_name = str(transcriber.config.get("model", {}).get("name", "")) \
+            or str(transcriber.config.get("whisper_model", ""))
 
     _checkpoint.write_checkpoint(
         audio,
@@ -398,7 +425,6 @@ def test_resume_path_deletes_checkpoint_on_success(transcriber, monkeypatch, tmp
     monkeypatch.setattr(transcriber, "_write_chapter_sidecar", lambda b, c: None)
     (tmp_path / "slice.wav").write_bytes(b"\0")
 
-    task = TranscriptionTask(audio)
     assert transcriber.resume_transcription(task) is True
     assert not _checkpoint.checkpoint_path(audio).exists()
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -219,6 +220,12 @@ def test_pdf_writer_handles_empty_and_speakers(tmp_path):
 
 def test_writers_handle_empty_segment_list():
     for name in supported_formats():
+        # smtv_docx's registry adapter deliberately raises (it must be
+        # driven via write_bytes(..., language=, work_title=) by
+        # _write_outputs); its empty-input behaviour is covered by its
+        # own test below.
+        if name == "smtv_docx":
+            continue
         if is_binary(name):
             payload = get_binary_writer(name)([], "")
             assert isinstance(payload, (bytes, bytearray))
@@ -343,7 +350,7 @@ def test_is_binary_table():
 
 
 def test_binary_writers_registry_contains_docx_and_pdf():
-    assert set(BINARY_WRITERS.keys()) == {"docx", "pdf"}
+    assert set(BINARY_WRITERS.keys()) == {"docx", "pdf", "smtv_docx"}
 
 
 # ---------- Audit-driven safety nets ----------------------------------------
@@ -461,3 +468,196 @@ def test_json_writer_carries_suspect_flags():
     assert "suspect_reason" not in parsed[0]
     assert parsed[1]["suspect"] is True
     assert parsed[1]["suspect_reason"] == "repetition"
+
+
+# ---------- SMTV transcription writer ---------------------------------------
+
+
+def _smtv_table(payload: bytes):
+    """Parse SMTV docx bytes and return its single 4-column table."""
+    import io as _io
+
+    from docx import Document  # type: ignore
+
+    document = Document(_io.BytesIO(payload))
+    assert document.tables, "SMTV docx should contain one table"
+    return document.tables[0]
+
+
+def test_smtv_writer_returns_valid_docx_zip():
+    from core.writers import smtv_docx_writer
+
+    segs = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "Episode 1.mp4", language="ko", work_title="Episode 1"
+    )
+    assert isinstance(payload, bytes)
+    # DOCX is a ZIP archive; magic bytes are "PK\x03\x04".
+    assert payload[:4] == b"PK\x03\x04", payload[:8]
+
+
+def test_smtv_writer_fills_title_header_and_marker():
+    from core.writers import smtv_docx_writer
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "first phrase"},
+        {"start": 83.4, "end": 86.0, "text": "second", "speaker": "Speaker 1"},
+    ]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "My Show.mp4", language="ko", work_title="My Show"
+    )
+    table = _smtv_table(payload)
+
+    # Title cell: source name on line 1, language on line 2 (en-dash).
+    title_cell = table.rows[0].cells[0]
+    assert title_cell.paragraphs[0].text == "My Show"
+    line2 = title_cell.paragraphs[1].text
+    assert "Transcription in Korean" in line2
+    assert "– Translation in English" in line2  # real en-dash
+    # Placeholders fully replaced.
+    assert "(work title)" not in title_cell.text
+    assert "(Foreign Language)" not in title_cell.text
+
+    # Header row (row 2): Time Code / Foreign Language / English Translation.
+    header = [table.rows[1].cells[i].text for i in range(4)]
+    assert header[1] == "Time Code"
+    assert header[2] == "Foreign Language"
+    assert header[3] == "English Translation"
+
+    # First data row carries the language-filled "[<Lang> starts]" cue
+    # followed by the first segment text.
+    first = [table.rows[2].cells[i].text for i in range(4)]
+    assert first[0] == "1"
+    assert first[1] == "00:00:00.0"
+    assert "[Korean starts]" in first[2]
+    assert "first phrase" in first[2]
+    assert first[3] == ""  # English Translation left empty
+
+
+def test_smtv_writer_row_numbers_timecodes_and_speaker():
+    from core.writers import smtv_docx_writer
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "a"},
+        {"start": 83.44, "end": 90.0, "text": "b", "speaker": "Speaker 2"},
+        {"start": 3661.96, "end": 3663.0, "text": "c"},
+    ]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "x.mp4", language="vi", work_title="x"
+    )
+    table = _smtv_table(payload)
+
+    # Incrementing row numbers.
+    assert [table.rows[2 + i].cells[0].text for i in range(3)] == ["1", "2", "3"]
+    # Time Code HH:MM:SS.m (one-digit tenths; rolls hours/minutes).
+    assert table.rows[2].cells[1].text == "00:00:00.0"
+    assert table.rows[3].cells[1].text == "00:01:23.4"
+    assert table.rows[4].cells[1].text == "01:01:02.0"
+    # Speaker label prepended to the foreign-language column.
+    assert "Speaker 2: b" in table.rows[3].cells[2].text
+    # English Translation column is empty on every data row.
+    for i in range(3):
+        assert table.rows[2 + i].cells[3].text == ""
+
+
+def test_smtv_writer_grows_table_beyond_template_rows():
+    """The template ships 31 usable rows (rows 3-33); more segments
+    must clone rows so nothing is lost."""
+    from core.writers import smtv_docx_writer
+
+    n = 40  # > 31 usable template rows
+    segs = [{"start": float(i), "end": float(i) + 1, "text": f"seg {i}"} for i in range(n)]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "Big.mp4", language="ko", work_title="Big"
+    )
+    table = _smtv_table(payload)
+    # 2 leading rows (title + header) + one row per segment.
+    assert len(table.rows) == 2 + n
+    # Last cloned row holds the last segment, numbered n, English empty.
+    last = table.rows[-1]
+    assert last.cells[0].text == str(n)
+    assert "seg 39" in last.cells[2].text
+    assert last.cells[3].text == ""
+
+
+def test_smtv_writer_unknown_language_falls_back_to_code():
+    from core.writers import smtv_docx_writer
+
+    # An unmapped code is used verbatim as the label.
+    assert smtv_docx_writer.language_name("xx") == "xx"
+    assert smtv_docx_writer.language_name("pt-BR") == "Portuguese"
+    assert smtv_docx_writer.language_name("") == ""
+
+
+def test_smtv_time_format_clamps_and_rolls():
+    from core.writers import smtv_docx_writer as w
+
+    assert w._fmt_smtv_time(0) == "00:00:00.0"
+    assert w._fmt_smtv_time(83.44) == "00:01:23.4"
+    # Rounding 59.96 -> 60.0s must roll into the next minute, not 60s.
+    assert w._fmt_smtv_time(59.96) == "00:01:00.0"
+    # Non-finite / negative clamp to zero.
+    assert w._fmt_smtv_time(float("nan")) == "00:00:00.0"
+    assert w._fmt_smtv_time(-5.0) == "00:00:00.0"
+
+
+def test_smtv_time_format_rounds_half_up_predictably():
+    """Tenths use round-HALF-UP, not banker's rounding (round-half-to-even).
+
+    With Python's built-in round(), round(0.05*10)=0 but round(0.15*10)=2, so
+    equal ``.x5`` inputs rounded inconsistently. floor(x+0.5) always rounds
+    the half up, giving predictable timecodes.
+    """
+    from core.writers import smtv_docx_writer as w
+
+    assert w._fmt_smtv_time(0.05) == "00:00:00.1"   # banker's gave .0
+    assert w._fmt_smtv_time(0.15) == "00:00:00.2"
+    assert w._fmt_smtv_time(0.25) == "00:00:00.3"   # banker's gave .2
+    assert w._fmt_smtv_time(1.25) == "00:00:01.3"   # banker's gave .2
+
+
+def test_smtv_writer_empty_language_keeps_starts_cue():
+    """With no detected language the row-0 "[... starts]" cue must survive.
+
+    Regression: when language was '' the cue marker cell was OVERWRITTEN with
+    just the segment body (the append branch was gated on lang_label), so the
+    team lost the cue. Now a neutral label fills the placeholder and the body
+    is appended after the cue.
+    """
+    from core.writers import smtv_docx_writer
+
+    segs = [{"start": 0.0, "end": 1.0, "text": "first phrase"}]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "Mystery.mp4", language="", work_title="Mystery"
+    )
+    table = _smtv_table(payload)
+    first_marker = table.rows[2].cells[2].text
+    # The "[... starts]" cue is preserved (no dangling raw placeholder), and
+    # the first segment text is appended after it.
+    assert "starts]" in first_marker
+    assert "(Foreign Language)" not in first_marker
+    assert "first phrase" in first_marker
+
+
+def test_smtv_writer_registry_adapter_raises():
+    """The 2-arg registry entry must raise so a caller that bypasses
+    _write_outputs' special case fails loudly instead of dropping the
+    language/work_title."""
+    from core.writers import smtv_docx_writer
+
+    with pytest.raises(RuntimeError):
+        smtv_docx_writer.write([], "")
+
+
+def test_smtv_output_path_uses_team_filename():
+    """core.transcriber composes a fixed, recognisable team filename
+    (forcing a .docx extension, not '.smtv_docx')."""
+    import core.transcriber as tr
+
+    assert tr._FMT_EXTENSIONS["smtv_docx"] == "docx"
+    path = tr._smtv_output_path(os.path.join("dir", "My Show"), "ko")
+    name = os.path.basename(path)
+    assert name == "My Show -Transcription in Korean – Translation in English.docx"
+    # Unknown language keeps the template's literal "..." placeholder.
+    name2 = os.path.basename(tr._smtv_output_path("Clip", ""))
+    assert name2.startswith("Clip -Transcription in ... – Translation in English")

@@ -1,0 +1,57 @@
+name: macOS code-health
+
+# Broad code-health battery (informational tools + the invariant tests). Fires on
+# a push to the dedicated `macos-health` branch. Tool steps are continue-on-error
+# (advisory); the invariant tests are a real pass/fail gate.
+on:
+  workflow_dispatch:
+  push:
+    branches: [macos-health]
+
+jobs:
+  health:
+    name: code-health (macos-15 / py3.12)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install slim deps + health tooling
+        run: |
+          python -m pip install --upgrade pip
+          grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
+          pip install -r requirements.slim.txt
+          pip install pytest responses ruff mypy vulture radon xenon interrogate deptry
+
+      - name: Ruff (extended ruleset)
+        continue-on-error: true
+        run: ruff check --select E,F,W,B,C4,SIM,UP,PERF,RUF,PLC,PLE app core
+
+      - name: Mypy (lenient — surfaces real type holes)
+        continue-on-error: true
+        run: mypy --ignore-missing-imports --no-error-summary app core || true
+
+      - name: Vulture (dead code, conf>=70)
+        continue-on-error: true
+        run: vulture app core --min-confidence 70
+
+      - name: Radon (cyclomatic complexity) + Xenon gate
+        continue-on-error: true
+        run: |
+          radon cc -s -a app core | tail -40
+          xenon --max-absolute D --max-average B app core || true
+
+      - name: Interrogate (docstring coverage)
+        continue-on-error: true
+        run: interrogate -v app core || true
+
+      - name: Deptry (dependency hygiene)
+        continue-on-error: true
+        run: deptry . || true
+
+      - name: Invariant tests (REAL gate — Tk-free core, version + spec sync)
+        env:
+          WHISPER_OFFLINE_TESTS: "1"
+        run: python -m pytest tests/core/test_health_invariants.py -v
