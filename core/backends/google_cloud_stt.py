@@ -165,6 +165,22 @@ def storage_available() -> bool:
 # unit-testable with canned data.
 
 
+def bundled_credentials_path() -> str:
+    """Path to a build-bundled service-account JSON, or ``""`` if none.
+
+    A trusted-distribution build may drop a service-account key at
+    ``creds/gcloud_stt.json`` next to the app (resolved via
+    :func:`core.paths.resource_base`) so Google Cloud STT works out of the
+    box without the user pasting a key. The file is NEVER committed to the
+    repo — it only ever exists inside a build tree — so a normal source
+    checkout returns ``""`` here and the backend keeps requiring an
+    explicit key. Pure: only touches the filesystem, no google libs.
+    """
+    from ..paths import resource_base
+    candidate = os.path.join(resource_base(), "creds", "gcloud_stt.json")
+    return candidate if os.path.isfile(candidate) else ""
+
+
 def read_project_id(credentials_json_path: str) -> str:
     """Read ``project_id`` out of a service-account JSON file.
 
@@ -976,7 +992,10 @@ class GoogleCloudSttBackend(Backend):
                 status_cb(self._error)
             return False
 
-        self._credentials_path = str(cfg.get("gcloud_stt_credentials_json") or "").strip()
+        self._credentials_path = (
+            str(cfg.get("gcloud_stt_credentials_json") or "").strip()
+            or bundled_credentials_path()
+        )
         self._location = str(cfg.get("gcloud_stt_location") or DEFAULT_LOCATION).strip() or DEFAULT_LOCATION
         self._model = str(cfg.get("gcloud_stt_model") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self._batch_mode = bool(cfg.get("gcloud_stt_batch_mode", False))
