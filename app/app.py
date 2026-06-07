@@ -2190,12 +2190,22 @@ class App(tk.Tk):
         both surface "Resume" under the same condition. Any failure (the
         checkpoint module missing, a bad path) is swallowed — the probe
         must never block the menu or the action-bar refresh.
+
+        Goes straight to ``core._checkpoint`` (a tiny, dependency-light
+        module — just hashlib/json/os/pathlib) rather than through
+        ``core.transcriber.has_resumable_checkpoint``: that one-line
+        wrapper forces the FIRST import of the whole faster_whisper /
+        ctranslate2 backend stack onto the Tk main thread, synchronously,
+        inside a probe that runs on every 500 ms refresh tick for every
+        selected row. That is exactly the kind of front-end wiring fault
+        that froze the whole app the moment a task was first cancelled —
+        the probe only ever needed a cheap file-existence check.
         """
         if getattr(task, "status", "") != "cancelled":
             return False
         try:
-            from core.transcriber import has_resumable_checkpoint
-            return bool(has_resumable_checkpoint(task.file_path))
+            from core import _checkpoint
+            return bool(_checkpoint.has_checkpoint(task.file_path))
         except Exception:  # noqa: BLE001
             return False
 
@@ -2254,15 +2264,19 @@ class App(tk.Tk):
                 pass
 
     def _resumable_tasks(self, tasks: list[Any]) -> list[Any]:
+        # See _task_has_checkpoint: go straight to the lightweight
+        # core._checkpoint module rather than core.transcriber, which
+        # would force the heavy faster_whisper/ctranslate2 backend
+        # import onto the Tk main thread for a plain file-existence check.
         try:
-            from core.transcriber import has_resumable_checkpoint
+            from core import _checkpoint
         except Exception:  # noqa: BLE001
             return []
         out: list[Any] = []
         for t in tasks:
             if getattr(t, "status", "") == "cancelled":
                 try:
-                    if has_resumable_checkpoint(t.file_path):
+                    if _checkpoint.has_checkpoint(t.file_path):
                         out.append(t)
                 except Exception:  # noqa: BLE001
                     pass
@@ -4012,8 +4026,13 @@ class App(tk.Tk):
         # transcribe if the checkpoint is stale (different model,
         # mtime drift, etc.) so this is always safe to set when the
         # partial is present.
+        # See _task_has_checkpoint: go straight to the lightweight
+        # core._checkpoint module rather than core.transcriber, which
+        # would force the heavy faster_whisper/ctranslate2 backend
+        # import onto the Tk main thread for a plain file-existence check.
         try:
-            from core.transcriber import has_resumable_checkpoint
+            from core import _checkpoint
+            has_resumable_checkpoint = _checkpoint.has_checkpoint
         except Exception:  # noqa: BLE001
             has_resumable_checkpoint = lambda _p: False  # type: ignore[assignment]
         # Lazy model load without freezing the UI. This fires from a
