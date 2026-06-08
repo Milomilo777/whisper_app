@@ -446,7 +446,11 @@ class AdvancedDialog(tk.Toplevel):
             variable=self._voiceprint_enabled,
         ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=4)
 
+        self._build_gcloud_frame(body)
+
         # Cloud Speech-to-Text (Google) — OPTIONAL, uploads audio.
+        # Placed after the Google Cloud Speech-to-Text section: the Gemini
+        # "paste a key" backend is the older, less-important cloud path.
         cloud = ttk.LabelFrame(
             body, text="Cloud Speech-to-Text (Google) — optional, uploads audio"
         )
@@ -518,8 +522,6 @@ class AdvancedDialog(tk.Toplevel):
         link.grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
         link.bind("<Button-1>", lambda _e: self._open_billing_console())
         cloud.columnconfigure(1, weight=1)
-
-        self._build_gcloud_frame(body)
 
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
