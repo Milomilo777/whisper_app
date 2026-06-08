@@ -130,9 +130,30 @@ def _faster_whisper_model_present(cfg: Mapping[str, Any]) -> bool:
 
 
 def _faster_whisper_status(cfg: Mapping[str, Any]) -> EngineStatus:
+    """Cheap status: model presence only — no heavy import (startup-safe)."""
     present = _faster_whisper_model_present(cfg)
     detail = "" if present else "model downloads on first run (~3 GB)"
     return EngineStatus("faster_whisper", True, detail)
+
+
+def _faster_whisper_status_deep(cfg: Mapping[str, Any]) -> EngineStatus:
+    """Honest readiness: the model must already be on disk AND the
+    ``faster_whisper`` package must import cleanly.
+
+    Unlike the cheap probe (which always reports ``ready=True`` because the
+    model can download on first run), the deep probe is meant to answer
+    "can I transcribe right now, with no extra wait/setup" — so a
+    not-yet-downloaded model is reported as NOT ready.
+    """
+    try:
+        import faster_whisper  # noqa: F401
+    except Exception as e:  # noqa: BLE001
+        return EngineStatus(
+            "faster_whisper", False, f"faster-whisper not installed ({e})"
+        )
+    if not _faster_whisper_model_present(cfg):
+        return EngineStatus("faster_whisper", False, "Model not downloaded yet")
+    return EngineStatus("faster_whisper", True, "")
 
 
 def _whisper_cpp_status(cfg: Mapping[str, Any]) -> EngineStatus:
@@ -188,7 +209,7 @@ def _google_cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
 
 
 _PROBES: dict[str, Callable[[Mapping[str, Any]], EngineStatus]] = {
-    "faster_whisper": _faster_whisper_status,
+    "faster_whisper": _faster_whisper_status_deep,
     "whisper_cpp": _whisper_cpp_status,
     "parakeet": _parakeet_status,
     "cloud_stt": _cloud_stt_status,

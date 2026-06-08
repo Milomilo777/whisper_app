@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import time
 import tkinter as tk
 from queue import Empty, Full, Queue
@@ -1586,8 +1587,12 @@ class App(tk.Tk):
     def _refresh_engine_status(self) -> None:
         """Update the Transcribe-tab engine readiness line for the current pick.
 
-        Uses the cheap (non-importing) probe so it is safe to call at startup
-        and on every selection without paying a heavy native-lib import.
+        Paints an immediate cheap/neutral line synchronously (so startup and
+        selection never block), then kicks off the REAL readiness probe
+        (``deep=True`` — genuinely checks installs, model presence, keys) on
+        a short-lived background thread and marshals the result back onto
+        the Tk main thread via ``self.after``. This keeps the UI responsive
+        even when a heavy native-lib import is slow.
         """
         var = getattr(self, "engine_status_var", None)
         if var is None:
@@ -1600,7 +1605,65 @@ class App(tk.Tk):
             value = _eng.LABEL_TO_VALUE.get(label) or self.app_config.get(
                 "transcribe_backend"
             )
-            st = _eng.engine_status(value, self.app_config, deep=False)
+            value = _eng.normalise_engine(value)
+
+            # 1) Immediate, cheap, non-blocking paint — "Checking…" so the
+            #    user sees something right away while the real probe runs.
+            var.set("Checking…")
+            lbl = getattr(self, "engine_status_label", None)
+            if lbl is not None:
+                try:
+                    lbl.configure(foreground="#888")
+                except Exception:  # noqa: BLE001
+                    pass
+
+            # 2) Real probe on a daemon thread — never blocks the UI thread.
+            cfg_snapshot = dict(self.app_config)
+
+            def _probe() -> None:
+                try:
+                    st = _eng.engine_status(value, cfg_snapshot, deep=True)
+                except Exception as e:  # noqa: BLE001
+                    st = _eng.EngineStatus(value, False, str(e) or "probe failed")
+                self.after(0, lambda: self._apply_engine_status(value, st))
+
+            threading.Thread(target=_probe, daemon=True).start()
+        except Exception:  # noqa: BLE001
+            try:
+                var.set("")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _apply_engine_status(self, probed_value: str, st: Any) -> None:
+        """Apply a background-probed ``EngineStatus`` to the status label.
+
+        Runs on the Tk main thread (scheduled via ``self.after``). Drops the
+        result if the user switched engines mid-probe (stale-race guard) or
+        if the widgets were destroyed in the meantime (shutdown guard).
+        """
+        try:
+            from core.backends import availability as _eng
+
+            var = getattr(self, "engine_status_var", None)
+            lbl = getattr(self, "engine_status_label", None)
+            if var is None:
+                return
+            if lbl is not None:
+                try:
+                    if not lbl.winfo_exists():
+                        return
+                except Exception:  # noqa: BLE001
+                    return
+
+            evar = getattr(self, "transcribe_engine_var", None)
+            current_label = evar.get() if evar is not None else ""
+            current_value = _eng.normalise_engine(
+                _eng.LABEL_TO_VALUE.get(current_label)
+                or self.app_config.get("transcribe_backend")
+            )
+            if current_value != probed_value:
+                return  # stale — the user picked a different engine meanwhile
+
             if st.ready:
                 text = "✓ Ready" + (f" — {st.detail}" if st.detail else "")
                 color = "#3a8f3a"
@@ -1608,17 +1671,13 @@ class App(tk.Tk):
                 text = f"⚠ {st.detail}  (set up in Advanced settings…)"
                 color = "#b06a00"
             var.set(text)
-            lbl = getattr(self, "engine_status_label", None)
             if lbl is not None:
                 try:
                     lbl.configure(foreground=color)
                 except Exception:  # noqa: BLE001
                     pass
         except Exception:  # noqa: BLE001
-            try:
-                var.set("")
-            except Exception:  # noqa: BLE001
-                pass
+            pass
 
     def _refresh_engine_selector(self) -> None:
         """Re-sync the Transcribe-tab engine picker to the saved backend (e.g.

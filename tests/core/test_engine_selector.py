@@ -76,6 +76,11 @@ def _bare_app(App, *, engine_label: str, backend: str):
     a.log = a.logs.append
     a.engine_status_var = _Var("")
     a.engine_status_label = None
+    # _refresh_engine_status now probes on a background thread and marshals
+    # the result back via self.after — run callbacks inline (synchronously,
+    # on the same thread) so the test can assert on the final state without
+    # a real Tk event loop.
+    a.after = lambda _ms, fn: fn()
     return a
 
 
@@ -234,14 +239,87 @@ def test_on_engine_selected_persists_and_restarts_once(App, monkeypatch):
 
 
 # ------------------------------------------------- 7. App._refresh_engine_status
+#
+# _refresh_engine_status now does a REAL (deep=True) readiness check on a
+# background thread, after first painting an immediate "Checking…" line
+# synchronously. To keep these tests hermetic and deterministic (no real
+# model download, no thread-timing races), run the probe inline by
+# monkeypatching threading.Thread to execute synchronously.
 
 
-def test_refresh_engine_status_faster_whisper_is_ready(App):
+def _run_probe_inline(monkeypatch):
+    """Make _refresh_engine_status's background thread run synchronously."""
+    import threading as _threading
+
+    class _InlineThread:
+        def __init__(self, target=None, daemon=None, **_kw):
+            self._target = target
+
+        def start(self):
+            if self._target is not None:
+                self._target()
+
+    monkeypatch.setattr("app.app.threading.Thread", _InlineThread)
+    _ = _threading  # keep the import referenced for clarity
+
+
+def test_refresh_engine_status_paints_checking_then_real_result(App, monkeypatch):
     fw_label = eng.VALUE_TO_LABEL["faster_whisper"]
     a = _bare_app(App, engine_label=fw_label, backend="faster_whisper")
+    _run_probe_inline(monkeypatch)
+
+    monkeypatch.setattr(
+        eng,
+        "engine_status",
+        lambda value, cfg, deep=True: eng.EngineStatus(value, True, ""),
+    )
 
     App._refresh_engine_status(a)
 
     text = a.engine_status_var.get()
     assert text != ""
-    assert text.startswith("✓")  # "✓"
+    assert text.startswith("✓")
+
+
+def test_refresh_engine_status_faster_whisper_not_ready_without_model(App, monkeypatch):
+    """The deep probe must report faster-whisper as NOT ready when its model
+    folder is absent — this is the whole point of the real readiness check
+    (the cosmetic cheap probe always said "Ready")."""
+    fw_label = eng.VALUE_TO_LABEL["faster_whisper"]
+    a = _bare_app(App, engine_label=fw_label, backend="faster_whisper")
+    _run_probe_inline(monkeypatch)
+
+    monkeypatch.setattr(eng, "_faster_whisper_model_present", lambda cfg: False)
+
+    App._refresh_engine_status(a)
+
+    text = a.engine_status_var.get()
+    assert text.startswith("⚠")
+    assert "not downloaded" in text.lower()
+
+
+def test_refresh_engine_status_drops_stale_result_after_engine_switch(App, monkeypatch):
+    """If the user switches engines while the probe is in flight, the late
+    result for the OLD engine must be dropped (race guard)."""
+    fw_label = eng.VALUE_TO_LABEL["faster_whisper"]
+    gcloud_label = eng.VALUE_TO_LABEL["google_cloud_stt"]
+    a = _bare_app(App, engine_label=fw_label, backend="faster_whisper")
+
+    real_status = eng.engine_status
+
+    def _slow_status(value, cfg, deep=True):
+        # Simulate the user switching engines mid-probe.
+        a.transcribe_engine_var.set(gcloud_label)
+        a.app_config["transcribe_backend"] = "google_cloud_stt"
+        return real_status(value, cfg, deep=deep)
+
+    monkeypatch.setattr(eng, "engine_status", _slow_status)
+    _run_probe_inline(monkeypatch)
+
+    App._refresh_engine_status(a)
+
+    text = a.engine_status_var.get()
+    # The stale faster_whisper verdict must have been dropped — the line
+    # still shows the synchronous "Checking…" placeholder, never a ✓/⚠
+    # result computed for the engine the user has since switched away from.
+    assert text == "Checking…"
