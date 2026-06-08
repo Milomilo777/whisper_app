@@ -127,6 +127,17 @@ if errorlevel 1 (
   exit /b 5
 )
 
+echo [embed] sanity import check (bundled Google Cloud STT stack)
+REM The Google Cloud client libs are now bundled (the default cloud engine
+REM works out of the box). Import the speech client AND grpc's native
+REM cygrpc here so a broken / wrong-Python grpcio fails the build loudly
+REM instead of only crashing at first cloud-transcribe.
+"%BUILD%\python\python.exe" -c "from google.cloud import speech_v2; from google.oauth2 import service_account; from grpc._cython import cygrpc; print('embed_gcloud_import_ok')"
+if errorlevel 1 (
+  echo [embed] Google Cloud sanity import failed — bundled client is broken
+  exit /b 5
+)
+
 REM Import the newer core modules too (they are Tk-free + dependency-light)
 REM so a future prune or a syntax error in any of them fails the build
 REM loudly here instead of only crashing at runtime: the format converter,

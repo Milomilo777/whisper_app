@@ -60,12 +60,16 @@ stable-ts>=2.17
 # user pastes a free API key from aistudio.google.com in
 # Advanced > Backend. See docs/CLOUD_STT.md.
 
-# Optional REAL Google Cloud Speech-to-Text v2 backend
-# (transcribe_backend="google_cloud_stt"): the heavy google-cloud-speech
-# and google-cloud-storage client libraries are NOT pinned here — they are
-# installed ON DEMAND via core/optional_deps.py (feature key
-# "google_cloud_stt") into the user cache on first use, so the slim embed
-# tree stays small. Auth is a service-account JSON file, not an API key.
+# REAL Google Cloud Speech-to-Text v2 backend
+# (transcribe_backend="google_cloud_stt"). This is now the DEFAULT engine
+# when a bundled service-account key ships, so the client libraries are
+# BUNDLED (pinned here) rather than installed on demand: it removes the
+# first-use install wait and, crucially, the grpcio native extension is
+# then built for the embed's own Python so it can never be shadowed by a
+# stale, wrong-Python pylibs cache. core/optional_deps.py keeps the
+# on-demand install path as a fallback for source runs without these.
+google-cloud-speech>=2.21
+google-cloud-storage>=2.10
 
 # --- Notes -----------------------------------------------------------
 # * tkinter ships with the Windows Python installer. On Linux install
