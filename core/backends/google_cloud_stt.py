@@ -983,14 +983,42 @@ class GoogleCloudSttBackend(Backend):
         cfg = self._cfg()
 
         if not runtime_available():
-            self._error = (
-                "The Google Cloud Speech library is not installed. Switch to "
-                "this backend in Advanced > Backend to install it on first "
-                "use (needs internet), or use the default engine."
-            )
+            # On-demand first-use install. The library is intentionally NOT
+            # bundled (slim build), so install it into the user extras dir the
+            # first time this engine actually runs — in the worker too, not
+            # only via the Advanced "Test connection" path. Without this a
+            # direct Transcribe on a fresh machine just failed with "library
+            # not installed" and the job never appeared.
             if status_cb:
-                status_cb(self._error)
-            return False
+                status_cb(
+                    "Installing the Google Cloud Speech library "
+                    "(one-time setup, needs internet)..."
+                )
+            installed = False
+            try:
+                from core import optional_deps
+
+                installed = optional_deps.install(
+                    "google_cloud_stt",
+                    log_cb=status_cb,
+                    cancel_event=cancel_event,
+                )
+                optional_deps.activate()
+            except Exception as e:  # noqa: BLE001
+                if status_cb:
+                    status_cb(f"Google Cloud library install error: {e}")
+                installed = False
+            if not installed or not runtime_available():
+                self._error = (
+                    "The Google Cloud Speech library could not be installed "
+                    "automatically (no internet?). Open Advanced > Backend to "
+                    "install it, or switch to the offline engine."
+                )
+                if status_cb:
+                    status_cb(self._error)
+                return False
+            if status_cb:
+                status_cb("Google Cloud Speech library installed.")
 
         self._credentials_path = (
             str(cfg.get("gcloud_stt_credentials_json") or "").strip()

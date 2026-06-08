@@ -902,13 +902,16 @@ def _deep_merge_dict(dest: dict[str, Any], src: dict[str, Any]) -> None:
             dest[k] = v
 
 
-def _get_alt_backend(name: str) -> Any:
+def _get_alt_backend(
+    name: str, status_cb: Callable[[str], None] | None = None
+) -> Any:
     """Lazy-construct (and load) the alt backend for ``name``.
 
     Worker processes only need one backend per run, so we cache the
     instance here. The Advanced dialog's "Download model..." button is
     expected to have populated the model file before the user picks
-    the matching backend in config.
+    the matching backend in config. ``status_cb`` surfaces load-time
+    progress (e.g. an on-demand cloud-library install) in the worker log.
 
     Thread-safe: guarded by ``_ALT_BACKEND_LOCK`` so two concurrent
     ``transcribe()`` calls don't both load (and one overwrite the
@@ -920,7 +923,7 @@ def _get_alt_backend(name: str) -> Any:
             return _ALT_BACKEND
         from .backends import get_backend
         backend = get_backend(name)
-        if not backend.load():
+        if not backend.load(status_cb):
             err = backend.get_error() or f"failed to load {name} backend"
             raise RuntimeError(err)
         _ALT_BACKEND = backend
@@ -1588,7 +1591,7 @@ def _transcribe_via_alt_backend(
     language_cb: Callable[[str, float], None] | None,
 ) -> None:
     """Drive a non-default backend through the same writers + diarisation."""
-    backend = _get_alt_backend(backend_name)
+    backend = _get_alt_backend(backend_name, log_cb)
     duration = get_duration(task.file_path)
     start = time.time()
     log(f"Processing ({backend_name}): {task.file_path}", log_cb)

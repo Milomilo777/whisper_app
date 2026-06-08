@@ -737,12 +737,46 @@ def test_load_bad_json_path_clear_error(monkeypatch, tmp_path):
     assert "not found" in (backend.get_error() or "")
 
 
+def test_load_installs_google_lib_on_first_use(monkeypatch):
+    """When the google lib is missing, load() installs it on demand (the
+    worker path, not only the Advanced 'Test connection' path) instead of just
+    erroring — otherwise a direct Transcribe on a fresh machine fails."""
+    monkeypatch.setattr(g, "bundled_credentials_path", lambda: "")
+    state = {"avail": False, "install": 0}
+    monkeypatch.setattr(g, "runtime_available", lambda: state["avail"])
+
+    import core.optional_deps as od
+
+    def fake_install(feature, log_cb=None, cancel_event=None, timeout=None):
+        assert feature == "google_cloud_stt"
+        state["install"] += 1
+        state["avail"] = True  # pretend pip succeeded
+        return True
+
+    monkeypatch.setattr(od, "install", fake_install)
+    monkeypatch.setattr(od, "activate", lambda: None)
+
+    backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
+    ok = backend.load()
+    assert state["install"] == 1  # install attempted on first use
+    # No creds were configured, so it can't finish loading, but it DID get
+    # past the runtime gate (proving the auto-install + re-check ran).
+    assert ok is False
+    assert "service-account JSON" in (backend.get_error() or "")
+
+
 def test_load_lib_missing_clear_error(monkeypatch):
+    # Lib missing AND the on-demand install can't run (e.g. offline): degrade
+    # to a clear, actionable error instead of a raw failure.
+    monkeypatch.setattr(g, "bundled_credentials_path", lambda: "")
     monkeypatch.setattr(g, "runtime_available", lambda: False)
+    import core.optional_deps as od
+    monkeypatch.setattr(od, "install", lambda *a, **k: False)
+    monkeypatch.setattr(od, "activate", lambda: None)
     backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
     ok = backend.load()
     assert ok is False
-    assert "not installed" in (backend.get_error() or "").lower()
+    assert "could not be installed" in (backend.get_error() or "").lower()
 
 
 def test_load_ok_with_valid_json(monkeypatch, tmp_path):
