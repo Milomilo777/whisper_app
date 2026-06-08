@@ -714,6 +714,9 @@ def test_minutes_for_uses_known_duration_without_probe():
 def test_load_missing_credentials_clear_error(monkeypatch):
     # Pretend the google lib IS importable so load() reaches the JSON check.
     monkeypatch.setattr(g, "runtime_available", lambda: True)
+    # Neutralise any build-bundled key so the "no credentials at all" path is
+    # exercised (a dev/build tree may carry creds/gcloud_stt.json).
+    monkeypatch.setattr(g, "bundled_credentials_path", lambda: "")
     backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
     statuses: list[str] = []
     ok = backend.load(statuses.append)

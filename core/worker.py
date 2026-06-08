@@ -170,6 +170,36 @@ def read_capped_lines(stream: Any, max_chars: int) -> Iterator[tuple[str, bool]]
     production OOM guard active without breaking the frozen control-channel
     behaviour that other callers rely on.
     """
+    # Prefer ``readline`` for real pipes. ``TextIOWrapper.read(n)`` on a
+    # Windows pipe can wait for far more than a short JSON command, which
+    # left the worker's stdin reader parked forever. ``readline(size)`` still
+    # bounds each read, but it returns promptly on the newline the protocol
+    # already uses.
+    readline_attr = getattr(stream, "readline", None)
+    if callable(readline_attr):
+        readline = cast("Callable[[int], str]", readline_attr)
+        dropping = False  # inside the tail of an oversized record we discard
+        while True:
+            raw = readline(max_chars + 1)
+            if not raw:
+                # EOF. If we were discarding an oversized unterminated record,
+                # surface it once so the caller can reject it loudly.
+                if dropping:
+                    yield "", True
+                return
+            if dropping:
+                # Discarding the rest of an oversized record until newline.
+                if raw.endswith("\n") or "\n" in raw:
+                    yield "", True
+                    dropping = False
+                continue
+            if len(raw) > max_chars:
+                yield raw, True
+                dropping = not raw.endswith("\n")
+                continue
+            yield raw, False
+        return
+
     read_attr = getattr(stream, "read", None)
     if not callable(read_attr):
         for raw in stream:

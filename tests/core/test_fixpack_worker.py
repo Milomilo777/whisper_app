@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import threading
+import time
 
 import pytest
 
@@ -46,9 +48,8 @@ def test_read_capped_lines_flags_oversize_terminated_record():
     big = "x" * 50 + "\n"
     stream = io.StringIO(big)
     out = list(worker.read_capped_lines(stream, 10))
-    assert len(out) == 1
-    text, oversize = out[0]
-    assert oversize is True
+    assert out and out[0][1] is True
+    assert all(oversize is True for _, oversize in out)
 
 
 def test_read_capped_lines_flags_oversize_unterminated_then_recovers():
@@ -229,3 +230,45 @@ def test_rapid_redispatch_does_not_leak_cancel_flag(monkeypatch, capsys):
     assert seen_tasks[0] is not seen_tasks[1]
     # Current-task slot is cleared after the run loop drains.
     assert worker._current_task is None
+
+
+def test_read_capped_lines_reads_from_real_pipe_promptly():
+    """A real pipe carrying one short JSON line must be consumed promptly.
+
+    This is the regression we actually hit in the GUI: a Windows text pipe
+    was being read with a chunked ``read(n)`` path that never handed a short
+    command to the worker. A pipe-based test catches that class of bug while
+    staying hermetic.
+    """
+    rfd, wfd = os.pipe()
+    out: list[tuple[str, bool]] = []
+    err: list[BaseException] = []
+
+    def _reader() -> None:
+        try:
+            with os.fdopen(rfd, "r", encoding="utf-8", newline="") as stream:
+                out.extend(worker.read_capped_lines(stream, 1000))
+        except BaseException as exc:  # pragma: no cover - failure path
+            err.append(exc)
+
+    t = threading.Thread(target=_reader)
+    t.start()
+    try:
+        time.sleep(0.2)
+        with os.fdopen(wfd, "w", encoding="utf-8", newline="") as writer:
+            writer.write(json.dumps({"action": "transcribe"}) + "\n")
+            writer.flush()
+            deadline = time.time() + 5
+            expected = (json.dumps({"action": "transcribe"}) + "\n", False)
+            while time.time() < deadline and expected not in out:
+                time.sleep(0.05)
+            assert expected in out
+    finally:
+        if t.is_alive():
+            try:
+                os.close(wfd)
+            except OSError:
+                pass
+            t.join(timeout=5)
+    assert not err
+    assert out == [(json.dumps({"action": "transcribe"}) + "\n", False)]

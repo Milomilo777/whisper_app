@@ -225,6 +225,18 @@ class AdvancedDialog(tk.Toplevel):
 
         self.geometry(f"{width}x{height}+{x}+{y}")
 
+        # Auto-verify the Google Cloud key on open so the user can see at a
+        # glance that the built-in (or configured) key works — no need to click
+        # "Test connection". Runs on a daemon thread via
+        # _test_gcloud_connection; deferred so the window is mapped first.
+        try:
+            from core.backends.availability import has_gcloud_key
+
+            if has_gcloud_key(self.app.app_config):
+                self.after(250, self._test_gcloud_connection)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _build(self) -> None:
         main = ttk.Frame(self)
         main.pack(fill="both", expand=True)
@@ -802,9 +814,11 @@ class AdvancedDialog(tk.Toplevel):
         cfg["cookies_from_browser"] = "" if _cb in ("", "(off)") else _cb
         tpl = (self._filename_template.get() or "").strip() or "{base}.{ext}"
         cfg["output_filename_template"] = tpl
+        _old_backend = str(cfg.get("transcribe_backend") or "")
         cfg["transcribe_backend"] = _BACKEND_LABEL_TO_VALUE.get(
             self._backend_display.get() or "", "faster_whisper"
         )
+        _backend_changed = cfg["transcribe_backend"] != _old_backend
         cfg["cloud_stt_api_key"] = self._cloud_api_key.get().strip()
         cfg["cloud_stt_model"] = (
             self._cloud_model.get().strip() or "gemini-3.5-flash"
@@ -816,6 +830,15 @@ class AdvancedDialog(tk.Toplevel):
         cfg["gcloud_stt_batch_mode"] = bool(self._gcloud_batch_mode.get())
         cfg["gcloud_stt_bucket"] = (self._gcloud_bucket.get() or "").strip()
         cfg["gcloud_stt_diarization"] = bool(self._gcloud_diarization.get())
+        if cfg.get("transcribe_backend") == "google_cloud_stt":
+            # Google Cloud STT v2 rejects diarization on this recognizer.
+            # Keep the GUI from saving an unsupported combination that would
+            # otherwise fail late during transcription.
+            cfg["gcloud_stt_diarization"] = False
+            try:
+                self._gcloud_diarization.set(False)
+            except Exception:  # noqa: BLE001
+                pass
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
         cfg["demucs_enabled"] = bool(self._demucs_enabled.get())
@@ -865,6 +888,27 @@ class AdvancedDialog(tk.Toplevel):
             save_config(cfg)
         except Exception as e:  # noqa: BLE001
             self.app.log(f"Failed to save settings: {e}")
+        # Engine switch needs a fresh worker: the live worker snapshots
+        # transcribe_backend at spawn and the dispatch prefers that stale
+        # value, so rewriting cfg alone keeps the old engine running until the
+        # process restarts. stop_all() forces a fresh worker (reading the new
+        # backend) on the next transcribe — same mechanism as a model change.
+        if _backend_changed:
+            try:
+                self.app.transcription_service.stop_all()
+            except Exception as e:  # noqa: BLE001
+                self.app.log(f"Could not restart the transcription worker: {e}")
+            self.app.log(
+                f"Transcription engine changed to {cfg['transcribe_backend']}. "
+                "The new engine will be used on the next transcription."
+            )
+        # Refresh the Transcribe-tab engine picker to match the saved backend.
+        _refresh = getattr(self.app, "_refresh_engine_selector", None)
+        if callable(_refresh):
+            try:
+                _refresh()
+            except Exception:  # noqa: BLE001
+                pass
         # Sync the on-tab checkboxes to the saved values.
         if hasattr(self.app, "auto_transcribe_var"):
             self.app.auto_transcribe_var.set(cfg["auto_transcribe_after_download"])
@@ -1036,9 +1080,22 @@ class AdvancedDialog(tk.Toplevel):
     # -- Google Cloud Speech-to-Text (service-account) handlers -----------
 
     def _gcloud_path_display(self) -> str:
-        """The path text shown next to 'Browse...' ('(none selected)' empty)."""
+        """The path text shown next to 'Browse...'.
+
+        Falls back to announcing the build-bundled key so the user can see a
+        key is loaded even when they have not picked their own JSON file.
+        """
         path = (self._gcloud_credentials.get() or "").strip()
-        return path or "(none selected)"
+        if path:
+            return path
+        try:
+            from core.backends.availability import bundled_gcloud_key_path
+
+            if bundled_gcloud_key_path():
+                return "✓ Using the built-in Google Cloud key (loaded)"
+        except Exception:  # noqa: BLE001
+            pass
+        return "(none selected)"
 
     def _browse_gcloud_credentials(self) -> None:
         """Pick the downloaded service-account JSON file."""

@@ -27,6 +27,36 @@ logger = logging.getLogger(__name__)
 APP_NAME = "WhisperProject"
 APP_AUTHOR = False  # platformdirs: omit author segment on Windows
 
+
+def _bundled_gcloud_key_present() -> bool:
+    """True iff a trusted build ships a Google Cloud service-account key.
+
+    The key lives at ``<resource_base>/creds/gcloud_stt.json`` — only ever
+    inside a build tree, never in the repo (gitignored). Pure filesystem
+    check; imports nothing from google. Kept inline (rather than importing
+    core.backends) to avoid an import cycle at config load time.
+    """
+    try:
+        from .paths import resource_base
+
+        return os.path.isfile(
+            os.path.join(resource_base(), "creds", "gcloud_stt.json")
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _default_transcribe_backend() -> str:
+    """Default engine: Google Cloud STT when a build ships a key, else offline.
+
+    A trusted distribution drops a service-account key into the build so cloud
+    STT works out of the box; a plain source checkout has no key and stays on
+    faster-whisper. A user's explicit choice (saved in config.json) always
+    overrides this default via the local-config merge layer.
+    """
+    return "google_cloud_stt" if _bundled_gcloud_key_present() else "faster_whisper"
+
+
 DEFAULT_CONFIG = {
     "model": {
         "name": "faster-whisper-large-v3",
@@ -90,10 +120,12 @@ DEFAULT_CONFIG = {
     # v0.7.1 — watched folder (off by default)
     "watched_folder": "",
     "watched_folder_enabled": False,
-    # v0.7.1 — backend selection (faster_whisper is the default and bundled
-    # default; whisper_cpp is opt-in via pywhispercpp; future backends slot in
-    # here).
-    "transcribe_backend": "faster_whisper",
+    # v0.7.1 — backend selection. The default is resolved dynamically: a
+    # trusted build that ships a Google Cloud key defaults to cloud STT so it
+    # works out of the box; a plain source checkout (no key) stays offline on
+    # faster_whisper. whisper_cpp/parakeet are opt-in; a user's saved choice
+    # always wins via the local-config merge layer.
+    "transcribe_backend": _default_transcribe_backend(),
     # OPTIONAL cloud Speech-to-Text backend (Google Gemini API). Off
     # unless the user selects transcribe_backend="cloud_stt". The API
     # key is stored in CLEARTEXT here, consistent with how cookies and

@@ -532,6 +532,10 @@ class App(tk.Tk):
     transcribe_lang_var: tk.StringVar
     device_var: tk.StringVar
     compute_type_var: tk.StringVar
+    # Engine picker row on the Transcribe tab (built in tabs.py).
+    transcribe_engine_var: tk.StringVar
+    engine_status_var: tk.StringVar
+    engine_status_label: "ttk.Label"
     # R3: GPU/CPU device badge. The text var is set in update_model_state();
     # the two Labels (Transcribe-tab header + Queue-tab status line) are built
     # in tabs.py and registered here so apply_device_badge can recolour them.
@@ -1537,7 +1541,101 @@ class App(tk.Tk):
             self.log(f"Could not save preferences: {e}")
 
     def open_advanced_dialog(self) -> None:
-        AdvancedDialog(self)
+        dlg = AdvancedDialog(self)
+        # Block (nested event loop) until the modal dialog closes, then re-sync
+        # the Transcribe-tab engine picker in case the backend was changed in
+        # Advanced settings.
+        try:
+            self.wait_window(dlg)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_engine_selector()
+
+    def _on_engine_selected(self) -> None:
+        """Persist the Transcribe-tab engine pick and restart the worker so the
+        new engine takes effect on the next transcription.
+
+        The live worker snapshots ``transcribe_backend`` at spawn and the
+        dispatch prefers that stale value, so a fresh worker is required for a
+        switch to take effect — the same mechanism a model change uses.
+        """
+        from core.backends import availability as _eng
+
+        evar = getattr(self, "transcribe_engine_var", None)
+        if evar is None:
+            return
+        value = _eng.LABEL_TO_VALUE.get(evar.get() or "", _eng.FALLBACK_ENGINE)
+        old = str(self.app_config.get("transcribe_backend") or "")
+        if value != old:
+            self.app_config["transcribe_backend"] = value
+            try:
+                save_config(self.app_config)
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Failed to save engine selection")
+                self.log(f"Could not save engine selection: {e}")
+            try:
+                self.transcription_service.stop_all()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"Could not restart the transcription worker: {e}")
+            self.log(
+                f"Transcription engine set to {value}. "
+                "It will be used on the next transcription."
+            )
+        self._refresh_engine_status()
+
+    def _refresh_engine_status(self) -> None:
+        """Update the Transcribe-tab engine readiness line for the current pick.
+
+        Uses the cheap (non-importing) probe so it is safe to call at startup
+        and on every selection without paying a heavy native-lib import.
+        """
+        var = getattr(self, "engine_status_var", None)
+        if var is None:
+            return
+        try:
+            from core.backends import availability as _eng
+
+            evar = getattr(self, "transcribe_engine_var", None)
+            label = evar.get() if evar is not None else ""
+            value = _eng.LABEL_TO_VALUE.get(label) or self.app_config.get(
+                "transcribe_backend"
+            )
+            st = _eng.engine_status(value, self.app_config, deep=False)
+            if st.ready:
+                text = "✓ Ready" + (f" — {st.detail}" if st.detail else "")
+                color = "#3a8f3a"
+            else:
+                text = f"⚠ {st.detail}  (set up in Advanced settings…)"
+                color = "#b06a00"
+            var.set(text)
+            lbl = getattr(self, "engine_status_label", None)
+            if lbl is not None:
+                try:
+                    lbl.configure(foreground=color)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001
+            try:
+                var.set("")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _refresh_engine_selector(self) -> None:
+        """Re-sync the Transcribe-tab engine picker to the saved backend (e.g.
+        after the Advanced dialog changed it), then refresh the status line."""
+        evar = getattr(self, "transcribe_engine_var", None)
+        if evar is None:
+            return
+        try:
+            from core.backends import availability as _eng
+
+            value = _eng.normalise_engine(self.app_config.get("transcribe_backend"))
+            label = _eng.VALUE_TO_LABEL.get(value)
+            if label and label != evar.get():
+                evar.set(label)
+        except Exception:  # noqa: BLE001
+            pass
+        self._refresh_engine_status()
 
     # Generic helpers ---------------------------------------------------------
     def yt_dlp_path(self) -> str:
@@ -2003,14 +2101,32 @@ class App(tk.Tk):
 
         Cheap probe used by the lazy-load enqueue gate to decide
         whether to surface the ~3 GB download dialog. Just checks
-        that the configured ``model_path`` exists; the worker's
+        that the resolved model directory exists; the worker's
         load step will surface any deeper corruption via a
         ``startup_error`` event.
         """
         try:
             from pathlib import Path
-            mp = self.app_config.get("model_path") or ""
-            return bool(mp) and Path(mp).exists()
+            from core.hub import default_hub_folder, model_folder_for
+
+            mp = str(self.app_config.get("model_path") or "").strip()
+            if mp and Path(mp).exists():
+                return True
+
+            model_info = self.app_config.get("model") or {}
+            model_name = ""
+            if isinstance(model_info, dict):
+                model_name = str(model_info.get("name") or "").strip()
+            if not model_name:
+                model_name = str(self.app_config.get("whisper_model") or "").strip()
+            if not model_name:
+                model_name = "faster-whisper-large-v3"
+
+            hub_folder = str(self.app_config.get("hub_folder") or "").strip()
+            if not hub_folder:
+                hub_folder = str(default_hub_folder())
+
+            return model_folder_for(hub_folder, model_name).exists()
         except Exception:  # noqa: BLE001
             return False
 
@@ -2488,14 +2604,19 @@ class App(tk.Tk):
 
     def _on_download_scale(self, which: str, value: str) -> None:
         """A position slider moved — write its timecode into the matching
-        Start/End field (0:00:00 stays the 'unset' sentinel)."""
+        Start/End field (0:00:00 stays the 'unset' sentinel).
+
+        If the user drags one knob past the other, keep the visible range
+        non-crossing by snapping the other knob to the same point. That keeps
+        the UI readable even though the backend also sanitises invalid ranges.
+        """
         if getattr(self, "_suppress_scale_cb", False):
             return
         # No probed video length → ignore stray drags (a disabled ttk.Scale
         # still accepts the mouse, and the range would be a useless 0..1s).
         if getattr(self, "_download_duration", 0.0) <= 0:
             return
-        from app.services.download_service import _fmt_timecode
+        from app.services.download_service import _fmt_timecode, _parse_timecode
         try:
             secs = float(value)
         except (TypeError, ValueError):
@@ -2503,8 +2624,38 @@ class App(tk.Tk):
         tc = _fmt_timecode(secs)
         if which == "start":
             self.download_start_time_var.set(tc)
+            end_raw = ""
+            try:
+                end_raw = self.download_end_time_var.get()
+            except Exception:  # noqa: BLE001
+                end_raw = ""
+            end_secs = _parse_timecode(end_raw)
+            if end_secs is not None and end_secs > 0 and secs > end_secs:
+                end_scale = getattr(self, "download_end_scale", None)
+                self._suppress_scale_cb = True
+                try:
+                    self.download_end_time_var.set(tc)
+                    if end_scale is not None:
+                        end_scale.set(secs)
+                finally:
+                    self._suppress_scale_cb = False
         else:
             self.download_end_time_var.set(tc)
+            start_raw = ""
+            try:
+                start_raw = self.download_start_time_var.get()
+            except Exception:  # noqa: BLE001
+                start_raw = ""
+            start_secs = _parse_timecode(start_raw)
+            if start_secs is not None and start_secs > 0 and secs < start_secs:
+                start_scale = getattr(self, "download_start_scale", None)
+                self._suppress_scale_cb = True
+                try:
+                    self.download_start_time_var.set(tc)
+                    if start_scale is not None:
+                        start_scale.set(secs)
+                finally:
+                    self._suppress_scale_cb = False
 
     def cancel_download(self, task: VideoDownloadTask) -> None:
         task.cancelled = True

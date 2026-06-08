@@ -72,9 +72,14 @@ def _cli_transcribe(args: argparse.Namespace) -> int:
     def _on_log(m: str) -> None:
         print(f"[cli] {m}", flush=True)
 
+    last_progress = {"value": -1}
+
     def _on_progress(p: int) -> None:
-        # one progress line per percentage; flushable.
-        pass
+        # Emit a single line per percentage so CLI users can see the
+        # same live progress the GUI gets from the worker events.
+        if p != last_progress["value"]:
+            last_progress["value"] = p
+            print(f"[cli] progress {p}%", flush=True)
 
     started = time.time()
     status = "finished"
@@ -87,12 +92,17 @@ def _cli_transcribe(args: argparse.Namespace) -> int:
         print(f"[cli] ERROR: {e}", file=sys.stderr, flush=True)
     duration_s = time.time() - started
 
-    base, _ = os.path.splitext(src)
-    written: list[str] = []
-    for ext in formats:
-        candidate = f"{base}.{ext}"
-        if os.path.isfile(candidate):
-            written.append(candidate)
+    written = [
+        p for p in list(getattr(task, "output_paths", None) or [])
+        if os.path.isfile(p)
+    ]
+    if not written:
+        base, _ = os.path.splitext(src)
+        written = []
+        for ext in formats:
+            candidate = f"{base}.{ext}"
+            if os.path.isfile(candidate):
+                written.append(candidate)
     if status == "finished":
         print(f"[cli] wrote {len(written)} output(s) next to {src}", flush=True)
         for p in written:
@@ -144,6 +154,8 @@ def _cli_serve(args: argparse.Namespace) -> int:
 
 
 def _build_argparser() -> argparse.ArgumentParser:
+    from core.writers import supported_formats
+
     p = argparse.ArgumentParser(
         prog="WhisperProject",
         description=(
@@ -162,7 +174,7 @@ def _build_argparser() -> argparse.ArgumentParser:
     )
     tr.add_argument(
         "--formats", "-f", nargs="+",
-        choices=("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "docx", "pdf"),
+        choices=tuple(supported_formats()),
         help="output formats (default: from config.json)",
     )
     tr.add_argument(

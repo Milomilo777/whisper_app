@@ -84,7 +84,7 @@ def test_model_change_stops_worker(monkeypatch: Any) -> None:
         lambda _cfg, slug: {"name": slug, "url": "u", "md5": "m"},
     )
 
-    cfg = {"whisper_model": "large-v3"}
+    cfg = {"whisper_model": "large-v3", "transcribe_backend": "faster_whisper"}
     app, stop_calls = _fake_app(cfg)
     dlg = _advanced_fake(app, chosen_label="Medium", slug_map={"Medium": "medium"})
 
@@ -103,10 +103,66 @@ def test_same_model_does_not_stop_worker(monkeypatch: Any) -> None:
         lambda _cfg, slug: {"name": slug, "url": "u", "md5": "m"},
     )
 
-    cfg = {"whisper_model": "large-v3"}
+    cfg = {"whisper_model": "large-v3", "transcribe_backend": "faster_whisper"}
     app, stop_calls = _fake_app(cfg)
     dlg = _advanced_fake(app, chosen_label="Large-v3", slug_map={"Large-v3": "large-v3"})
 
     adv.AdvancedDialog._save_and_close(dlg)  # type: ignore[arg-type]
 
     assert stop_calls["count"] == 0  # no change -> no worker restart
+
+
+def test_google_cloud_stt_save_disables_unsupported_diarization(monkeypatch: Any) -> None:
+    from app.dialogs import advanced as adv
+
+    monkeypatch.setattr(adv, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(
+        adv, "catalog_resolve_entry",
+        lambda _cfg, slug: {"name": slug, "url": "u", "md5": "m"},
+    )
+
+    cfg = {"whisper_model": "large-v3", "transcribe_backend": "google_cloud_stt"}
+    app, stop_calls = _fake_app(cfg)
+    dlg = _advanced_fake(
+        app,
+        chosen_label="Large-v3",
+        slug_map={"Large-v3": "large-v3"},
+    )
+    dlg._gcloud_diarization = _V(True)
+    dlg._backend_display = _V(
+        "Google Cloud Speech-to-Text — service account (60 min/mo free)"
+    )
+
+    adv.AdvancedDialog._save_and_close(dlg)  # type: ignore[arg-type]
+
+    assert cfg["gcloud_stt_diarization"] is False
+    # Same backend + same model -> no worker restart (isolates diarization).
+    assert stop_calls["count"] == 0
+
+
+def test_backend_change_stops_worker(monkeypatch: Any) -> None:
+    """Switching the engine (without a model change) must restart the worker.
+
+    The live worker snapshots transcribe_backend at spawn and the dispatch
+    prefers that stale value, so a fresh worker is required for the new engine
+    to take effect.
+    """
+    from app.dialogs import advanced as adv
+
+    monkeypatch.setattr(adv, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(
+        adv, "catalog_resolve_entry",
+        lambda _cfg, slug: {"name": slug, "url": "u", "md5": "m"},
+    )
+
+    cfg = {"whisper_model": "large-v3", "transcribe_backend": "faster_whisper"}
+    app, stop_calls = _fake_app(cfg)
+    dlg = _advanced_fake(app, chosen_label="Large-v3", slug_map={"Large-v3": "large-v3"})
+    dlg._backend_display = _V(
+        "Google Cloud Speech-to-Text — service account (60 min/mo free)"
+    )
+
+    adv.AdvancedDialog._save_and_close(dlg)  # type: ignore[arg-type]
+
+    assert cfg["transcribe_backend"] == "google_cloud_stt"
+    assert stop_calls["count"] == 1, "switching the engine must restart the worker"

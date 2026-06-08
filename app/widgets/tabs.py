@@ -281,11 +281,48 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         side="left", fill="x", expand=True, padx=(8, 0)
     )
 
-    # ── Row 2: three quick options (language + identify speakers +
+    # ── Row 2: engine picker — let the user choose the transcription engine
+    #     (offline faster-whisper, Google Cloud STT, …) right here, without
+    #     digging through the crowded Advanced dialog. A short status line
+    #     shows whether the chosen engine is ready (cloud key loaded / model
+    #     present). Cloud STT is the default when a build ships a key. ───────
+    from core.backends import availability as _eng
+
+    engine_row = ttk.Frame(parent)
+    engine_row.grid(
+        row=2, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(0, 8),
+    )
+    ttk.Label(engine_row, text="Engine:").pack(side="left")
+    _engine_labels = [label for label, _value in _eng.ENGINE_CHOICES]
+    app.transcribe_engine_var = tk.StringVar(
+        value=_eng.VALUE_TO_LABEL.get(
+            _eng.normalise_engine(app.app_config.get("transcribe_backend")),
+            _engine_labels[0],
+        )
+    )
+    engine_combo = ttk.Combobox(
+        engine_row,
+        textvariable=app.transcribe_engine_var,
+        values=_engine_labels,
+        state="readonly",
+        width=44,
+    )
+    engine_combo.pack(side="left", padx=(6, 12))
+    engine_combo.bind("<<ComboboxSelected>>", lambda _e: app._on_engine_selected())
+    app.engine_status_var = tk.StringVar(value="")
+    app.engine_status_label = ttk.Label(
+        engine_row, textvariable=app.engine_status_var, foreground="#888",
+    )
+    app.engine_status_label.pack(side="left")
+    # Cheap readiness probe for the initial selection (no heavy import).
+    app._refresh_engine_status()
+
+    # ── Row 3: three quick options (language + identify speakers +
     #     per-word timestamps) ────────────────────────────────────────
     quick_opts = ttk.Frame(parent)
     quick_opts.grid(
-        row=2, column=0, columnspan=3, sticky="ew",
+        row=3, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(0, 8),
     )
 
@@ -341,10 +378,10 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         side="left", padx=(2, 0)
     )
 
-    # ── Row 3: the big accent Transcribe CTA + tiny Advanced link ────
+    # ── Row 4: the big accent Transcribe CTA + tiny Advanced link ────
     cta_row = ttk.Frame(parent)
     cta_row.grid(
-        row=3, column=0, columnspan=3, sticky="ew",
+        row=4, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(4, 4),
     )
     transcribe_btn = ttk.Button(
@@ -382,12 +419,12 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
 
     # ── Last Result card (hidden until first transcription completes) ─
     ttk.Separator(parent, orient="horizontal").grid(
-        row=4, column=0, columnspan=3, sticky="ew",
+        row=5, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(8, 6),
     )
     app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=10)
     app.last_result_frame.grid(
-        row=5, column=0, columnspan=3, sticky="ew",
+        row=6, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(0, 12),
     )
     # The card sizes to its content instead of greedily filling the whole

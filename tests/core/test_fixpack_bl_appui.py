@@ -347,3 +347,56 @@ def test_file_uri_to_path_non_file_uri_returns_empty():
     from app.app import _file_uri_to_path
     assert _file_uri_to_path("ftp://host/x") == ""
     assert _file_uri_to_path(r"C:\plain\path.mp4") == ""
+
+
+def test_model_bytes_present_accepts_hub_folder_fallback(App, tmp_path):
+    from core.hub import model_folder_for
+
+    a = App.__new__(App)
+    hub = tmp_path / "Cache" / "models"
+    model_dir = model_folder_for(hub, "faster-whisper-large-v3")
+    model_dir.mkdir(parents=True)
+    a.app_config = {
+        "model_path": "",
+        "hub_folder": str(hub),
+        "model": {"name": "faster-whisper-large-v3"},
+    }
+    assert App._model_bytes_present(a) is True
+
+
+# --- download range slider clamp -------------------------------------------
+
+
+class _Scale:
+    def __init__(self):
+        self.values: list[float] = []
+
+    def set(self, value):
+        self.values.append(value)
+
+
+def _download_range_app(App):
+    a = App.__new__(App)
+    a._download_duration = 120.0
+    a._suppress_scale_cb = False
+    a.download_start_time_var = _Var("0:00:30")
+    a.download_end_time_var = _Var("0:01:00")
+    a.download_start_scale = _Scale()
+    a.download_end_scale = _Scale()
+    return a
+
+
+def test_download_start_slider_clamps_past_end(App):
+    a = _download_range_app(App)
+    App._on_download_scale(a, "start", "90")
+    assert a.download_start_time_var.get() == "0:01:30"
+    assert a.download_end_time_var.get() == "0:01:30"
+    assert a.download_end_scale.values == [90.0]
+
+
+def test_download_end_slider_clamps_before_start(App):
+    a = _download_range_app(App)
+    App._on_download_scale(a, "end", "15")
+    assert a.download_end_time_var.get() == "0:00:15"
+    assert a.download_start_time_var.get() == "0:00:15"
+    assert a.download_start_scale.values == [15.0]
