@@ -52,7 +52,9 @@ def test_alt_backend_clip_slices_and_offsets(monkeypatch, tmp_path):
         written["segments"] = [dict(s) for s in segments_data]
         return []
 
-    monkeypatch.setattr(transcriber, "_get_alt_backend", lambda name: backend)
+    monkeypatch.setattr(
+        transcriber, "_get_alt_backend", lambda name, status_cb=None: backend
+    )
     monkeypatch.setattr(transcriber, "get_duration", lambda p: 600.0)
     monkeypatch.setattr(transcriber, "_slice_audio_from", fake_slice)
     monkeypatch.setattr(transcriber, "_write_periodic_checkpoint", fail_checkpoint)
@@ -87,7 +89,9 @@ def test_alt_backend_no_clip_transcribes_whole_file(monkeypatch, tmp_path):
     backend = _FakeAltBackend()
     sliced = {"called": False}
 
-    monkeypatch.setattr(transcriber, "_get_alt_backend", lambda name: backend)
+    monkeypatch.setattr(
+        transcriber, "_get_alt_backend", lambda name, status_cb=None: backend
+    )
     monkeypatch.setattr(transcriber, "get_duration", lambda p: 600.0)
     monkeypatch.setattr(
         transcriber, "_slice_audio_from",
