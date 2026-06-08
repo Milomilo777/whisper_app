@@ -105,13 +105,14 @@ MODEL_REGISTRY: dict[str, dict[str, Any]] = {
         "md5": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip.md5",
         "approx_size_gb": 1.5,
     },
-    # NOTE — OWNER ACTION REQUIRED: this artifact is NOT yet confirmed to
-    # exist on smch.ir. The URL/MD5 below follow the same naming
-    # convention as the entries above (Systran's faster-whisper-medium),
-    # but the owner must build/upload the .zip + .zip.md5 to that path
-    # (or point the online ``model_catalog`` at the real location) before
-    # this entry will download. Until then, selecting it will fail at
-    # download with a clear network error. ~1.5 GB.
+    # NOTE: this artifact may not exist on smch.ir yet — the URL/MD5
+    # below follow the same naming convention as the entries above
+    # (Systran's faster-whisper-medium). If the mirror 404s (or any
+    # other download/verification failure occurs), ``ensure_model``
+    # now automatically falls back to fetching the same model straight
+    # from the HuggingFace Hub via ``_repo_id_from_url`` /
+    # ``_download_via_huggingface``, so this entry works either way.
+    # ~1.5 GB.
     "medium": {
         "label": "Medium — faster, lower accuracy (~1.5 GB)",
         "name": "faster-whisper-medium",
@@ -398,6 +399,104 @@ def _verify_extracted_files(
     )
     return mismatches
 
+_MODEL_TOKEN_RE = re.compile(r"^models--(.+)$")
+
+
+def _repo_id_from_url(zip_url: str) -> str | None:
+    """Map a smch.ir zip URL/name to its HuggingFace ``Org/Repo`` id.
+
+    The mirror zips are named ``models--<Org>--<Repo>.zip`` and that
+    token encodes the exact HuggingFace ``repo_id`` whose
+    ``snapshot_download`` cache layout the zip mirrors byte-for-byte
+    (``cache_dir/models--<Org>--<Repo>/snapshots/<hash>/...``). This
+    lets the fallback path target the correct upstream repo from the
+    same registry entry, with no extra config. Returns ``None`` when
+    the URL/name doesn't match the expected ``models--Org--Repo`` shape.
+
+    Note: repo names can themselves contain dots (e.g.
+    ``faster-distil-whisper-large-v3.5``), so the ``.zip`` suffix is
+    stripped by name rather than by splitting on the first dot.
+    """
+    name = _zip_name_from_url(zip_url)
+    if name.lower().endswith(".zip"):
+        name = name[: -len(".zip")]
+
+    match = _MODEL_TOKEN_RE.match(name)
+    if not match:
+        return None
+
+    parts = match.group(1).split("--")
+    if len(parts) < 2:
+        return None
+
+    org = parts[0]
+    repo = "-".join(parts[1:])
+    if not org or not repo:
+        return None
+    return f"{org}/{repo}"
+
+
+def _download_via_huggingface(
+    repo_id: str,
+    cache_dir: Path,
+    status_cb: Callable[[str], None] | None = None,
+    progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> bool:
+    """Fetch ``repo_id`` straight from the HuggingFace Hub as a fallback.
+
+    Used only when the smch.ir mirror is unavailable or its archive
+    fails verification. ``snapshot_download`` writes into ``cache_dir``
+    using the exact same ``models--Org--Repo/snapshots/<hash>/...``
+    layout the mirror zips use, so the rest of the app keeps resolving
+    the model folder unchanged. Returns ``True`` on success, ``False``
+    on any failure (import error, network error, cancellation) — the
+    caller decides how to report that.
+    """
+    if cancel_event and cancel_event.is_set():
+        return False
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as e:
+        if status_cb:
+            status_cb(f"HuggingFace fallback unavailable: {e}")
+        return False
+
+    if status_cb:
+        status_cb(
+            f"Mirror unavailable — downloading {repo_id} from huggingface.co ..."
+        )
+    _notify(
+        progress_cb,
+        phase="download",
+        status=f"Downloading {repo_id} from HuggingFace...",
+        percent=0,
+        detail="Mirror unavailable — using huggingface.co",
+    )
+
+    try:
+        snapshot_download(repo_id=repo_id, cache_dir=str(cache_dir))
+    except Exception as e:
+        if status_cb:
+            status_cb(f"HuggingFace download failed: {e}")
+        return False
+
+    if cancel_event and cancel_event.is_set():
+        return False
+
+    if status_cb:
+        status_cb("Model downloaded from HuggingFace.")
+    _notify(
+        progress_cb,
+        phase="download",
+        status="Model downloaded from HuggingFace.",
+        percent=100,
+        detail=repo_id,
+    )
+    return True
+
+
 def ensure_model(
     config: dict[str, Any],
     status_cb: Callable[[str], None] | None = None,
@@ -432,74 +531,115 @@ def ensure_model(
         _remove_path(zip_path)
         _remove_path(model_path)
 
-    last_mismatches: list[tuple[str, str, str]] = []
-    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
-        if cancel_event and cancel_event.is_set():
-            raise DownloadCancelled("Model download cancelled")
+    mirror_error: BaseException | None = None
+    try:
+        last_mismatches: list[tuple[str, str, str]] = []
+        for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+            if cancel_event and cancel_event.is_set():
+                raise DownloadCancelled("Model download cancelled")
 
-        if status_cb: status_cb("Downloading model...")
-        _download_zip(zip_url, zip_path, progress_cb, cancel_event)
+            if status_cb: status_cb("Downloading model...")
+            _download_zip(zip_url, zip_path, progress_cb, cancel_event)
 
-        if cancel_event and cancel_event.is_set():
-            raise DownloadCancelled("Model download cancelled")
+            if cancel_event and cancel_event.is_set():
+                raise DownloadCancelled("Model download cancelled")
 
-        if status_cb: status_cb("Extracting model...")
-        _notify(progress_cb, phase="extract", status="Extracting model...", percent=100, detail="Unpacking downloaded archive")
-        _remove_path(model_path)
-        with zipfile.ZipFile(zip_path,'r') as z:
-            # Zip-slip guard: reject any member that would resolve OUTSIDE
-            # cache_dir (e.g. a tampered archive with "..\\.." entries)
-            # before extracting anything.
-            _cache_resolved = Path(cache_dir).resolve()
-            for _member in z.namelist():
-                _target = (_cache_resolved / _member).resolve()
-                if _target != _cache_resolved and _cache_resolved not in _target.parents:
-                    raise RuntimeError(f"Unsafe path in model archive: {_member!r}")
-            try:
-                z.extractall(cache_dir)
-            except OSError as e:
-                if _is_permission_error(e):
-                    raise ModelDestinationNotWritable(cache_dir) from e
-                raise
+            if status_cb: status_cb("Extracting model...")
+            _notify(progress_cb, phase="extract", status="Extracting model...", percent=100, detail="Unpacking downloaded archive")
+            _remove_path(model_path)
+            with zipfile.ZipFile(zip_path,'r') as z:
+                # Zip-slip guard: reject any member that would resolve OUTSIDE
+                # cache_dir (e.g. a tampered archive with "..\\.." entries)
+                # before extracting anything.
+                _cache_resolved = Path(cache_dir).resolve()
+                for _member in z.namelist():
+                    _target = (_cache_resolved / _member).resolve()
+                    if _target != _cache_resolved and _cache_resolved not in _target.parents:
+                        raise RuntimeError(f"Unsafe path in model archive: {_member!r}")
+                try:
+                    z.extractall(cache_dir)
+                except OSError as e:
+                    if _is_permission_error(e):
+                        raise ModelDestinationNotWritable(cache_dir) from e
+                    raise
 
-        if not model_path.exists():
-            raise RuntimeError(f"Extracted model folder missing: {model_path}")
+            if not model_path.exists():
+                raise RuntimeError(f"Extracted model folder missing: {model_path}")
 
-        if status_cb: status_cb("Verifying extracted model files...")
-        mismatches=_verify_extracted_files(cache_dir, md5_url, status_cb, progress_cb, cancel_event)
-        if not mismatches:
+            if status_cb: status_cb("Verifying extracted model files...")
+            mismatches=_verify_extracted_files(cache_dir, md5_url, status_cb, progress_cb, cancel_event)
+            if not mismatches:
+                _remove_path(zip_path)
+                break
+
+            last_mismatches = mismatches
             _remove_path(zip_path)
-            break
+            _remove_path(model_path)
 
-        last_mismatches = mismatches
+            if attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                # Don't loop forever on a bad mirror / corrupt archive.
+                break
+
+            if status_cb:
+                status_cb(
+                    f"MD5 mismatch (attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}). "
+                    "Deleting model archive and folder, then restarting from zero..."
+                )
+            _notify(
+                progress_cb,
+                phase="restart",
+                status=f"MD5 mismatch. Retrying ({attempt}/{MAX_DOWNLOAD_ATTEMPTS})...",
+                percent=0,
+                detail=f"{len(mismatches)} file checksum(s) failed",
+            )
+
+        if last_mismatches:
+            sample = ", ".join(rel for _exp, _got, rel in last_mismatches[:5])
+            more = "" if len(last_mismatches) <= 5 else f" (+{len(last_mismatches) - 5} more)"
+            raise RuntimeError(
+                f"Model download failed after {MAX_DOWNLOAD_ATTEMPTS} attempts: "
+                f"{len(last_mismatches)} file checksum(s) still mismatched "
+                f"[{sample}{more}]. The mirror may be serving a corrupt archive."
+            )
+    except (DownloadCancelled, ModelDestinationNotWritable):
+        raise
+    except Exception as e:
+        # The smch.ir mirror failed for ANY reason — missing zip (404),
+        # network error, or persistent MD5 mismatch. Before giving up,
+        # try the same model straight from the HuggingFace Hub: the
+        # registry's zip name encodes the exact upstream repo_id, and
+        # snapshot_download writes the identical cache layout the mirror
+        # zip would have, so the rest of the app keeps working unchanged.
+        mirror_error = e
+        repo_id = _repo_id_from_url(zip_url)
+        if repo_id is None:
+            raise
+
+        if status_cb:
+            status_cb(f"Mirror download failed ({e}). Trying HuggingFace fallback...")
         _remove_path(zip_path)
         _remove_path(model_path)
 
-        if attempt >= MAX_DOWNLOAD_ATTEMPTS:
-            # Don't loop forever on a bad mirror / corrupt archive.
-            break
+        if not _download_via_huggingface(repo_id, cache_dir, status_cb, progress_cb, cancel_event):
+            raise RuntimeError(
+                "Model download failed: both the smch.ir mirror "
+                f"({mirror_error}) and the HuggingFace fallback "
+                f"({repo_id}) were unable to provide the model."
+            ) from mirror_error
 
-        if status_cb:
-            status_cb(
-                f"MD5 mismatch (attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}). "
-                "Deleting model archive and folder, then restarting from zero..."
-            )
-        _notify(
-            progress_cb,
-            phase="restart",
-            status=f"MD5 mismatch. Retrying ({attempt}/{MAX_DOWNLOAD_ATTEMPTS})...",
-            percent=0,
-            detail=f"{len(mismatches)} file checksum(s) failed",
-        )
+        if not model_path.exists():
+            raise RuntimeError(
+                "Model download failed: the HuggingFace fallback reported "
+                f"success for {repo_id!r} but the expected model folder is "
+                f"missing: {model_path}"
+            ) from mirror_error
 
-    if last_mismatches:
-        sample = ", ".join(rel for _exp, _got, rel in last_mismatches[:5])
-        more = "" if len(last_mismatches) <= 5 else f" (+{len(last_mismatches) - 5} more)"
-        raise RuntimeError(
-            f"Model download failed after {MAX_DOWNLOAD_ATTEMPTS} attempts: "
-            f"{len(last_mismatches)} file checksum(s) still mismatched "
-            f"[{sample}{more}]. The mirror may be serving a corrupt archive."
-        )
+        # HuggingFace's own download verifies blob hashes; the smch.ir
+        # .md5 manifest describes a different (zip-mirror) layout and
+        # would always mismatch here, so skip _verify_extracted_files.
+        if status_cb: status_cb("Model ready")
+        _notify(progress_cb, phase="ready", status="Model ready", percent=100, detail="Download complete (HuggingFace fallback)")
+        return str(model_path)
 
     if status_cb: status_cb("Model ready")
     _notify(progress_cb, phase="ready", status="Model ready", percent=100, detail="Download complete")

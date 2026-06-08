@@ -294,3 +294,106 @@ def test_ensure_model_permission_error_surfaces_as_not_writable(tmp_path, monkey
         mm.ensure_model(config)
     # The exception carries the offending directory for the UI message.
     assert excinfo.value.directory == str(cache_dir)
+
+
+# ---------- HuggingFace fallback ---------------------------------------------
+
+
+def test_repo_id_from_url_maps_registry_entries():
+    assert mm._repo_id_from_url(
+        "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip"
+    ) == "Systran/faster-whisper-large-v3"
+    assert mm._repo_id_from_url(
+        "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip"
+    ) == "Systran/faster-whisper-large-v3-turbo"
+    assert mm._repo_id_from_url(
+        "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip"
+    ) == "Systran/faster-distil-whisper-large-v3.5"
+    assert mm._repo_id_from_url(
+        "https://smch.ir/models/models--Systran--faster-whisper-medium.zip"
+    ) == "Systran/faster-whisper-medium"
+
+
+def test_repo_id_from_url_returns_none_for_unrecognised_names():
+    assert mm._repo_id_from_url("https://smch.ir/models/not-a-model-archive.zip") is None
+    assert mm._repo_id_from_url("https://smch.ir/models/models--solo.zip") is None
+
+
+@responses.activate
+def test_ensure_model_falls_back_to_huggingface_on_mirror_failure(tmp_path, monkeypatch):
+    """When the smch.ir mirror 404s (or otherwise fails) ensure_model must
+    fall back to HuggingFace and still return the model path successfully,
+    WITHOUT running the smch.ir MD5 verification on the HF-downloaded tree.
+    """
+    model_name = "faster-whisper-medium"
+    model_dir_name = f"models--Systran--{model_name}"
+    zip_url = f"https://smch.ir/models/{model_dir_name}.zip"
+    md5_url = f"{zip_url}.md5"
+
+    # The mirror has no archive for this model — a real 404, like the bug report.
+    responses.add(responses.GET, zip_url, status=404)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    model_path = cache_dir / model_dir_name
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(model_path),
+    }
+
+    verify_calls: list[Path] = []
+
+    def _fake_hf_download(repo_id, target_cache_dir, status_cb=None, progress_cb=None, cancel_event=None):
+        assert repo_id == "Systran/faster-whisper-medium"
+        assert Path(target_cache_dir) == cache_dir
+        model_path.mkdir(parents=True)
+        (model_path / "model.bin").write_bytes(b"hf-bytes")
+        if status_cb:
+            status_cb("Model downloaded from HuggingFace.")
+        return True
+
+    def _fake_verify(*args, **kwargs):
+        verify_calls.append(args[0])
+        return []
+
+    monkeypatch.setattr(mm, "_download_via_huggingface", _fake_hf_download)
+    monkeypatch.setattr(mm, "_verify_extracted_files", _fake_verify)
+
+    statuses: list[str] = []
+    progress_payloads: list[dict] = []
+    result = mm.ensure_model(
+        config,
+        status_cb=statuses.append,
+        progress_cb=progress_payloads.append,
+    )
+
+    assert Path(result) == model_path
+    assert (model_path / "model.bin").read_bytes() == b"hf-bytes"
+    assert any("HuggingFace" in s for s in statuses)
+    assert any("Model ready" in s for s in statuses)
+    assert any(p.get("phase") == "ready" for p in progress_payloads)
+    # The smch.ir MD5 manifest must NOT be checked against the HF tree —
+    # its layout doesn't match what _verify_extracted_files expects.
+    assert verify_calls == []
+
+
+@responses.activate
+def test_ensure_model_raises_when_both_mirror_and_huggingface_fail(tmp_path, monkeypatch):
+    model_name = "faster-whisper-medium"
+    model_dir_name = f"models--Systran--{model_name}"
+    zip_url = f"https://smch.ir/models/{model_dir_name}.zip"
+    md5_url = f"{zip_url}.md5"
+
+    responses.add(responses.GET, zip_url, status=404)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    config = {
+        "model": {"name": model_name, "url": zip_url, "md5": md5_url},
+        "model_path": str(cache_dir / model_dir_name),
+    }
+
+    monkeypatch.setattr(mm, "_download_via_huggingface", lambda *a, **k: False)
+
+    with pytest.raises(RuntimeError, match=r"(?i)mirror.*huggingface|huggingface.*mirror"):
+        mm.ensure_model(config)
