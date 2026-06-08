@@ -16,19 +16,21 @@ jobs:
   build-app:
     name: Build macOS .app/.dmg + smoke (macos-15 / arm64)
     runs-on: macos-15
+    env:
+      # secrets.* is not allowed in a step-level `if`, so surface it as a
+      # job env var (this IS allowed) and gate the key-write step on env.
+      GCLOUD_STT_KEY: ${{ secrets.GCLOUD_STT_KEY }}
     steps:
       - uses: actions/checkout@v4
 
       # Bundle the Google Cloud service-account key ONLY when the secret is
       # configured. The key is never committed (gitignored), so a normal
       # public-repo run has no secret and builds WITHOUT the key (safe — the
-      # artifact is public). For the trusted final release build the repo is
-      # made private, the GCLOUD_STT_KEY secret is set, and this step writes
-      # creds/gcloud_stt.json so the mac spec bundles it into the .app/.dmg.
+      # artifact is public). For the trusted final release build the
+      # GCLOUD_STT_KEY secret is set, and this step writes creds/gcloud_stt.json
+      # so the mac spec bundles it into the .app/.dmg.
       - name: Bundle Google Cloud key from secret (only when set)
-        if: ${{ secrets.GCLOUD_STT_KEY != '' }}
-        env:
-          GCLOUD_STT_KEY: ${{ secrets.GCLOUD_STT_KEY }}
+        if: ${{ env.GCLOUD_STT_KEY != '' }}
         run: |
           mkdir -p creds
           printf '%s' "$GCLOUD_STT_KEY" > creds/gcloud_stt.json
