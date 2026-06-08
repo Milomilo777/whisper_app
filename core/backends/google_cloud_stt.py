@@ -998,10 +998,25 @@ class GoogleCloudSttBackend(Backend):
             try:
                 from core import optional_deps
 
+                # find_spec can see a present-but-broken cache (e.g. a
+                # grpcio native extension built for a different Python
+                # version) that fails on the real import that
+                # runtime_available() performs. Detect that case BEFORE
+                # installing and force a clean reinstall to repair it —
+                # otherwise install() would short-circuit on is_available()
+                # and never touch the broken cache.
+                broken = optional_deps.is_available("google_cloud_stt")
+                if broken and status_cb:
+                    status_cb(
+                        "Repairing a broken Google Cloud library install "
+                        "(rebuilding for this Python)..."
+                    )
+
                 installed = optional_deps.install(
                     "google_cloud_stt",
                     log_cb=status_cb,
                     cancel_event=cancel_event,
+                    force=broken,
                 )
                 optional_deps.activate()
             except Exception as e:  # noqa: BLE001

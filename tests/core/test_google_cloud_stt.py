@@ -742,14 +742,19 @@ def test_load_installs_google_lib_on_first_use(monkeypatch):
     worker path, not only the Advanced 'Test connection' path) instead of just
     erroring — otherwise a direct Transcribe on a fresh machine fails."""
     monkeypatch.setattr(g, "bundled_credentials_path", lambda: "")
-    state = {"avail": False, "install": 0}
+    state = {"avail": False, "install": 0, "force": None}
     monkeypatch.setattr(g, "runtime_available", lambda: state["avail"])
 
     import core.optional_deps as od
 
-    def fake_install(feature, log_cb=None, cancel_event=None, timeout=None):
+    # Fresh-machine case: find_spec also reports nothing present, so the
+    # repair path must NOT be taken (force=False).
+    monkeypatch.setattr(od, "is_available", lambda feature: False)
+
+    def fake_install(feature, log_cb=None, cancel_event=None, timeout=None, force=False):
         assert feature == "google_cloud_stt"
         state["install"] += 1
+        state["force"] = force
         state["avail"] = True  # pretend pip succeeded
         return True
 
@@ -759,8 +764,42 @@ def test_load_installs_google_lib_on_first_use(monkeypatch):
     backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
     ok = backend.load()
     assert state["install"] == 1  # install attempted on first use
+    assert state["force"] is False  # fresh case: nothing to repair
     # No creds were configured, so it can't finish loading, but it DID get
     # past the runtime gate (proving the auto-install + re-check ran).
+    assert ok is False
+    assert "service-account JSON" in (backend.get_error() or "")
+
+
+def test_load_repairs_broken_cache_with_force_install(monkeypatch):
+    """find_spec sees a present-but-broken cache (e.g. a grpcio .pyd built
+    for another Python) while the real import in runtime_available() fails.
+    load() must detect that and pass force=True so optional_deps.install()
+    doesn't short-circuit on is_available() and actually repairs the cache."""
+    monkeypatch.setattr(g, "bundled_credentials_path", lambda: "")
+    state = {"avail": False, "install": 0, "force": None}
+    monkeypatch.setattr(g, "runtime_available", lambda: state["avail"])
+
+    import core.optional_deps as od
+
+    # Broken-cache case: find_spec reports it present even though the real
+    # import fails (runtime_available() is False).
+    monkeypatch.setattr(od, "is_available", lambda feature: True)
+
+    def fake_install(feature, log_cb=None, cancel_event=None, timeout=None, force=False):
+        assert feature == "google_cloud_stt"
+        state["install"] += 1
+        state["force"] = force
+        state["avail"] = True  # pretend the forced reinstall fixed it
+        return True
+
+    monkeypatch.setattr(od, "install", fake_install)
+    monkeypatch.setattr(od, "activate", lambda: None)
+
+    backend = g.GoogleCloudSttBackend(config={"gcloud_stt_credentials_json": ""})
+    ok = backend.load()
+    assert state["install"] == 1
+    assert state["force"] is True  # broken cache -> force a clean reinstall
     assert ok is False
     assert "service-account JSON" in (backend.get_error() or "")
 

@@ -103,6 +103,7 @@ def install(
     log_cb: Callable[[str], None] | None = None,
     cancel_event: "threading.Event | None" = None,
     timeout: float = DEFAULT_INSTALL_TIMEOUT_S,
+    force: bool = False,
 ) -> bool:
     """pip-install the feature's packages into the user extras dir.
 
@@ -127,7 +128,11 @@ def install(
     with _install_lock:
         # A concurrent caller may have installed it while we waited on
         # the lock — don't run a second redundant (and racing) pip.
-        if is_available(feature):
+        # When `force` is set, skip this short-circuit: a present-but-broken
+        # cache (find_spec succeeds but the real import fails — e.g. a
+        # grpcio .pyd built for another Python version) must be repaired,
+        # not reported as already installed.
+        if not force and is_available(feature):
             return True
         final_target = extras_dir()
         os.makedirs(final_target, exist_ok=True)
@@ -135,7 +140,9 @@ def install(
         staging = tempfile.mkdtemp(prefix="pylibs-stage-", dir=parent)
         cmd = [
             sys.executable, "-m", "pip", "install",
-            "--target", staging, "--upgrade", *pkgs,
+            "--target", staging, "--upgrade",
+            *(["--force-reinstall", "--no-cache-dir"] if force else []),
+            *pkgs,
         ]
         try:
             # Spawn with new_session_kwargs() (start_new_session=True on
