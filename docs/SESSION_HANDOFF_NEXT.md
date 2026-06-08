@@ -5,7 +5,47 @@ this repo. Read this file before anything else.
 
 ---
 
-## ⭐ CURRENT STATE (2026-06-07, end of the completeness push) — read this first
+## ⭐ CURRENT STATE (2026-06-08) — read this FIRST (supersedes the 06-07 note below)
+
+Branch `frontend-stability-fix` (off `master`/`a2fd666`). Two new LOCAL commits — **NOT
+pushed, NO GitHub release** (owner asked for a local build only this session):
+
+1. `feat(transcribe): engine picker on the tab + Google Cloud default` — a new **Engine**
+   row on the Transcribe tab (offline Faster-Whisper / whisper.cpp / Parakeet / Gemini /
+   Google Cloud) with a Ready / needs-setup status line. The shared engine list + cheap
+   availability probes live in the new `core/backends/availability.py` (used by both the tab
+   and the Advanced dialog). **Google Cloud STT is now the DEFAULT engine** when a build ships
+   the bundled key (`creds/gcloud_stt.json`), else offline faster-whisper. The Advanced dialog
+   now shows the bundled key is loaded and auto-runs the connection test on open. Switching the
+   engine now `stop_all()`s the worker — the dispatch preferred the stale spawn-time backend, so
+   a switch never took effect without a restart. Also folds in the verified Codex frontend
+   stability fixes (worker stdin `readline`, checkpoint probe, non-crossing download sliders,
+   CLI `--formats` registry + real paths/progress).
+2. `build(release): bundle gcloud key, bump to v1.3.9` — version 1.3.9 everywhere
+   (`core/__init__.py`, `pyproject.toml`, both `.iss`); `build_embed_installer.bat` now copies
+   `creds/gcloud_stt.json` into `embed_build/creds/`; the 3 PyInstaller specs mirror the optional
+   creds bundling + the new `core.backends.availability` hidden-import.
+
+Verification: pyright `app/ core/` 0/0/0; full hermetic suite green (minus the 3 GPU/cuDNN-flaky
+real-ML files, which pass in isolation); Tk-construction smoke of the tab OK; the embed build
+resolves `default=google_cloud_stt` and finds its bundled key. **Standard installer built LOCALLY**
+at `dist_installer/WhisperProject-v1.3.9-Setup-Standard.exe` for owner testing.
+
+Why not released: the installer contains the bundled key; publishing it as a GitHub release asset
+would expose it whenever the repo is later made public (the owner's macOS-CI plan). So this build
+stays local-only until the owner decides.
+
+Pending / next: owner tests the local Standard build; if OK, update the macOS build to match. The
+macOS CI checkout has NO `creds/`, so cloud STT on mac needs the key injected (GH secret → write
+`creds/gcloud_stt.json` in the workflow, or drop it into the mac build tree). `google-cloud-speech`
+still installs on-first-use into `user_cache_dir()/pylibs` (slim-embed design) — already cached on
+the owner's machine from prior gcloud use, so the cloud default works immediately there; a fresh
+machine installs it the first time Advanced settings opens (auto-test) or shows a clear
+"open Advanced to install" message on a direct Transcribe.
+
+---
+
+## ⭐ CURRENT STATE (2026-06-07, end of the completeness push)
 
 - **Unified branch is `macos-ci`** (tip ~`5a632c3`). It carries EVERYTHING: this
   session's Windows-side work + the macOS session's commits (convert/config/spec/CI/QA
