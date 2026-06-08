@@ -91,12 +91,30 @@ _icon = _icns if os.path.isfile(_icns) else None
 _creds_key = os.path.join(_REPO_ROOT, 'creds', 'gcloud_stt.json')
 creds_datas = [(_creds_key, 'creds')] if os.path.isfile(_creds_key) else []
 
+# google-cloud-speech + google-cloud-storage + grpcio are now REQUIRED
+# runtime deps — the Google Cloud STT backend is the default engine.
+# collect_all gathers datas + binaries (the native grpc .so!) + every
+# submodule of these namespace-package stacks, which PyInstaller's static
+# analysis cannot fully discover on its own.
+_gcloud_datas, _gcloud_binaries, _gcloud_hidden = [], [], []
+for _pkg in ('grpc', 'google.cloud.speech_v2', 'google.cloud.storage',
+             'google.api_core', 'google.auth', 'google.oauth2',
+             'google.protobuf', 'proto'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _gcloud_datas += _d
+        _gcloud_binaries += _b
+        _gcloud_hidden += _h
+    except Exception:
+        pass
+
 a = Analysis(
     [os.path.join(_REPO_ROOT, 'gui.py')],
     pathex=[_REPO_ROOT],
     binaries=[
         *whisper_cpp_binaries,
         *alignment_binaries,
+        *_gcloud_binaries,
     ],
     datas=[
         (os.path.join(_REPO_ROOT, 'bin'), 'bin'),
@@ -113,10 +131,17 @@ a = Analysis(
         *whisper_cpp_datas,
         *alignment_datas,
         *creds_datas,
+        *_gcloud_datas,
     ],
     hiddenimports=[
         *whisper_cpp_hidden,
         *alignment_hidden,
+        *_gcloud_hidden,
+        'google.cloud.speech_v2',
+        'google.cloud.storage',
+        'google.oauth2.service_account',
+        'grpc',
+        'grpc._cython.cygrpc',
         'app',
         'app.app',
         'app.dialogs',
