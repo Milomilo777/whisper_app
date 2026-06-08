@@ -45,6 +45,24 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   progress.
 - The Advanced dialog refuses to save the unsupported Google Cloud STT +
   diarization combination.
+- **Offline-model download has a HuggingFace fallback.** When the smch.ir
+  mirror 404s / fails for a model, the same model is fetched from
+  huggingface.co via faster-whisper's own download map — which resolves each
+  model's correct upstream repo (e.g. `large-v3-turbo` →
+  `mobiuslabsgmbh/...`, `distil-large-v3.5` → `distil-whisper/...`, not the
+  `Systran/...` guess that 401'd).
+- **Google Cloud STT client is now bundled** in the slim tree (was installed
+  on first use), so the cloud engine works immediately with no "could not
+  install … check internet" wait, and grpcio is built for the bundled
+  Python so it can't be shadowed by a wrong-version cache.
+- **On-demand extras dir is appended to `sys.path`, not prepended**, so a
+  bundled library always wins over a stale on-demand copy in the user cache
+  — repairing machines whose pylibs held a broken, wrong-Python grpcio.
+- **Transcribe-tab readiness is a real check now** — the engine status line
+  genuinely probes (model on disk, client actually imports, key present) on
+  a background thread instead of always reading "Ready".
+- **Advanced settings order** — the less-important Gemini "Google API key"
+  field now sits below the Google Cloud Speech-to-Text section.
 
 ## [1.3.8] — 2026-06-06
 
