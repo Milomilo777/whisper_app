@@ -41,7 +41,9 @@ A frontend-stability + cloud-default release on top of v1.3.8.
   choose where models are stored on first run).
 - **Portable** (Windows) — a ZIP of the same tree; extract and run
   `Run Whisper Project.bat`, no install.
-- **macOS** — a `.dmg` built on Apple-silicon; same cloud-default behaviour.
+- **macOS** — two `.dmg` builds, same cloud-default behaviour: `-arm64` for
+  Apple-silicon Macs (M1/M2/M3/M4) and `-x86_64` for Intel Macs. Pick the one
+  matching your Mac ( → About This Mac).
 
 > These trusted-distribution builds come with Google Cloud Speech-to-Text
 > pre-configured, so the cloud engine works out of the box. Keep the builds

@@ -14,8 +14,16 @@ on:
 
 jobs:
   build-app:
-    name: Build macOS .app/.dmg + smoke (macos-15 / arm64)
-    runs-on: macos-15
+    name: Build macOS .app/.dmg + smoke (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15        # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel  # Intel — so the .app runs on Intel Macs too
+            arch: x86_64
     env:
       # secrets.* is not allowed in a step-level `if`, so surface it as a
       # job env var (this IS allowed) and gate the key-write step on env.
@@ -80,11 +88,16 @@ jobs:
           kill -9 $WD 2>/dev/null
           echo "transcribe --help exit code: $RC (0 = the frozen app booted + imported on macOS)"
 
-      - name: "Method 1 - wrap into .dmg (create-dmg)"
+      - name: "Method 1 - wrap into .dmg (create-dmg) + arch-suffix the name"
         continue-on-error: true
         run: |
           brew install create-dmg
           bash platform/macos/pyinstaller/builddmg.command
+          # Tag the .dmg with its arch so the two matrix builds don't collide
+          # and users can pick the right one (arm64 vs x86_64/Intel).
+          if [ -f "dist/Whisper Project.dmg" ]; then
+            mv "dist/Whisper Project.dmg" "dist/Whisper Project-${{ matrix.arch }}.dmg"
+          fi
 
       # ---- Method 2: source-venv install.command ----
       - name: "Method 2 - run install.command (source venv -> .app)"
@@ -109,7 +122,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: macos-build
+          name: macos-build-${{ matrix.arch }}
           path: |
             dist/*.app
             dist/*.dmg
