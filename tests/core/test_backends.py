@@ -15,11 +15,27 @@ def backends_module(monkeypatch):
         fake_fw.WhisperModel = object  # type: ignore[attr-defined]
         sys.modules["faster_whisper"] = fake_fw
     # Discard any prior import — the package may have been imported by
-    # an earlier test with different stubs.
-    for mod in [m for m in list(sys.modules) if m.startswith("core.backends")]:
+    # an earlier test with different stubs. Snapshot the existing module
+    # objects first so teardown can put them back: other test modules hold
+    # references to the original core.backends.* objects (e.g.
+    # test_engine_selector's module-level ``availability`` import). If we
+    # left our freshly-reimported objects in sys.modules, those tests'
+    # monkeypatches would target a stale object while production code
+    # re-imports the new one — a silent cross-file isolation leak.
+    saved = {
+        m: sys.modules[m]
+        for m in list(sys.modules)
+        if m.startswith("core.backends")
+    }
+    for mod in saved:
         del sys.modules[mod]
     import core.backends as be
-    return be
+    yield be
+    # Restore the original modules so later tests see the same objects they
+    # imported at collection time.
+    for m in [m for m in list(sys.modules) if m.startswith("core.backends")]:
+        del sys.modules[m]
+    sys.modules.update(saved)
 
 
 def test_get_backend_default_is_faster_whisper(backends_module):
