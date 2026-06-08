@@ -19,6 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Bundle the Google Cloud service-account key ONLY when the secret is
+      # configured. The key is never committed (gitignored), so a normal
+      # public-repo run has no secret and builds WITHOUT the key (safe — the
+      # artifact is public). For the trusted final release build the repo is
+      # made private, the GCLOUD_STT_KEY secret is set, and this step writes
+      # creds/gcloud_stt.json so the mac spec bundles it into the .app/.dmg.
+      - name: Bundle Google Cloud key from secret (only when set)
+        if: ${{ secrets.GCLOUD_STT_KEY != '' }}
+        env:
+          GCLOUD_STT_KEY: ${{ secrets.GCLOUD_STT_KEY }}
+        run: |
+          mkdir -p creds
+          printf '%s' "$GCLOUD_STT_KEY" > creds/gcloud_stt.json
+          echo "wrote creds/gcloud_stt.json ($(wc -c < creds/gcloud_stt.json) bytes)"
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
