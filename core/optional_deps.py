@@ -75,10 +75,17 @@ def activate() -> None:
     """Put the extras dir on sys.path so on-demand packages import.
 
     Idempotent; call once at startup and after a successful install.
+
+    The extras dir is APPENDED, not prepended: a library that ships bundled
+    in the slim tree (e.g. google-cloud-speech, now bundled so the default
+    cloud engine works out of the box) must win over a stale on-demand copy
+    in the user pylibs cache. A previous prepend let a pylibs grpcio built
+    for a different Python shadow the healthy bundled one and crash the
+    import. Bundled wins; on-demand fills only what isn't shipped (torch).
     """
     d = extras_dir()
     if os.path.isdir(d) and d not in sys.path:
-        sys.path.insert(0, d)
+        sys.path.append(d)
 
 
 def packages_for(feature: str) -> list[str]:
