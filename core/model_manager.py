@@ -436,48 +436,97 @@ def _repo_id_from_url(zip_url: str) -> str | None:
     return f"{org}/{repo}"
 
 
+def _short_model_id(model_name: str) -> str | None:
+    """Map a registry model ``name`` to faster-whisper's short model id.
+
+    The registry names follow ``faster-whisper-<id>`` /
+    ``faster-distil-whisper-<id>``; faster-whisper's own download map keys
+    off the short ``<id>`` (``large-v3``, ``large-v3-turbo``,
+    ``distil-large-v3.5``, ``medium``, ...). Returns ``None`` for an
+    unrecognised shape.
+    """
+    n = (model_name or "").strip()
+    if not n:
+        return None
+    if n.startswith("faster-distil-whisper-"):
+        return "distil-" + n[len("faster-distil-whisper-"):]
+    if n.startswith("faster-whisper-"):
+        return n[len("faster-whisper-"):]
+    return None
+
+
+def _hf_model_ref(model_name: str, zip_url: str) -> str | None:
+    """Resolve a HuggingFace download reference for a registry model.
+
+    Prefer faster-whisper's own short id: it maps to the CORRECT upstream
+    repo, which a naive ``models--Systran--<repo>`` guess gets wrong (e.g.
+    ``large-v3-turbo`` lives under ``mobiuslabsgmbh`` and
+    ``distil-large-v3.5`` under ``distil-whisper`` — not Systran, which 404s
+    /401s). Fall back to the ``Org/Repo`` parsed from the mirror zip name
+    only when the short id is unknown to faster-whisper.
+    """
+    short = _short_model_id(model_name)
+    try:
+        from faster_whisper.utils import _MODELS  # type: ignore[attr-defined]
+
+        if short and short in _MODELS:
+            return short
+    except Exception:  # noqa: BLE001 — faster-whisper internals may move
+        if short:
+            return short
+    return _repo_id_from_url(zip_url)
+
+
 def _download_via_huggingface(
-    repo_id: str,
-    cache_dir: Path,
+    model_name: str,
+    zip_url: str,
+    model_path: Path,
     status_cb: Callable[[str], None] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> bool:
-    """Fetch ``repo_id`` straight from the HuggingFace Hub as a fallback.
+    """Fetch the model straight from the HuggingFace Hub as a fallback.
 
-    Used only when the smch.ir mirror is unavailable or its archive
-    fails verification. ``snapshot_download`` writes into ``cache_dir``
-    using the exact same ``models--Org--Repo/snapshots/<hash>/...``
-    layout the mirror zips use, so the rest of the app keeps resolving
-    the model folder unchanged. Returns ``True`` on success, ``False``
-    on any failure (import error, network error, cancellation) — the
-    caller decides how to report that.
+    Used only when the smch.ir mirror is unavailable or its archive fails
+    verification. Delegates to ``faster_whisper.download_model`` because it
+    already knows each short id's correct upstream repo. ``output_dir`` is
+    the resolved ``model_path``, so the files land directly in the same
+    flat folder (``model.bin`` + ``config.json`` ...) the mirror zip
+    produced — the rest of the app keeps resolving the model unchanged.
+    Returns ``True`` on success, ``False`` on any failure (import error,
+    network/repo error, cancellation).
     """
     if cancel_event and cancel_event.is_set():
         return False
 
+    ref = _hf_model_ref(model_name, zip_url)
+    if not ref:
+        if status_cb:
+            status_cb("HuggingFace fallback: could not resolve the model repo.")
+        return False
+
     try:
-        from huggingface_hub import snapshot_download
-    except ImportError as e:
+        from faster_whisper.utils import download_model
+    except Exception as e:  # noqa: BLE001
         if status_cb:
             status_cb(f"HuggingFace fallback unavailable: {e}")
         return False
 
     if status_cb:
         status_cb(
-            f"Mirror unavailable — downloading {repo_id} from huggingface.co ..."
+            f"Mirror unavailable — downloading '{ref}' from huggingface.co ..."
         )
     _notify(
         progress_cb,
         phase="download",
-        status=f"Downloading {repo_id} from HuggingFace...",
+        status=f"Downloading {ref} from HuggingFace...",
         percent=0,
         detail="Mirror unavailable — using huggingface.co",
     )
 
     try:
-        snapshot_download(repo_id=repo_id, cache_dir=str(cache_dir))
-    except Exception as e:
+        download_model(ref, output_dir=str(model_path))
+    except Exception as e:  # noqa: BLE001
         if status_cb:
             status_cb(f"HuggingFace download failed: {e}")
         return False
@@ -492,7 +541,7 @@ def _download_via_huggingface(
         phase="download",
         status="Model downloaded from HuggingFace.",
         percent=100,
-        detail=repo_id,
+        detail=ref,
     )
     return True
 
@@ -605,14 +654,14 @@ def ensure_model(
         raise
     except Exception as e:
         # The smch.ir mirror failed for ANY reason — missing zip (404),
-        # network error, or persistent MD5 mismatch. Before giving up,
-        # try the same model straight from the HuggingFace Hub: the
-        # registry's zip name encodes the exact upstream repo_id, and
-        # snapshot_download writes the identical cache layout the mirror
-        # zip would have, so the rest of the app keeps working unchanged.
+        # network error, or persistent MD5 mismatch. Before giving up, try
+        # the same model straight from the HuggingFace Hub: faster-whisper's
+        # own download map resolves the correct upstream repo (Systran for
+        # most, but mobiuslabsgmbh/turbo and distil-whisper/distil) and
+        # writes the files straight into model_path.
         mirror_error = e
-        repo_id = _repo_id_from_url(zip_url)
-        if repo_id is None:
+        model_ref = _hf_model_ref(model.get("name", ""), zip_url)
+        if model_ref is None:
             raise
 
         if status_cb:
@@ -620,17 +669,20 @@ def ensure_model(
         _remove_path(zip_path)
         _remove_path(model_path)
 
-        if not _download_via_huggingface(repo_id, cache_dir, status_cb, progress_cb, cancel_event):
+        if not _download_via_huggingface(
+            model.get("name", ""), zip_url, model_path,
+            status_cb, progress_cb, cancel_event,
+        ):
             raise RuntimeError(
                 "Model download failed: both the smch.ir mirror "
                 f"({mirror_error}) and the HuggingFace fallback "
-                f"({repo_id}) were unable to provide the model."
+                f"({model_ref}) were unable to provide the model."
             ) from mirror_error
 
         if not model_path.exists():
             raise RuntimeError(
                 "Model download failed: the HuggingFace fallback reported "
-                f"success for {repo_id!r} but the expected model folder is "
+                f"success for {model_ref!r} but the expected model folder is "
                 f"missing: {model_path}"
             ) from mirror_error
 

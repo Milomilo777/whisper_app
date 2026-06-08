@@ -343,9 +343,10 @@ def test_ensure_model_falls_back_to_huggingface_on_mirror_failure(tmp_path, monk
 
     verify_calls: list[Path] = []
 
-    def _fake_hf_download(repo_id, target_cache_dir, status_cb=None, progress_cb=None, cancel_event=None):
-        assert repo_id == "Systran/faster-whisper-medium"
-        assert Path(target_cache_dir) == cache_dir
+    def _fake_hf_download(name, src_zip_url, target_model_path, status_cb=None, progress_cb=None, cancel_event=None):
+        assert name == "faster-whisper-medium"
+        assert src_zip_url == zip_url
+        assert Path(target_model_path) == model_path
         model_path.mkdir(parents=True)
         (model_path / "model.bin").write_bytes(b"hf-bytes")
         if status_cb:
@@ -375,6 +376,32 @@ def test_ensure_model_falls_back_to_huggingface_on_mirror_failure(tmp_path, monk
     # The smch.ir MD5 manifest must NOT be checked against the HF tree —
     # its layout doesn't match what _verify_extracted_files expects.
     assert verify_calls == []
+
+
+def test_short_model_id_maps_registry_names():
+    """Registry model names map to faster-whisper's short ids — the key fix
+    for the 401: turbo/distil do NOT live under Systran, so a naive
+    models--Systran--<repo> guess is wrong; the short id resolves the right
+    upstream repo via faster-whisper's own download map."""
+    assert mm._short_model_id("faster-whisper-large-v3") == "large-v3"
+    assert mm._short_model_id("faster-whisper-large-v3-turbo") == "large-v3-turbo"
+    assert mm._short_model_id("faster-distil-whisper-large-v3.5") == "distil-large-v3.5"
+    assert mm._short_model_id("faster-whisper-medium") == "medium"
+    assert mm._short_model_id("") is None
+    assert mm._short_model_id("something-else") is None
+
+
+def test_hf_model_ref_prefers_short_id_over_systran_guess():
+    """When faster-whisper knows the short id, _hf_model_ref returns it
+    (resolving the correct upstream repo) rather than the Systran-prefixed
+    zip-name guess that 401s for turbo/distil."""
+    ref = mm._hf_model_ref(
+        "faster-whisper-large-v3-turbo",
+        "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip",
+    )
+    # Either the short id (faster-whisper installed) or, if its internals
+    # are unavailable, still the short id (the except branch returns it).
+    assert ref == "large-v3-turbo"
 
 
 @responses.activate
