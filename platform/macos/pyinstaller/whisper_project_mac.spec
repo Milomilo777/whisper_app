@@ -83,6 +83,14 @@ _REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir, os.pardir, os.par
 _icns = os.path.join(_REPO_ROOT, 'assets', 'whisper.icns')
 _icon = _icns if os.path.isfile(_icns) else None
 
+# Optional Google Cloud service-account key (gitignored — only present in a
+# trusted local build tree, never in a source/CI checkout). Bundled under
+# creds/ so core.backends.google_cloud_stt.bundled_credentials_path() finds
+# it at <resource_base>/creds/gcloud_stt.json. Skipped cleanly when absent —
+# the cloud backend just falls back to user-supplied credentials.
+_creds_key = os.path.join(_REPO_ROOT, 'creds', 'gcloud_stt.json')
+creds_datas = [(_creds_key, 'creds')] if os.path.isfile(_creds_key) else []
+
 a = Analysis(
     [os.path.join(_REPO_ROOT, 'gui.py')],
     pathex=[_REPO_ROOT],
@@ -104,6 +112,7 @@ a = Analysis(
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
+        *creds_datas,
     ],
     hiddenimports=[
         *whisper_cpp_hidden,
@@ -140,6 +149,7 @@ a = Analysis(
         'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
+        'core.backends.availability',
         'core.chapters',
         'core.llm',
         'core.recorder',

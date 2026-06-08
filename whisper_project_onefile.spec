@@ -68,6 +68,18 @@ for _name in ('stable_whisper', 'whisper', 'tiktoken'):
     except Exception:
         pass
 
+# Optional Google Cloud service-account key (gitignored — only present in a
+# trusted local build tree, never in a source/CI checkout). Bundled under
+# creds/ so core.backends.google_cloud_stt.bundled_credentials_path() finds
+# it at <resource_base>/creds/gcloud_stt.json. Skipped cleanly when absent —
+# the cloud backend just falls back to user-supplied credentials.
+import os as _os
+creds_datas = (
+    [('creds/gcloud_stt.json', 'creds')]
+    if _os.path.isfile('creds/gcloud_stt.json')
+    else []
+)
+
 a = Analysis(
     ['gui.py'],
     pathex=[],
@@ -89,6 +101,7 @@ a = Analysis(
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
+        *creds_datas,
     ],
     hiddenimports=[
         *whisper_cpp_hidden,
@@ -125,6 +138,7 @@ a = Analysis(
         'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
+        'core.backends.availability',
         'core.chapters',
         'core.llm',
         'core.recorder',
