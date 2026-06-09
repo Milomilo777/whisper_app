@@ -28,10 +28,10 @@ def _find_window_with_title(_target_pid: int, expected_title: str) -> int | None
     thread can register under a slightly different PID than the one
     Popen handed us. Title is unique enough for this measurement.
     """
-    user32 = ctypes.windll.user32
+    user32 = ctypes.windll.user32  # type: ignore
     found: list[int] = []
 
-    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)  # type: ignore
     def callback(hwnd: int, _lparam: int) -> int:
         if not user32.IsWindowVisible(hwnd):
             return True

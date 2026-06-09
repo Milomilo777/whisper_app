@@ -59,7 +59,7 @@ def transcribe_command(t: Any) -> dict[str, Any]:
 # faster-whisper load on CPU is ~10–15 s; on slow disks loading a
 # 3 GB model can stretch past 60 s, especially on slow Mac
 # environments (like virtual machines).
-HEADLESS_READY_TIMEOUT_S = 1200.0 if sys.platform == "darwin" else 120.0
+HEADLESS_READY_TIMEOUT_S: float = 1200.0 if sys.platform == "darwin" else 120.0
 
 
 class TranscriptionService:
@@ -567,7 +567,7 @@ class TranscriptionService:
     # for genuinely wedged workers while no longer killing healthy
     # long-running diarisation passes mid-job, especially on slow
     # Mac environments (like virtual machines).
-    LIVENESS_TIMEOUT_S = 1200.0 if sys.platform == "darwin" else 120.0
+    LIVENESS_TIMEOUT_S: float = 1200.0 if sys.platform == "darwin" else 120.0
 
     def poll(self) -> None:
         app = self.app
