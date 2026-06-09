@@ -49,7 +49,7 @@ def _find_window_with_title(_target_pid: int, expected_title: str) -> int | None
     return found[0] if found else None
 
 
-def measure(exe: Path, timeout_s: float = 120.0) -> float | None:
+def measure(exe: Path, timeout_s: float = 1200.0) -> float | None:
     start = time.time()
     proc = subprocess.Popen([str(exe)], cwd=str(exe.parent))
     try:
