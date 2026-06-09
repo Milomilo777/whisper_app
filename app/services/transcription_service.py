@@ -57,8 +57,9 @@ def transcribe_command(t: Any) -> dict[str, Any]:
 # folder) will wait for a freshly-spawned worker to emit its ``ready``
 # event before giving up and aborting the enqueue. Generous — a cold
 # faster-whisper load on CPU is ~10–15 s; on slow disks loading a
-# 3 GB model can stretch past 60 s.
-HEADLESS_READY_TIMEOUT_S = 120.0
+# 3 GB model can stretch past 60 s, especially on slow Mac
+# environments (like virtual machines).
+HEADLESS_READY_TIMEOUT_S = 1200.0 if sys.platform == "darwin" else 120.0
 
 
 class TranscriptionService:
@@ -558,14 +559,15 @@ class TranscriptionService:
     # one-segment Whisper transcribe burst, but catches a deadlocked
     # worker before the user has to kill the app.
     #
-    # 120 s (was 30 s) is defence-in-depth on top of the progress-
+    # 1200 s (was 120 s) is defence-in-depth on top of the progress-
     # callback wiring through diarisation (see core/transcriber.py
     # _run_post_pipeline). Long files (3 h+) can momentarily have a
     # sherpa-onnx tick rate below one event per 30 s, even with the
-    # progress callback connected; 120 s keeps the watchdog useful
+    # progress callback connected; 1200 s keeps the watchdog useful
     # for genuinely wedged workers while no longer killing healthy
-    # long-running diarisation passes mid-job.
-    LIVENESS_TIMEOUT_S = 120.0
+    # long-running diarisation passes mid-job, especially on slow
+    # Mac environments (like virtual machines).
+    LIVENESS_TIMEOUT_S = 1200.0 if sys.platform == "darwin" else 120.0
 
     def poll(self) -> None:
         app = self.app

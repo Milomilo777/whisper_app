@@ -82,7 +82,7 @@ def main() -> int:
     for i in range(3):
         elapsed = measure(exe)
         if elapsed is None:
-            print(f"run {i + 1}: window did not appear within 120 s")
+            print(f"run {i + 1}: window did not appear within 1200 s")
             return 1
         print(f"run {i + 1}: {elapsed:.2f} s")
         runs.append(elapsed)

@@ -2232,7 +2232,7 @@ class App(tk.Tk):
             self.refresh()
 
         def _on_timeout() -> None:
-            self.log(f"Auto-transcribe skipped: model load timed out for {base}")
+            self.log(f"Auto-transcribe skipped: model load timed out for {base} — " + str(HEADLESS_READY_TIMEOUT_S) + " s")
             if source_download is not None:
                 source_download.status = "finished"
                 source_download.transcription_task = None
@@ -4162,7 +4162,7 @@ class App(tk.Tk):
             self._when_worker_ready(
                 _do_enqueue,
                 on_timeout=lambda: self.log(
-                    f"Watched: skipped {base} — model load timed out"
+                f"Watched: skipped {base} — model load timed out " + str(HEADLESS_READY_TIMEOUT_S) + " s"
                 ),
                 loading_label=f"will transcribe {base} when ready.",
             )
@@ -4277,7 +4277,7 @@ class App(tk.Tk):
             _do_resume,
             on_timeout=lambda: self.log(
                 f"Crash-resume skipped: model load timed out "
-                f"({n} task(s) not re-enqueued)"
+                f"({n} task(s) not re-enqueued) — " + str(HEADLESS_READY_TIMEOUT_S) + " s"
             ),
             loading_label=f"resuming {n} interrupted transcription(s) when ready.",
         )
@@ -4389,6 +4389,10 @@ class App(tk.Tk):
                 "assets", "whisper.ico",
             )
         if not os.path.isfile(ico):
+            return
+        if sys.platform == "darwin":
+            # iconbitmap(default=...) is not supported on macOS/Tk and
+            # throws "wrong # args: should be 'wm iconbitmap window ?bitmap?'"
             return
         try:
             self.iconbitmap(default=ico)
