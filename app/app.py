@@ -21,7 +21,10 @@ from app.observability import init_sentry, send_launch_ping_async
 from app.services.download_service import DownloadService
 from app.services.format_service import FormatService
 from app.services.integrations_service import IntegrationsService
-from app.services.transcription_service import TranscriptionService
+from app.services.transcription_service import (
+    HEADLESS_READY_TIMEOUT_S,
+    TranscriptionService,
+)
 from app.dialogs.statistics import show_statistics as _show_stats
 from app.widgets.console import build_console
 from app.widgets.platform import open_folder as _open_folder_helper
@@ -2232,7 +2235,7 @@ class App(tk.Tk):
             self.refresh()
 
         def _on_timeout() -> None:
-            self.log(f"Auto-transcribe skipped: model load timed out for {base} — " + str(HEADLESS_READY_TIMEOUT_S) + " s")
+            self.log(f"Auto-transcribe skipped: model load timed out for {base} — {HEADLESS_READY_TIMEOUT_S} s")
             if source_download is not None:
                 source_download.status = "finished"
                 source_download.transcription_task = None
@@ -2263,7 +2266,6 @@ class App(tk.Tk):
         for readiness with ``after()`` instead; ``on_timeout`` (if
         given) runs when the load doesn't finish within the timeout.
         """
-        from app.services.transcription_service import HEADLESS_READY_TIMEOUT_S
         svc = self.transcription_service
         if svc.ready_workers():
             on_ready()
@@ -4162,7 +4164,7 @@ class App(tk.Tk):
             self._when_worker_ready(
                 _do_enqueue,
                 on_timeout=lambda: self.log(
-                f"Watched: skipped {base} — model load timed out " + str(HEADLESS_READY_TIMEOUT_S) + " s"
+                f"Watched: skipped {base} — model load timed out {HEADLESS_READY_TIMEOUT_S} s"
                 ),
                 loading_label=f"will transcribe {base} when ready.",
             )
@@ -4277,7 +4279,7 @@ class App(tk.Tk):
             _do_resume,
             on_timeout=lambda: self.log(
                 f"Crash-resume skipped: model load timed out "
-                f"({n} task(s) not re-enqueued) — " + str(HEADLESS_READY_TIMEOUT_S) + " s"
+                f"({n} task(s) not re-enqueued) — {HEADLESS_READY_TIMEOUT_S} s"
             ),
             loading_label=f"resuming {n} interrupted transcription(s) when ready.",
         )
