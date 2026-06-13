@@ -83,42 +83,247 @@ _MD5_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 # the merged effective catalog; the bare ``MODEL_REGISTRY`` / ``list_models``
 # / ``resolve_model_entry`` helpers keep returning the built-ins only (still
 # used as the offline fallback and by existing tests).
+#
+# Every entry carries an explicit ``"hf_repo"`` — the exact HuggingFace
+# ``Org/Repo`` id this model downloads from when the smch.ir mirror is
+# unavailable (or, for entries with no mirror at all, ALWAYS). This makes
+# the HuggingFace fallback deterministic: ``_hf_model_ref`` prefers
+# ``hf_repo`` over the name-based guesses (``_short_model_id`` /
+# ``_repo_id_from_url``), which can resolve to the wrong upstream org for
+# models that share a faster-whisper "short id" with a different repo
+# (e.g. ``deepdml-large-v3-turbo`` vs. the mobiuslabsgmbh turbo, both of
+# which faster-whisper's own map would resolve to the SAME
+# ``large-v3-turbo`` short id).
+#
+# Only the four original entries (large-v3, large-v3-turbo,
+# distil-large-v3.5, medium) have a real smch.ir mirror ``url``/``md5``.
+# Every other entry has ``url=""``/``md5=""``: ``ensure_model`` skips the
+# mirror attempt entirely for those and downloads straight from
+# ``hf_repo`` via ``_download_via_huggingface``.
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {
+    "tiny.en": {
+        "label": "Tiny (English) — fastest, lowest accuracy (~0.075 GB)",
+        "name": "faster-whisper-tiny.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-tiny.en",
+        "approx_size_gb": 0.075,
+        "info": (
+            "~75 MB, English-only. The fastest and least accurate model — "
+            "useful for quick drafts or very low-power hardware."
+        ),
+    },
+    "tiny": {
+        "label": "Tiny — fastest, lowest accuracy, multilingual (~0.075 GB)",
+        "name": "faster-whisper-tiny",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-tiny",
+        "approx_size_gb": 0.075,
+        "info": (
+            "~75 MB, multilingual. The fastest and least accurate model — "
+            "useful for quick drafts or very low-power hardware."
+        ),
+    },
+    "base.en": {
+        "label": "Base (English) — very fast, low accuracy (~0.145 GB)",
+        "name": "faster-whisper-base.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-base.en",
+        "approx_size_gb": 0.145,
+        "info": (
+            "~145 MB, English-only. Very fast with modest accuracy — a step "
+            "up from Tiny for short, low-stakes clips."
+        ),
+    },
+    "base": {
+        "label": "Base — very fast, low accuracy, multilingual (~0.145 GB)",
+        "name": "faster-whisper-base",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-base",
+        "approx_size_gb": 0.145,
+        "info": (
+            "~145 MB, multilingual. Very fast with modest accuracy — a step "
+            "up from Tiny for short, low-stakes clips."
+        ),
+    },
+    "small.en": {
+        "label": "Small (English) — fast, moderate accuracy (~0.5 GB)",
+        "name": "faster-whisper-small.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-small.en",
+        "approx_size_gb": 0.5,
+        "info": (
+            "~500 MB, English-only. Good speed/accuracy balance for everyday "
+            "English transcripts on modest hardware."
+        ),
+    },
+    "small": {
+        "label": "Small — fast, moderate accuracy, multilingual (~0.5 GB)",
+        "name": "faster-whisper-small",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-small",
+        "approx_size_gb": 0.5,
+        "info": (
+            "~500 MB, multilingual. Good speed/accuracy balance for everyday "
+            "transcripts on modest hardware."
+        ),
+    },
+    "medium.en": {
+        "label": "Medium (English) — slower, good accuracy (~1.5 GB)",
+        "name": "faster-whisper-medium.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-medium.en",
+        "approx_size_gb": 1.5,
+        "info": (
+            "~1.5 GB, English-only. Noticeably more accurate than Small at "
+            "roughly half the speed."
+        ),
+    },
+    # NOTE: this artifact may not exist on smch.ir yet — the URL/MD5
+    # below follow the same naming convention as the entries below
+    # (Systran's faster-whisper-large-v3). If the mirror 404s (or any
+    # other download/verification failure occurs), ``ensure_model``
+    # automatically falls back to fetching the same model straight
+    # from the HuggingFace Hub via ``hf_repo`` / ``_download_via_huggingface``,
+    # so this entry works either way. ~1.5 GB.
+    "medium": {
+        "label": "Medium — slower, good accuracy, multilingual (~1.5 GB)",
+        "name": "faster-whisper-medium",
+        "url": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip.md5",
+        "hf_repo": "Systran/faster-whisper-medium",
+        "approx_size_gb": 1.5,
+        "info": (
+            "~1.5 GB, multilingual. Noticeably more accurate than Small at "
+            "roughly half the speed."
+        ),
+    },
+    "large-v1": {
+        "label": "Large v1 — older large model, multilingual (~3 GB)",
+        "name": "faster-whisper-large-v1",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-large-v1",
+        "approx_size_gb": 3.0,
+        "info": (
+            "~3 GB, multilingual. The original large model — kept for "
+            "compatibility; Large v2/v3 are generally more accurate."
+        ),
+    },
+    "large-v2": {
+        "label": "Large v2 — high accuracy, multilingual (~3 GB)",
+        "name": "faster-whisper-large-v2",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-whisper-large-v2",
+        "approx_size_gb": 3.0,
+        "info": (
+            "~3 GB, multilingual. High accuracy, slower than the Turbo "
+            "models — superseded by Large v3 for most languages."
+        ),
+    },
     "large-v3": {
         "label": "Large v3 — best accuracy (default, ~3 GB)",
         "name": "faster-whisper-large-v3",
         "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
         "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5",
+        "hf_repo": "Systran/faster-whisper-large-v3",
         "approx_size_gb": 3.0,
+        "info": (
+            "~3 GB, multilingual. The most accurate general-purpose model — "
+            "slowest of the large models. Default choice."
+        ),
     },
-    "large-v3-turbo": {
-        "label": "Large v3 Turbo — ~5× faster, similar accuracy (~1.6 GB)",
-        "name": "faster-whisper-large-v3-turbo",
-        "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip",
-        "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip.md5",
-        "approx_size_gb": 1.6,
+    "distil-small.en": {
+        "label": "Distil Small (English) — fast, English-only (~0.4 GB)",
+        "name": "faster-distil-whisper-small.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-distil-whisper-small.en",
+        "approx_size_gb": 0.4,
+        "info": (
+            "~400 MB, English-only. Distilled for speed — faster than Small "
+            "with similar English accuracy."
+        ),
+    },
+    "distil-medium.en": {
+        "label": "Distil Medium (English) — fast, English-only (~0.8 GB)",
+        "name": "faster-distil-whisper-medium.en",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-distil-whisper-medium.en",
+        "approx_size_gb": 0.8,
+        "info": (
+            "~800 MB, English-only. Distilled for speed — faster than "
+            "Medium with similar English accuracy."
+        ),
+    },
+    "distil-large-v2": {
+        "label": "Distil Large v2 — fast, English-only (~1.5 GB)",
+        "name": "faster-distil-whisper-large-v2",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-distil-whisper-large-v2",
+        "approx_size_gb": 1.5,
+        "info": (
+            "~1.5 GB, English-only. Distilled from Large v2 for ~5x speed "
+            "with close to its English accuracy."
+        ),
+    },
+    "distil-large-v3": {
+        "label": "Distil Large v3 — fast, English-only (~1.5 GB)",
+        "name": "faster-distil-whisper-large-v3",
+        "url": "",
+        "md5": "",
+        "hf_repo": "Systran/faster-distil-whisper-large-v3",
+        "approx_size_gb": 1.5,
+        "info": (
+            "~1.5 GB, English-only. Distilled from Large v3 for ~5x speed "
+            "with close to its English accuracy."
+        ),
     },
     "distil-large-v3.5": {
         "label": "Distil Large v3.5 — fastest English-only (~1.5 GB)",
         "name": "faster-distil-whisper-large-v3.5",
         "url": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip",
         "md5": "https://smch.ir/models/models--Systran--faster-distil-whisper-large-v3.5.zip.md5",
+        "hf_repo": "distil-whisper/distil-large-v3.5-ct2",
         "approx_size_gb": 1.5,
+        "info": (
+            "~1.5 GB, English-only. The newest distilled large model — "
+            "fastest English-only option with accuracy close to Large v3."
+        ),
     },
-    # NOTE: this artifact may not exist on smch.ir yet — the URL/MD5
-    # below follow the same naming convention as the entries above
-    # (Systran's faster-whisper-medium). If the mirror 404s (or any
-    # other download/verification failure occurs), ``ensure_model``
-    # now automatically falls back to fetching the same model straight
-    # from the HuggingFace Hub via ``_repo_id_from_url`` /
-    # ``_download_via_huggingface``, so this entry works either way.
-    # ~1.5 GB.
-    "medium": {
-        "label": "Medium — faster, lower accuracy (~1.5 GB)",
-        "name": "faster-whisper-medium",
-        "url": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip",
-        "md5": "https://smch.ir/models/models--Systran--faster-whisper-medium.zip.md5",
-        "approx_size_gb": 1.5,
+    "large-v3-turbo": {
+        "label": "Large v3 Turbo — ~5x faster, similar accuracy (~1.6 GB)",
+        "name": "faster-whisper-large-v3-turbo",
+        "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip",
+        "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3-turbo.zip.md5",
+        "hf_repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "approx_size_gb": 1.6,
+        "info": (
+            "~1.6 GB, multilingual. ~5x faster than Large v3 with similar "
+            "accuracy — a strong general-purpose default."
+        ),
+    },
+    "deepdml-large-v3-turbo": {
+        "label": "Large v3 Turbo (deepdml) — ~5x faster, multilingual (~1.6 GB)",
+        "name": "faster-whisper-large-v3-turbo-deepdml",
+        "url": "",
+        "md5": "",
+        "hf_repo": "deepdml/faster-whisper-large-v3-turbo-ct2",
+        "approx_size_gb": 1.6,
+        "info": (
+            "~1.6 GB, multilingual. Community CT2 conversion of the Large "
+            "v3 Turbo weights — ~5x faster than Large v3 with similar "
+            "accuracy."
+        ),
     },
 }
 
@@ -132,28 +337,43 @@ def list_models() -> list[tuple[str, str]]:
 
 
 def resolve_model_entry(slug: str) -> dict[str, Any] | None:
-    """Return ``{name, url, md5}`` for a built-in registry slug, or ``None``.
+    """Return ``{name, url, md5, hf_repo}`` for a built-in registry slug, or
+    ``None``.
 
-    The returned dict shape matches ``DEFAULT_CONFIG["model"]`` so the
-    caller can assign it directly to ``config["model"]`` and the rest
-    of the codebase (``ensure_model``, the cache-dir fallback) keeps
-    working without changes.
+    The returned dict shape is a superset of ``DEFAULT_CONFIG["model"]`` (it
+    adds ``hf_repo``) so the caller can assign it directly to
+    ``config["model"]`` and the rest of the codebase (``ensure_model``, the
+    cache-dir fallback) keeps working without changes — ``ensure_model``
+    reads ``hf_repo`` to resolve the HuggingFace fallback deterministically.
     """
     entry = MODEL_REGISTRY.get(slug)
     if entry is None:
         return None
-    return {"name": entry["name"], "url": entry["url"], "md5": entry["md5"]}
+    return {
+        "name": entry["name"],
+        "url": entry["url"],
+        "md5": entry["md5"],
+        "hf_repo": entry.get("hf_repo", ""),
+    }
 
 
 def _merged_catalog(config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Built-in MODEL_REGISTRY overlaid with ``config['model_catalog']``.
 
     The online/local config may carry a ``model_catalog`` dict in the SAME
-    shape as MODEL_REGISTRY (slug → {label, name, url, md5, approx_size_gb}).
-    Each online slug is overlaid onto the built-in entry (or added new), so
-    the catalog can grow / be re-pointed without an app update. A malformed
-    catalog (not a dict, or non-dict entries) is ignored entry-by-entry so a
-    bad online payload never breaks the picker — the built-ins still show.
+    shape as MODEL_REGISTRY (slug → {label, name, url, md5, hf_repo,
+    approx_size_gb, info}). Each online slug is overlaid onto the built-in
+    entry (or added new), so the catalog can grow / be re-pointed without an
+    app update. A malformed catalog (not a dict, or non-dict entries) is
+    ignored entry-by-entry so a bad online payload never breaks the picker —
+    the built-ins still show.
+
+    ``url``/``md5`` may be empty strings — those entries (and any new ones
+    added online) download straight from ``hf_repo`` via
+    ``_download_via_huggingface``, skipping the mirror entirely (see
+    ``ensure_model``). At least one of ``url`` or ``hf_repo`` must be a
+    non-empty string, or ``ensure_model`` would have no source to fetch
+    from.
     """
     merged: dict[str, dict[str, Any]] = {
         slug: dict(entry) for slug, entry in MODEL_REGISTRY.items()
@@ -164,14 +384,23 @@ def _merged_catalog(config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     for slug, entry in extra.items():
         if not isinstance(slug, str) or not isinstance(entry, dict):
             continue
-        # Require the fields ensure_model needs; skip anything incomplete.
-        if not all(isinstance(entry.get(k), str) and entry.get(k)
-                   for k in ("name", "url", "md5")):
+        # ``name`` is always required; ``url``/``md5`` must be strings (may
+        # be empty) and ``hf_repo`` (if present) must be a string.
+        if not (isinstance(entry.get("name"), str) and entry.get("name")):
+            continue
+        if not all(isinstance(entry.get(k, ""), str) for k in ("url", "md5", "hf_repo")):
+            continue
+        # Need a download source: a non-empty mirror url or hf_repo.
+        if not (entry.get("url") or entry.get("hf_repo")):
             continue
         base = dict(merged.get(slug) or {})
         base.update(entry)
+        base.setdefault("url", "")
+        base.setdefault("md5", "")
+        base.setdefault("hf_repo", "")
         base.setdefault("label", slug)
         base.setdefault("approx_size_gb", 0.0)
+        base.setdefault("info", "")
         merged[slug] = base
     return merged
 
@@ -189,11 +418,39 @@ def catalog_models(config: dict[str, Any] | None) -> list[tuple[str, str]]:
 def catalog_resolve_entry(
     config: dict[str, Any] | None, slug: str
 ) -> dict[str, Any] | None:
-    """``{name, url, md5}`` for ``slug`` from the merged catalog, or ``None``."""
+    """``{name, url, md5, hf_repo}`` for ``slug`` from the merged catalog, or
+    ``None``.
+
+    ``hf_repo`` is included so the caller can assign the result straight to
+    ``config["model"]`` and ``ensure_model`` resolves the HuggingFace
+    fallback deterministically from it.
+    """
     entry = _merged_catalog(config).get(slug)
     if entry is None:
         return None
-    return {"name": entry["name"], "url": entry["url"], "md5": entry["md5"]}
+    return {
+        "name": entry["name"],
+        "url": entry["url"],
+        "md5": entry["md5"],
+        "hf_repo": entry.get("hf_repo", ""),
+    }
+
+
+def catalog_entry_info(config: dict[str, Any] | None, slug: str) -> dict[str, Any] | None:
+    """``{label, info, approx_size_gb}`` for ``slug`` from the merged catalog.
+
+    Used by the Advanced dialog's "?" button to show a short description of
+    the selected model. Returns ``None`` when ``slug`` isn't in the merged
+    catalog.
+    """
+    entry = _merged_catalog(config).get(slug)
+    if entry is None:
+        return None
+    return {
+        "label": entry.get("label") or slug,
+        "info": entry.get("info") or "",
+        "approx_size_gb": entry.get("approx_size_gb") or 0.0,
+    }
 
 def md5_file(path: str | Path, cancel_event: threading.Event | None = None) -> str:
     h=hashlib.md5()
@@ -455,16 +712,27 @@ def _short_model_id(model_name: str) -> str | None:
     return None
 
 
-def _hf_model_ref(model_name: str, zip_url: str) -> str | None:
+def _hf_model_ref(model_name: str, zip_url: str, hf_repo: str | None = None) -> str | None:
     """Resolve a HuggingFace download reference for a registry model.
 
-    Prefer faster-whisper's own short id: it maps to the CORRECT upstream
-    repo, which a naive ``models--Systran--<repo>`` guess gets wrong (e.g.
-    ``large-v3-turbo`` lives under ``mobiuslabsgmbh`` and
-    ``distil-large-v3.5`` under ``distil-whisper`` — not Systran, which 404s
-    /401s). Fall back to the ``Org/Repo`` parsed from the mirror zip name
-    only when the short id is unknown to faster-whisper.
+    Resolution order:
+
+    1. ``hf_repo`` — the EXPLICIT ``Org/Repo`` id from the registry/catalog
+       entry, when given. This is deterministic and the source of truth for
+       every registry entry; it correctly disambiguates models that share a
+       faster-whisper "short id" with a DIFFERENT upstream repo (e.g.
+       ``deepdml-large-v3-turbo`` vs. the mobiuslabsgmbh turbo — both would
+       otherwise resolve to the same ``large-v3-turbo`` short id below).
+    2. faster-whisper's own short id (``_short_model_id``): it maps to the
+       CORRECT upstream repo, which a naive ``models--Systran--<repo>`` guess
+       gets wrong (e.g. ``large-v3-turbo`` lives under ``mobiuslabsgmbh`` and
+       ``distil-large-v3.5`` under ``distil-whisper`` — not Systran, which
+       404s/401s).
+    3. The ``Org/Repo`` parsed from the mirror zip name — only when neither
+       of the above resolved anything.
     """
+    if hf_repo:
+        return hf_repo
     short = _short_model_id(model_name)
     try:
         from faster_whisper.utils import _MODELS  # type: ignore[attr-defined]
@@ -484,13 +752,16 @@ def _download_via_huggingface(
     status_cb: Callable[[str], None] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     cancel_event: threading.Event | None = None,
+    hf_repo: str | None = None,
 ) -> bool:
     """Fetch the model straight from the HuggingFace Hub as a fallback.
 
-    Used only when the smch.ir mirror is unavailable or its archive fails
-    verification. Delegates to ``faster_whisper.download_model`` because it
-    already knows each short id's correct upstream repo. ``output_dir`` is
-    the resolved ``model_path``, so the files land directly in the same
+    Used either as the SOLE download source (registry entries with no
+    smch.ir mirror, ``url == ""``) or as a fallback when the smch.ir mirror
+    is unavailable / its archive fails verification. Delegates to
+    ``faster_whisper.download_model`` because it already knows each short
+    id's correct upstream repo (when ``hf_repo`` isn't given). ``output_dir``
+    is the resolved ``model_path``, so the files land directly in the same
     flat folder (``model.bin`` + ``config.json`` ...) the mirror zip
     produced — the rest of the app keeps resolving the model unchanged.
     Returns ``True`` on success, ``False`` on any failure (import error,
@@ -499,7 +770,7 @@ def _download_via_huggingface(
     if cancel_event and cancel_event.is_set():
         return False
 
-    ref = _hf_model_ref(model_name, zip_url)
+    ref = _hf_model_ref(model_name, zip_url, hf_repo)
     if not ref:
         if status_cb:
             status_cb("HuggingFace fallback: could not resolve the model repo.")
@@ -556,6 +827,7 @@ def ensure_model(
     model_path=Path(config["model_path"])
     zip_url=model["url"]
     md5_url=model["md5"]
+    hf_repo=model.get("hf_repo") or None
 
     cache_dir=model_path.parent
     try:
@@ -564,6 +836,40 @@ def ensure_model(
         if _is_permission_error(e):
             raise ModelDestinationNotWritable(cache_dir) from e
         raise
+
+    # Registry entries with NO smch.ir mirror have ``url == ""`` — there is
+    # no zip / .md5 manifest to download or verify against, so go straight
+    # to the HuggingFace fallback (deterministic via ``hf_repo``). A simple
+    # on-disk check covers "already installed" since there's no manifest to
+    # verify against.
+    if not zip_url:
+        if model_path.exists() and any(model_path.iterdir()):
+            if status_cb: status_cb("Model already installed")
+            _notify(progress_cb, phase="installed", status="Model already installed", percent=100)
+            return str(model_path)
+
+        _remove_path(model_path)
+        if not _download_via_huggingface(
+            model.get("name", ""), zip_url, model_path,
+            status_cb, progress_cb, cancel_event,
+            hf_repo=hf_repo,
+        ):
+            ref = _hf_model_ref(model.get("name", ""), zip_url, hf_repo) or "unknown"
+            raise RuntimeError(
+                f"Model download failed: the HuggingFace fallback ({ref}) "
+                "was unable to provide the model (no mirror is configured "
+                "for this model)."
+            )
+
+        if not model_path.exists():
+            raise RuntimeError(
+                "Model download failed: the HuggingFace fallback reported "
+                f"success but the expected model folder is missing: {model_path}"
+            )
+
+        if status_cb: status_cb("Model ready")
+        _notify(progress_cb, phase="ready", status="Model ready", percent=100, detail="Download complete (HuggingFace)")
+        return str(model_path)
 
     zip_path=cache_dir / _zip_name_from_url(zip_url)
 
@@ -660,7 +966,7 @@ def ensure_model(
         # most, but mobiuslabsgmbh/turbo and distil-whisper/distil) and
         # writes the files straight into model_path.
         mirror_error = e
-        model_ref = _hf_model_ref(model.get("name", ""), zip_url)
+        model_ref = _hf_model_ref(model.get("name", ""), zip_url, hf_repo)
         if model_ref is None:
             raise
 
@@ -672,6 +978,7 @@ def ensure_model(
         if not _download_via_huggingface(
             model.get("name", ""), zip_url, model_path,
             status_cb, progress_cb, cancel_event,
+            hf_repo=hf_repo,
         ):
             raise RuntimeError(
                 "Model download failed: both the smch.ir mirror "

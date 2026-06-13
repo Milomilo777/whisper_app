@@ -343,7 +343,7 @@ def test_ensure_model_falls_back_to_huggingface_on_mirror_failure(tmp_path, monk
 
     verify_calls: list[Path] = []
 
-    def _fake_hf_download(name, src_zip_url, target_model_path, status_cb=None, progress_cb=None, cancel_event=None):
+    def _fake_hf_download(name, src_zip_url, target_model_path, status_cb=None, progress_cb=None, cancel_event=None, hf_repo=None):
         assert name == "faster-whisper-medium"
         assert src_zip_url == zip_url
         assert Path(target_model_path) == model_path
@@ -424,3 +424,142 @@ def test_ensure_model_raises_when_both_mirror_and_huggingface_fail(tmp_path, mon
 
     with pytest.raises(RuntimeError, match=r"(?i)mirror.*huggingface|huggingface.*mirror"):
         mm.ensure_model(config)
+
+
+# ---------- Full model catalog (v1.3.9) --------------------------------------
+
+
+def test_model_registry_has_full_catalog():
+    """Every model the maintainer specified must be present, each with a
+    non-empty ``hf_repo``, ``label``, ``info``, and a positive
+    ``approx_size_gb``."""
+    expected_slugs = {
+        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
+        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
+        "distil-small.en", "distil-medium.en", "distil-large-v2",
+        "distil-large-v3", "distil-large-v3.5", "large-v3-turbo",
+        "deepdml-large-v3-turbo",
+    }
+    assert set(mm.MODEL_REGISTRY.keys()) == expected_slugs
+    for slug, entry in mm.MODEL_REGISTRY.items():
+        assert entry.get("hf_repo"), f"{slug} missing hf_repo"
+        assert entry.get("label"), f"{slug} missing label"
+        assert entry.get("info"), f"{slug} missing info"
+        assert entry.get("approx_size_gb", 0) > 0, f"{slug} missing approx_size_gb"
+        assert isinstance(entry.get("url"), str)
+        assert isinstance(entry.get("md5"), str)
+        # Every entry must have a download source: a mirror url or hf_repo.
+        assert entry["url"] or entry["hf_repo"]
+
+
+def test_catalog_models_includes_all_new_slugs():
+    slugs = {slug for slug, _label in mm.catalog_models(None)}
+    assert "deepdml-large-v3-turbo" in slugs
+    assert "tiny" in slugs
+    assert "tiny.en" in slugs
+    assert "large-v1" in slugs
+    assert "large-v2" in slugs
+    assert "distil-large-v2" in slugs
+    assert "distil-large-v3" in slugs
+    assert len(slugs) == len(mm.MODEL_REGISTRY)
+
+
+def test_only_legacy_four_models_have_mirror_urls():
+    """Only the four pre-existing entries keep their smch.ir mirror; every
+    new model has url="" / md5="" and relies on hf_repo."""
+    mirrored = {slug for slug, e in mm.MODEL_REGISTRY.items() if e["url"]}
+    assert mirrored == {"large-v3", "large-v3-turbo", "distil-large-v3.5", "medium"}
+    for slug, entry in mm.MODEL_REGISTRY.items():
+        if slug not in mirrored:
+            assert entry["url"] == ""
+            assert entry["md5"] == ""
+
+
+def test_hf_model_ref_resolves_deepdml_and_turbo_distinctly():
+    """deepdml-large-v3-turbo and large-v3-turbo share faster-whisper's
+    ``large-v3-turbo`` short id but live under DIFFERENT HF orgs — hf_repo
+    must disambiguate them."""
+    deepdml = mm.MODEL_REGISTRY["deepdml-large-v3-turbo"]
+    turbo = mm.MODEL_REGISTRY["large-v3-turbo"]
+
+    deepdml_ref = mm._hf_model_ref(deepdml["name"], deepdml["url"], deepdml["hf_repo"])
+    turbo_ref = mm._hf_model_ref(turbo["name"], turbo["url"], turbo["hf_repo"])
+
+    assert deepdml_ref == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    assert turbo_ref == "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+
+
+def test_catalog_resolve_entry_includes_hf_repo():
+    entry = mm.catalog_resolve_entry(None, "deepdml-large-v3-turbo")
+    assert entry is not None
+    assert entry["hf_repo"] == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    assert entry["url"] == ""
+    assert entry["md5"] == ""
+
+
+def test_catalog_entry_info_returns_label_and_info():
+    info = mm.catalog_entry_info(None, "large-v3")
+    assert info is not None
+    assert "Large v3" in info["label"]
+    assert info["info"]
+    assert info["approx_size_gb"] == 3.0
+
+    assert mm.catalog_entry_info(None, "no-such-slug") is None
+
+
+@responses.activate
+def test_ensure_model_no_mirror_downloads_via_huggingface(tmp_path, monkeypatch):
+    """A registry entry with url="" must skip the mirror entirely and
+    download straight from hf_repo via _download_via_huggingface."""
+    entry = mm.MODEL_REGISTRY["deepdml-large-v3-turbo"]
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    model_path = cache_dir / f"models--Systran--{entry['name']}"
+    config = {
+        "model": {"name": entry["name"], "url": entry["url"], "md5": entry["md5"], "hf_repo": entry["hf_repo"]},
+        "model_path": str(model_path),
+    }
+
+    calls: list[str] = []
+
+    def _fake_hf_download(name, src_zip_url, target_model_path, status_cb=None, progress_cb=None, cancel_event=None, hf_repo=None):
+        calls.append(hf_repo or "")
+        assert src_zip_url == ""
+        Path(target_model_path).mkdir(parents=True)
+        (Path(target_model_path) / "model.bin").write_bytes(b"deepdml-bytes")
+        return True
+
+    monkeypatch.setattr(mm, "_download_via_huggingface", _fake_hf_download)
+
+    statuses: list[str] = []
+    result = mm.ensure_model(config, status_cb=statuses.append)
+
+    assert Path(result) == model_path
+    assert (model_path / "model.bin").read_bytes() == b"deepdml-bytes"
+    assert calls == ["deepdml/faster-whisper-large-v3-turbo-ct2"]
+    assert any("Model ready" in s for s in statuses)
+
+
+def test_ensure_model_no_mirror_already_installed_skips_download(tmp_path, monkeypatch):
+    """An already-downloaded no-mirror model must NOT call the HuggingFace
+    fallback again."""
+    entry = mm.MODEL_REGISTRY["deepdml-large-v3-turbo"]
+    cache_dir = tmp_path / "cache"
+    model_path = cache_dir / f"models--Systran--{entry['name']}"
+    model_path.mkdir(parents=True)
+    (model_path / "model.bin").write_bytes(b"already-here")
+
+    config = {
+        "model": {"name": entry["name"], "url": entry["url"], "md5": entry["md5"], "hf_repo": entry["hf_repo"]},
+        "model_path": str(model_path),
+    }
+
+    def _boom(*a, **k):
+        raise AssertionError("HuggingFace fallback should not be called")
+
+    monkeypatch.setattr(mm, "_download_via_huggingface", _boom)
+
+    progress_payloads: list[dict] = []
+    result = mm.ensure_model(config, progress_cb=progress_payloads.append)
+    assert Path(result) == model_path
+    assert any(p.get("phase") == "installed" for p in progress_payloads)

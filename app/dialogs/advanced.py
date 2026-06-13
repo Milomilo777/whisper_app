@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from core.config import save_config
 from core.model_manager import (
     DEFAULT_MODEL_SLUG,
+    catalog_entry_info,
     catalog_models,
     catalog_resolve_entry,
 )
@@ -344,7 +345,10 @@ class AdvancedDialog(tk.Toplevel):
             state="readonly",
             values=[lbl for _slug, lbl in labeled],
             width=56,
-        ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        ).grid(row=0, column=1, sticky="ew", padx=8, pady=4)
+        ttk.Button(
+            extras, text="?", width=3, command=self._show_model_info,
+        ).grid(row=0, column=2, sticky="w", padx=(0, 8), pady=4)
         ttk.Button(
             extras, text="Download now", command=self._download_selected_model,
         ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=4)
@@ -731,6 +735,49 @@ class AdvancedDialog(tk.Toplevel):
         var.trace_add("write", _refresh)
         ttk.Label(parent, textvariable=echo_var, width=8).grid(row=row, column=2, padx=8, pady=4)
         parent.columnconfigure(1, weight=1)
+
+    def _show_model_info(self) -> None:
+        """Show a small modal with the SELECTED model's description.
+
+        Reads the catalog entry for whichever slug the combobox currently
+        shows and displays its label, description, and approximate size.
+        """
+        slug = self._model_label_to_slug.get(
+            self._model_display.get() or "", DEFAULT_MODEL_SLUG
+        )
+        info = catalog_entry_info(self.app.app_config, slug)
+        if info is None:
+            return
+
+        top = tk.Toplevel(self)
+        top.title("Model info")
+        top.transient(self)
+        top.resizable(False, False)
+        frame = ttk.Frame(top, padding=14)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame, text=info["label"], font=("", 10, "bold"),
+            wraplength=420, justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        body = info["info"] or "No description available."
+        size_gb = info["approx_size_gb"]
+        if size_gb:
+            body = f"{body}\n\nApprox. download size: ~{size_gb:g} GB"
+
+        ttk.Label(
+            frame, text=body, wraplength=420, justify="left",
+        ).pack(anchor="w")
+
+        ttk.Button(frame, text="Close", command=top.destroy).pack(
+            anchor="e", pady=(14, 0)
+        )
+        top.update_idletasks()
+        try:
+            top.grab_set()
+        except tk.TclError:
+            pass
 
     def _model_downloaded(self, slug: str) -> bool:
         """True when the model's weights are already on disk under the

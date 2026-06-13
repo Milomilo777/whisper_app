@@ -7,12 +7,18 @@ from core import model_manager as mm
 
 
 def test_registry_contains_expected_models():
+    """The v1.3.9 registry expanded to the full Systran faster-whisper
+    family + the Large v3 Turbo variants (mobiuslabsgmbh + deepdml)."""
     assert set(mm.MODEL_REGISTRY.keys()) == {
-        "large-v3",
-        "large-v3-turbo",
-        "distil-large-v3.5",
-        "medium",
+        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
+        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
+        "distil-small.en", "distil-medium.en", "distil-large-v2",
+        "distil-large-v3", "distil-large-v3.5", "large-v3-turbo",
+        "deepdml-large-v3-turbo",
     }
+    # The four originally-bundled models stay in the registry.
+    assert {"large-v3", "large-v3-turbo", "distil-large-v3.5", "medium"} \
+        <= set(mm.MODEL_REGISTRY.keys())
 
 
 def test_default_slug_is_large_v3():
@@ -33,11 +39,13 @@ def test_list_models_returns_slug_label_pairs():
 def test_resolve_model_entry_returns_dict_shape():
     entry = mm.resolve_model_entry("large-v3")
     assert entry is not None
-    # Shape must match DEFAULT_CONFIG["model"] so callers can drop it in.
-    assert set(entry.keys()) == {"name", "url", "md5"}
+    # Shape is a superset of DEFAULT_CONFIG["model"] (adds hf_repo) so
+    # callers can drop it straight into config["model"].
+    assert set(entry.keys()) == {"name", "url", "md5", "hf_repo"}
     assert entry["name"] == "faster-whisper-large-v3"
     assert entry["url"].endswith(".zip")
     assert entry["md5"].endswith(".md5")
+    assert entry["hf_repo"] == "Systran/faster-whisper-large-v3"
 
 
 def test_resolve_model_entry_turbo_returns_distinct_urls():
@@ -58,11 +66,16 @@ def test_resolve_model_entry_unknown_slug_returns_none():
 
 @pytest.mark.parametrize("slug", list(mm.MODEL_REGISTRY.keys()))
 def test_every_registry_entry_has_required_fields(slug):
+    """v1.3.9: most entries have no smch.ir mirror (url/md5 == "") and
+    rely on hf_repo for download via faster-whisper's HF resolver. Every
+    entry must still resolve to *some* download source."""
     entry = mm.MODEL_REGISTRY[slug]
     assert "label" in entry and entry["label"]
     assert "name" in entry and entry["name"]
-    assert "url" in entry and entry["url"].startswith("https://")
-    assert "md5" in entry and entry["md5"].startswith("https://")
+    assert "url" in entry and (entry["url"] == "" or entry["url"].startswith("https://"))
+    assert "md5" in entry and (entry["md5"] == "" or entry["md5"].startswith("https://"))
+    assert "hf_repo" in entry and entry["hf_repo"]
+    assert entry["url"] or entry["hf_repo"]
     assert "approx_size_gb" in entry
     assert isinstance(entry["approx_size_gb"], (int, float))
 
@@ -116,6 +129,7 @@ def test_catalog_models_adds_online_model():
         "name": "faster-whisper-online-new",
         "url": "https://host/online-new.zip",
         "md5": "https://host/online-new.zip.md5",
+        "hf_repo": "",
     }
 
 
