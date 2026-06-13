@@ -274,6 +274,100 @@ def build_subtitle_command(
     return command
 
 
+# Extensions yt-dlp writes for "Writing video subtitles to:" that
+# core.convert.parse_to_segments can read (auto-subs are usually .vtt;
+# --write-subs can also produce .srt for some sites).
+_CONVERTIBLE_SUB_EXTS = (".vtt", ".srt")
+
+
+def write_subtitle_extra_formats(
+    sub_path: str, *, language: str = "", work_title: str = "",
+) -> list[str]:
+    """Convert a downloaded ``.vtt``/``.srt`` subtitle into extra formats.
+
+    Writes, alongside *sub_path*:
+
+      * an oTranscribe ``.otr`` (via :mod:`core.integrations.otranscribe`),
+      * an Express Scribe ``.txt`` (via the ``express_scribe`` writer), and
+      * an SMTV transcription ``.docx`` (via ``smtv_docx_writer``, when
+        python-docx is available).
+
+    Returns the list of extra paths actually written. Never raises: each
+    format is best-effort and a failure (missing optional dependency,
+    unparseable subtitle, disk error) is swallowed so the caller's
+    subtitle-download flow is unaffected. Returns ``[]`` for an
+    unparseable / unsupported *sub_path* (e.g. not ``.vtt``/``.srt``, or no
+    cues).
+    """
+    if os.path.splitext(sub_path)[1].lower() not in _CONVERTIBLE_SUB_EXTS:
+        return []
+
+    from core import convert as _convert
+    from core.integrations import otranscribe as _otr
+
+    try:
+        segments = _convert.parse_to_segments(sub_path)
+    except _convert.ConvertError:
+        return []
+    if not segments:
+        return []
+
+    written: list[str] = []
+    base = os.path.splitext(sub_path)[0]
+
+    # Express Scribe .txt
+    try:
+        out = _convert.convert_file(sub_path, "express_scribe", f"{base}.txt")
+        written.append(out)
+    except (OSError, _convert.ConvertError) as e:
+        logger.warning("Express Scribe export for %s failed: %s", sub_path, e)
+
+    # oTranscribe .otr — otr_to_srt/whisper_json_to_otr need a file path, so
+    # round-trip the parsed segments through a temp JSON via the existing
+    # JSON writer rather than duplicating the .otr serialisation here.
+    try:
+        import tempfile
+
+        from core.writers import json_writer as _json_writer
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", encoding="utf-8", delete=False
+        ) as tmp:
+            tmp.write(_json_writer.write(segments, sub_path))
+            tmp_path = tmp.name
+        try:
+            otr_text = _otr.whisper_json_to_otr(
+                tmp_path, media_filename=os.path.basename(sub_path)
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        otr_path = f"{base}.otr"
+        with open(otr_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(otr_text)
+        written.append(otr_path)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        logger.warning("oTranscribe export for %s failed: %s", sub_path, e)
+
+    # SMTV transcription .docx (needs python-docx; skip cleanly if absent).
+    try:
+        from core.writers import smtv_docx_writer as _smtv_docx
+
+        payload = _smtv_docx.write_bytes(
+            segments, sub_path, language=language, work_title=work_title,
+        )
+        docx_path = f"{base}.smtv.docx"
+        with open(docx_path, "wb") as f:
+            f.write(payload)
+        written.append(docx_path)
+    except (RuntimeError, OSError) as e:
+        logger.info("SMTV docx export for %s skipped: %s", sub_path, e)
+
+    return written
+
+
 def build_download_command(
     task: "VideoDownloadTask",
     *,
@@ -1171,6 +1265,25 @@ class DownloadService:
                 )
             )
             app.download_events.put(("log", task, f"--- Subtitle phase: wrote {len(wrote_files)} file(s) ---"))
+            # Also offer the downloaded auto-subtitle in SMTV / oTranscribe /
+            # Express Scribe formats, written alongside the .vtt/.srt. Each
+            # format is best-effort (write_subtitle_extra_formats never
+            # raises); failures are logged but don't affect the subtitle
+            # phase's own success status.
+            for sub_file in wrote_files:
+                try:
+                    extras = write_subtitle_extra_formats(
+                        sub_file,
+                        language=sub_lang,
+                        work_title=os.path.splitext(os.path.basename(sub_file))[0],
+                    )
+                except Exception as e:  # noqa: BLE001
+                    app.download_events.put(
+                        ("log", task, f"Extra subtitle formats for {sub_file} failed: {e}")
+                    )
+                    continue
+                for extra in extras:
+                    app.download_events.put(("log", task, f"Also wrote: {extra}"))
         elif no_subs_warning:
             app.download_events.put(("subtitle_status", task, "no captions available"))
             app.download_events.put(("log", task, "--- Subtitle phase: no captions available for the requested language ---"))
