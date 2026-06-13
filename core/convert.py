@@ -14,14 +14,23 @@ PARSE (input) formats, auto-detected by extension then content:
     (start/end in MILLISECONDS), tolerant of a header row.
   * ``.otr``  — oTranscribe (imported via
     :mod:`core.integrations.otranscribe`).
+  * ``.eaf``  — ELAN Annotation Format (XML): ``TIME_ORDER``/``TIME_SLOT``s
+    resolved against each tier's ``ALIGNABLE_ANNOTATION``s.
+  * ``.inqscr`` / InqScribe-style ``.txt`` — inline ``[hh:mm:ss.ff]``
+    (or ``[hh:mm:ss]``) timestamps; each timestamp starts a new segment and
+    the next timestamp's start becomes the previous segment's end.
 
-TXT is OUTPUT-ONLY: it carries no timestamps, so it cannot be parsed back into
-segments (``parse_to_segments`` raises ``ConvertError`` for ``.txt``).
+Plain TXT (without inline timestamps) is OUTPUT-ONLY: it carries no
+timestamps, so it cannot be parsed back into segments (``parse_to_segments``
+raises ``ConvertError`` for a ``.txt`` with no recognisable cues).
 
 EMIT (output) formats: any text writer in ``core.writers.WRITERS``
-(srt / vtt / tsv / txt / json / lrc / md). Binary writers (docx / pdf /
-smtv_docx) are intentionally NOT offered here — they need extra context
-(language / title) and are produced by the transcription pipeline.
+(srt / vtt / tsv / txt / json / lrc / md / elan / inqscribe /
+express_scribe). Binary writers (docx / pdf / smtv_docx) are intentionally
+NOT offered here — they need extra context (language / title) and are
+produced by the transcription pipeline. ``express_scribe`` is EXPORT-ONLY
+(whole-second ``[hh:mm:ss]`` cues are too lossy to round-trip) and is
+therefore NOT in ``PARSE_FORMATS``.
 
 Stdlib only; Tk-free. The two public seams are pure and testable:
 
@@ -35,6 +44,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
 from . import writers as _writers
 from .integrations import otranscribe as _otr
@@ -52,11 +62,28 @@ class ConvertError(ValueError):
     """Raised when an input cannot be parsed or a target format is unknown."""
 
 
-# Formats we can PARSE into segments (input side). TXT is deliberately absent.
-PARSE_FORMATS: tuple[str, ...] = ("json", "srt", "vtt", "tsv", "otr")
+# Formats we can PARSE into segments (input side). Plain TXT is deliberately
+# absent (no timestamps); ``express_scribe`` is also absent (export-only —
+# whole-second cues are too lossy to round-trip). "elan" / "inqscribe" match
+# the OUTPUT_FORMATS writer-registry keys for the same formats, even though
+# their on-disk extensions (.eaf / .inqscr) differ from the registry key.
+PARSE_FORMATS: tuple[str, ...] = ("json", "srt", "vtt", "tsv", "otr", "elan", "inqscribe")
 
 # Formats we can EMIT — the text writers in the registry (output side).
 OUTPUT_FORMATS: tuple[str, ...] = tuple(sorted(_writers.WRITERS.keys()))
+
+# Registry-key -> on-disk extension overrides for the default output path
+# (mirrors core.transcriber._FMT_EXTENSIONS). Most writer names already ARE
+# the extension a downstream tool expects; a couple need an override:
+#   * elan          -> eaf    (the registry key isn't the file extension)
+#   * inqscribe     -> inqscr (InqScribe's own extension; avoids colliding
+#                               with plain .txt, which has no timestamps)
+#   * express_scribe -> txt   (Express Scribe transcripts are plain .txt)
+_EXT_OVERRIDES: dict[str, str] = {
+    "elan": "eaf",
+    "inqscribe": "inqscr",
+    "express_scribe": "txt",
+}
 
 
 # --- timestamp parsing ------------------------------------------------------
@@ -199,23 +226,129 @@ def _parse_otr(path: str) -> list[dict]:
     return _parse_cue_format(srt_text, path)
 
 
+def _parse_eaf(text: str, path: str) -> list[dict]:
+    """Parse an ELAN ``.eaf`` (XML): TIME_ORDER slots + ALIGNABLE_ANNOTATIONs.
+
+    Reads every ``TIME_SLOT`` in ``TIME_ORDER`` into a ``{id: seconds}`` map,
+    then walks every ``TIER`` / ``ANNOTATION`` / ``ALIGNABLE_ANNOTATION``,
+    resolving ``TIME_SLOT_REF1``/``REF2`` against that map. An annotation
+    whose referenced slot is missing (malformed file) or whose
+    ``ANNOTATION_VALUE`` is empty is skipped rather than aborting the whole
+    parse. ``REF_ANNOTATION`` (un-aligned, tier-linked) annotations carry no
+    direct time slots and are skipped too — only ``ALIGNABLE_ANNOTATION``
+    is time-aligned in EAF.
+    """
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        raise ConvertError(f"{path} is not valid XML: {e}") from e
+
+    slots: dict[str, float] = {}
+    for slot in root.iter("TIME_SLOT"):
+        slot_id = slot.get("TIME_SLOT_ID")
+        value = slot.get("TIME_VALUE")
+        if not slot_id or value is None:
+            continue
+        try:
+            slots[slot_id] = float(value) / 1000.0
+        except (TypeError, ValueError):
+            continue
+
+    segments: list[dict] = []
+    for annotation in root.iter("ALIGNABLE_ANNOTATION"):
+        ref1 = annotation.get("TIME_SLOT_REF1")
+        ref2 = annotation.get("TIME_SLOT_REF2")
+        if ref1 not in slots or ref2 not in slots:
+            continue
+        start = slots[ref1]
+        end = slots[ref2]
+        value_el = annotation.find("ANNOTATION_VALUE")
+        body = (value_el.text or "").strip() if value_el is not None else ""
+        if not body:
+            continue
+        segments.append({"start": start, "end": end, "text": body})
+    return segments
+
+
+# [hh:]mm:ss[.ff] inline timestamp, e.g. "[00:01:02.50]" or "[1:02]".
+_INQSCRIBE_TS = re.compile(
+    r"\[(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\]"
+)
+
+
+def _parse_inqscribe(text: str, path: str) -> list[dict]:
+    """Parse InqScribe inline ``[hh:mm:ss.ff]`` (or ``[hh:mm:ss]``) timestamps.
+
+    Each timestamp starts a new segment; its text runs to the next
+    timestamp (across line breaks). The last segment's end is its own
+    start plus a small default duration (no following cue to bound it).
+    Text with no recognisable timestamp at all raises :class:`ConvertError`
+    (matches the plain-TXT "output only" contract for un-timestamped text).
+    """
+    matches = list(_INQSCRIBE_TS.finditer(text))
+    if not matches:
+        raise ConvertError(
+            f"{path}: no [hh:mm:ss] timestamps found; cannot import as InqScribe."
+        )
+
+    segments: list[dict] = []
+    for i, m in enumerate(matches):
+        h, mm, ss, frac = m.groups()
+        # Right-pad the fractional part to centiseconds (InqScribe's own
+        # unit); ".5" -> 50cs, ".50" -> 50cs, ".500" -> 50cs (truncate to 2).
+        cs = int((frac + "00")[:2]) if frac else 0
+        start = (int(h) if h else 0) * 3600 + int(mm) * 60 + int(ss) + cs / 100.0
+        body_start = m.end()
+        body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = " ".join(text[body_start:body_end].split())
+        if not body:
+            continue
+        segments.append({"start": start, "text": body})
+
+    # Resolve end times: next segment's start, last gets +5s (matches the
+    # otr_to_srt convention for an open-ended final cue).
+    for i, seg in enumerate(segments):
+        if i + 1 < len(segments):
+            seg["end"] = segments[i + 1]["start"]
+        else:
+            seg["end"] = seg["start"] + 5.0
+    return segments
+
+
 # --- public API -------------------------------------------------------------
+
+_EXT_TO_PARSE_FORMAT: dict[str, str] = {
+    "eaf": "elan",
+    "inqscr": "inqscribe",
+}
+
 
 def _detect_format(path: str, text: str | None) -> str:
     """Return one of ``PARSE_FORMATS`` for *path*, by extension then content.
 
-    The extension is authoritative when recognised. ``.txt`` raises (output
-    only). An unknown / missing extension falls back to content sniffing:
-    a leading ``[``/``{`` => json, a ``WEBVTT`` header => vtt, a ``-->`` line
-    => srt, a tab-delimited numeric table => tsv.
+    The extension is authoritative when recognised: ``.eaf`` => elan,
+    ``.inqscr`` => inqscribe, etc (via ``_EXT_TO_PARSE_FORMAT`` for the
+    extensions that differ from their ``PARSE_FORMATS`` name). ``.txt`` is
+    ambiguous between "no timestamps" (output-only) and InqScribe's inline
+    ``[hh:mm:ss.ff]`` style, so it is content-sniffed for an InqScribe
+    timestamp before raising. An unknown / missing extension falls back to
+    content sniffing: a leading ``[``/``{`` => json, a ``WEBVTT`` header =>
+    vtt, a ``-->`` line => srt, a tab-delimited numeric table => tsv, an
+    ``<ANNOTATION_DOCUMENT`` root => elan, an inline ``[hh:mm:ss]`` cue =>
+    inqscribe.
     """
     ext = Path(path).suffix.lower().lstrip(".")
     if ext == "txt":
+        sniff_txt = (text or "").lstrip()
+        if _INQSCRIBE_TS.search(sniff_txt):
+            return "inqscribe"
         raise ConvertError(
             "TXT has no timestamps and cannot be converted FROM; it is an "
-            "output-only format. Pick an .srt / .vtt / .tsv / .json / .otr "
-            "source instead."
+            "output-only format. Pick an .srt / .vtt / .tsv / .json / .otr / "
+            ".eaf / .inqscr source instead."
         )
+    if ext in _EXT_TO_PARSE_FORMAT:
+        return _EXT_TO_PARSE_FORMAT[ext]
     if ext in PARSE_FORMATS:
         return ext
 
@@ -224,6 +357,8 @@ def _detect_format(path: str, text: str | None) -> str:
         raise ConvertError(f"{path}: empty or unreadable input.")
     if sniff[0] in "[{":
         return "json"
+    if sniff.startswith("<?xml") or sniff.lstrip("<").startswith("ANNOTATION_DOCUMENT"):
+        return "elan"
     head = sniff[:64].upper()
     if head.startswith("WEBVTT"):
         return "vtt"
@@ -231,6 +366,8 @@ def _detect_format(path: str, text: str | None) -> str:
         return "srt"
     if "\t" in sniff.split("\n", 1)[0]:
         return "tsv"
+    if _INQSCRIBE_TS.search(sniff):
+        return "inqscribe"
     raise ConvertError(
         f"{path}: could not auto-detect the transcript format. Supported "
         f"inputs: {', '.join(PARSE_FORMATS)}."
@@ -270,13 +407,19 @@ def parse_to_segments(path: str) -> list[dict]:
         return _parse_cue_format(text, path)
     if fmt == "tsv":
         return _parse_tsv(text, path)
+    if fmt == "elan":
+        return _parse_eaf(text, path)
+    if fmt == "inqscribe":
+        return _parse_inqscribe(text, path)
     # _detect_format only returns members of PARSE_FORMATS; otr handled above.
     raise ConvertError(f"{path}: unsupported input format {fmt!r}.")
 
 
 def _default_out_path(in_path: str, out_format: str) -> str:
     base = os.path.splitext(in_path)[0]
-    return f"{base}.{out_format.lower()}"
+    fmt = out_format.lower()
+    ext = _EXT_OVERRIDES.get(fmt, fmt)
+    return f"{base}.{ext}"
 
 
 def _same_file(a: str, b: str) -> bool:

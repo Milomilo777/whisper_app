@@ -25,6 +25,9 @@ from typing import Callable
 
 from . import (
     docx_writer,
+    elan,
+    express_scribe,
+    inqscribe,
     json_writer,
     lrc,
     md,
@@ -47,6 +50,9 @@ WRITERS: dict[str, WriterFn] = {
     "json": json_writer.write,
     "lrc": lrc.write,
     "md": md.write,
+    "elan": elan.write,
+    "inqscribe": inqscribe.write,
+    "express_scribe": express_scribe.write,
 }
 
 BINARY_WRITERS: dict[str, BinaryWriterFn] = {

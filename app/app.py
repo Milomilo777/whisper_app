@@ -278,6 +278,9 @@ def build_about_sections() -> list[AboutSection]:
             ("Round-trip", [
                 "oTranscribe import (.otr → .srt)",
                 "oTranscribe export (.srt → .otr) for manual editing",
+                "ELAN import/export (.eaf)",
+                "InqScribe import/export (.inqscr / [hh:mm:ss.ff])",
+                "Express Scribe export (.txt / [hh:mm:ss]) — export only",
             ]),
             ("Templating", [
                 "output_filename_template config key with tokens "
@@ -1237,12 +1240,14 @@ class App(tk.Tk):
             parent=self,
             title="Convert transcript — pick the source file",
             filetypes=[
-                ("Transcripts", "*.json *.srt *.vtt *.tsv *.otr"),
+                ("Transcripts", "*.json *.srt *.vtt *.tsv *.otr *.eaf *.inqscr *.txt"),
                 ("SubRip", "*.srt"),
                 ("WebVTT", "*.vtt"),
                 ("TSV", "*.tsv"),
                 ("Whisper JSON", "*.json"),
                 ("oTranscribe", "*.otr"),
+                ("ELAN", "*.eaf"),
+                ("InqScribe", "*.inqscr *.txt"),
                 ("All files", "*.*"),
             ],
         )
@@ -1307,7 +1312,7 @@ class App(tk.Tk):
         fmt_var = tk.StringVar(value=default)
         ttk.Combobox(
             body, textvariable=fmt_var, state="readonly",
-            values=choices, width=12,
+            values=choices, width=16,
         ).pack(anchor="w", pady=(4, 12))
 
         def _ok() -> None:
