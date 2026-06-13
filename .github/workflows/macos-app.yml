@@ -20,14 +20,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15        # Apple Silicon
+          - runner: macos-15  # Apple Silicon
             arch: arm64
-          - runner: macos-15-intel  # Intel — so the .app runs on Intel Macs too
+          # macos-13 (Ventura, Intel) instead of macos-15-intel: an older SDK
+          # with broader back-compat, so the x86_64 build is more likely to
+          # run on older/virtualised Intel Macs (e.g. Monterey 12) — see
+          # MACOSX_DEPLOYMENT_TARGET below for the matching deployment target.
+          - runner: macos-13  # Intel (Ventura) — so the .app runs on Monterey too
             arch: x86_64
     env:
       # secrets.* is not allowed in a step-level `if`, so surface it as a
       # job env var (this IS allowed) and gate the key-write step on env.
       GCLOUD_STT_KEY: ${{ secrets.GCLOUD_STT_KEY }}
+      # Target Monterey (12.0) as the minimum runtime so wheels built here
+      # (numpy, ctranslate2, etc.) and PyInstaller's bundled extensions don't
+      # require a newer macOS than the user's machine provides. Applies to
+      # both matrix legs; arm64 Macs all run far newer macOS anyway, so this
+      # is a no-op there but harmless.
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -56,6 +66,17 @@ jobs:
           grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
           pip install -r requirements.slim.txt
           pip install pyinstaller
+
+      # requirements.txt has no numpy pin (faster-whisper/ctranslate2 pull it
+      # in transitively, currently numpy 2.x). numpy 2.x C-extensions built on
+      # macos-15 (newer SDK + aggressive SIMD baseline) have been seen failing
+      # to import on older/virtualised Intel Macs (e.g. Monterey 12, no AVX).
+      # Force a conservative numpy 1.x AFTER the slim install so it overrides
+      # the transitive 2.x resolution. ctranslate2 4.x and faster-whisper 1.x
+      # both declare numpy>=1.21,<3, so 1.26.4 (last 1.x, Python 3.12-capable)
+      # is compatible and closest to the known-good 1.24.3 from source/venv.
+      - name: Pin numpy to a Monterey/VM-safe 1.x
+        run: pip install "numpy==1.26.4"
 
       - name: Provide macOS ffmpeg/ffprobe in bin/
         run: |
@@ -87,6 +108,42 @@ jobs:
           wait $PID; RC=$?
           kill -9 $WD 2>/dev/null
           echo "transcribe --help exit code: $RC (0 = the frozen app booted + imported on macOS)"
+
+      # NON-continue-on-error: the step above is informational only (a bundle
+      # can be malformed in other ways without us wanting to fail the whole
+      # matrix leg), but a numpy import failure is exactly the bug this build
+      # exists to prevent — it must fail the job loudly here, not silently
+      # ship a broken .dmg. `transcribe --help` runs gui.py's CLI path, which
+      # imports core.transcriber -> core.backends.faster_whisper_be ->
+      # faster_whisper -> ctranslate2 -> numpy, so a nonzero exit here means
+      # that chain (including numpy's C-extensions) failed to import in the
+      # frozen bundle on THIS runner. As a second, independent signal, also
+      # confirm numpy's compiled _multiarray_umath extension was actually
+      # collected into the bundle (catches "PyInstaller silently dropped the
+      # .so" even if the boot smoke above happens to still pass).
+      - name: "Method 1 - numpy/faster-whisper import MUST succeed in the frozen .app"
+        run: |
+          set -e
+          APP="dist/Whisper Project.app"
+          BIN="$APP/Contents/MacOS/Whisper Project"
+          echo "--- bundled numpy C-extension check ---"
+          if find "$APP/Contents/MacOS" -iname '_multiarray_umath*' | grep -q .; then
+            echo "OK numpy _multiarray_umath extension is bundled:"
+            find "$APP/Contents/MacOS" -iname '_multiarray_umath*'
+          else
+            echo "ERROR: numpy's _multiarray_umath C-extension was not found in the bundle." >&2
+            exit 1
+          fi
+          echo "--- boot smoke (hard requirement): 'transcribe --help' under a 60s timeout ---"
+          "$BIN" transcribe --help & PID=$!
+          ( sleep 60 && kill -9 $PID 2>/dev/null ) & WD=$!
+          wait $PID; RC=$?
+          kill -9 $WD 2>/dev/null
+          echo "transcribe --help exit code: $RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "ERROR: the frozen app failed to boot/import (numpy/faster-whisper chain)." >&2
+            exit 1
+          fi
 
       - name: "Method 1 - wrap into .dmg (create-dmg) + arch-suffix the name"
         continue-on-error: true

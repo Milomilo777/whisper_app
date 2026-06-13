@@ -108,6 +108,23 @@ for _pkg in ('grpc', 'google.cloud.speech_v2', 'google.cloud.storage',
     except Exception:
         pass
 
+# numpy + its C-extension stack (ctranslate2, scipy, av, onnxruntime) ship
+# native .so/.dylib files that PyInstaller's static analysis can miss,
+# especially their dependent dylibs (e.g. numpy's bundled OpenBLAS, scipy's
+# .libs). A macOS build that's missing these can launch (the GUI imports lazily)
+# but fail later with "Importing the numpy C-extensions failed" on the user's
+# machine. collect_all gathers datas + binaries + every submodule for each,
+# same pattern as the google/grpc block above.
+_npstack_datas, _npstack_binaries, _npstack_hidden = [], [], []
+for _pkg in ('numpy', 'ctranslate2', 'scipy', 'av', 'onnxruntime'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _npstack_datas += _d
+        _npstack_binaries += _b
+        _npstack_hidden += _h
+    except Exception:
+        pass
+
 a = Analysis(
     [os.path.join(_REPO_ROOT, 'gui.py')],
     pathex=[_REPO_ROOT],
@@ -115,6 +132,7 @@ a = Analysis(
         *whisper_cpp_binaries,
         *alignment_binaries,
         *_gcloud_binaries,
+        *_npstack_binaries,
     ],
     datas=[
         (os.path.join(_REPO_ROOT, 'bin'), 'bin'),
@@ -132,11 +150,13 @@ a = Analysis(
         *alignment_datas,
         *creds_datas,
         *_gcloud_datas,
+        *_npstack_datas,
     ],
     hiddenimports=[
         *whisper_cpp_hidden,
         *alignment_hidden,
         *_gcloud_hidden,
+        *_npstack_hidden,
         'google.cloud.speech_v2',
         'google.cloud.storage',
         'google.oauth2.service_account',
