@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
         "name": "faster-whisper-large-v3",
         "url": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip",
         "md5": "https://smch.ir/models/models--Systran--faster-whisper-large-v3.zip.md5",
+        "hf_repo": "Systran/faster-whisper-large-v3",
     },
     "model_path": "",
     "device": "auto",
@@ -286,7 +287,9 @@ DEFAULT_CONFIG = {
     "config_url": "https://smch.ir/whisper/app_config.json",
     # Catalog of selectable Whisper models, in the same shape as
     # core.model_manager.MODEL_REGISTRY (slug → {label, name, url, md5,
-    # approx_size_gb}). Empty by default: the built-in MODEL_REGISTRY is the
+    # hf_repo, approx_size_gb, info}). ``url``/``md5`` may be "" for a model
+    # with no smch.ir mirror — ``ensure_model`` then downloads straight from
+    # ``hf_repo``. Empty by default: the built-in MODEL_REGISTRY is the
     # baseline. The ONLINE config can ADD/OVERRIDE entries here so new models
     # ship without an app update; a LOCAL override file can pin its own.
     "model_catalog": {},
