@@ -127,9 +127,12 @@ jobs:
           APP="dist/Whisper Project.app"
           BIN="$APP/Contents/MacOS/Whisper Project"
           echo "--- bundled numpy C-extension check ---"
-          if find "$APP/Contents/MacOS" -iname '_multiarray_umath*' | grep -q .; then
+          # Search the WHOLE bundle: PyInstaller 6.x on macOS lays compiled
+          # extensions under Contents/Frameworks (or Resources), NOT directly
+          # in Contents/MacOS — checking only MacOS/ was a false-negative.
+          if find "$APP" -iname '_multiarray_umath*' | grep -q .; then
             echo "OK numpy _multiarray_umath extension is bundled:"
-            find "$APP/Contents/MacOS" -iname '_multiarray_umath*'
+            find "$APP" -iname '_multiarray_umath*'
           else
             echo "ERROR: numpy's _multiarray_umath C-extension was not found in the bundle." >&2
             exit 1
