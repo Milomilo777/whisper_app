@@ -1,5 +1,13 @@
 # Configuration Reference
 
+`configuration.json` at the repo root is the **master copy of the online
+app config** — the maintainer uploads it to `config_url`
+(`https://smch.ir/whisper/app_config.json`). It contains only the
+`ONLINE_ALLOWED_KEYS` keys (`model_catalog`, `stats_url`, `latest_version`,
+`ffplay_downloads`) and is fetched/merged as described below. It is NOT
+read by the app directly from the repo — it must be uploaded to `config_url`
+for the online layer to pick it up.
+
 `config.json` lives at `%LOCALAPPDATA%\WhisperProject\config.json` on Windows (`platformdirs.user_config_dir("WhisperProject")` on every platform). On first launch, a legacy `config.json` next to `gui.py` is copied to the new location and the original renamed to `.migrated.bak`. Subsequent launches read only from the platformdirs path.
 
 The file is read once at startup and written when the user changes a persisted setting (download folder, subtitle preferences, theme, etc.). Manual edits take effect on next launch.
@@ -21,7 +29,7 @@ The merge itself is pure and testable: `core.config.merge_config_sources(hardcod
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `config_url` | string | `https://smch.ir/whisper/app_config.json` (placeholder — owner sets the real URL) | URL of the online app-level config JSON. Fetched best-effort on startup; cached for offline fallback. Empty disables the online layer. A local `config.json` may override this (e.g. a staging URL). |
-| `model_catalog` | object | `{}` | Online/local-supplied catalog of selectable models, same shape as `core.model_manager.MODEL_REGISTRY` (`slug → {label, name, url, md5, approx_size_gb}`). Overlaid on the built-in catalog so new models can ship without an app update. **Allowlisted** for the online layer. |
+| `model_catalog` | object | `{}` | Online/local-supplied catalog of selectable models, same shape as `core.model_manager.MODEL_REGISTRY` (`slug → {label, name, url, md5, hf_repo, approx_size_gb, info}`). `url`/`md5` may be `""` for a model with no smch.ir mirror — `ensure_model` then downloads straight from `hf_repo`. Overlaid on the built-in catalog so new models can ship without an app update. **Allowlisted** for the online layer. |
 | `stats_url` | string | `""` | Usage-stats POST endpoint. The app POSTs per-transcription usage here (file name, model, language, audio duration, AI time, word count, status) **only when `telemetry_opt_in` is true** (default OFF) — see **Usage stats (P4-4)** below. Empty = no POST. **Allowlisted** for the online layer so it can be set/changed remotely. |
 | `latest_version` | string | `""` | Newest published version string (informational; complements the GitHub update check). **Allowlisted** for the online layer. |
 | `ffplay_downloads` | object | `{"windows": "<BtbN win64-gpl .zip>", "macos": "<evermeet ffplay .zip>", "linux": ""}` | Platform → ffplay download URL map for the Video-Tiling ffplay binary (not bundled). Each value is a DIRECT `ffplay[.exe]` URL **or** a `.zip` of a full ffmpeg build that contains it (the downloader extracts just ffplay; `.7z`/`.tar.*` are NOT supported). See **ffplay auto-download (P4-5)** below. **OWNER ACTION: verify/override these URLs via the online config** — third-party static-build URLs and their archive layouts rot. **Allowlisted** for the online layer. |
@@ -64,20 +72,33 @@ The merge itself is pure and testable: `core.config.merge_config_sources(hardcod
 
 ### Models (config-driven catalog, P4-2)
 
-The selectable model list shown in **Advanced > Whisper model** comes from the **merged catalog**: the built-in `core.model_manager.MODEL_REGISTRY` overlaid with the `model_catalog` key from the merged config (so the online config can add or re-point models without an app update). Read it via `core.model_manager.catalog_models(config)` and `catalog_resolve_entry(config, slug)`.
+The selectable model list shown in **Advanced > Whisper model** comes from the **merged catalog**: the built-in `core.model_manager.MODEL_REGISTRY` overlaid with the `model_catalog` key from the merged config (so the online config can add or re-point models without an app update). Read it via `core.model_manager.catalog_models(config)`, `catalog_resolve_entry(config, slug)`, and `catalog_entry_info(config, slug)` (label/description/size for the "?" info button).
 
-`large-v3` is the **default** (best accuracy, slower). Built-in entries:
+`large-v3` is the **default** (best accuracy, slower). Built-in entries — the full Systran `faster-whisper` family plus the Large v3 Turbo variants:
 
-| Slug | `model.name` | Notes |
-|---|---|---|
-| `large-v3` | `faster-whisper-large-v3` | **Default.** Best accuracy, ~3 GB. |
-| `large-v3-turbo` | `faster-whisper-large-v3-turbo` | ~5× faster, similar accuracy, ~1.6 GB. |
-| `distil-large-v3.5` | `faster-distil-whisper-large-v3.5` | Fastest English-only, ~1.5 GB. |
-| `medium` | `faster-whisper-medium` | Faster, lower accuracy, ~1.5 GB. **Owner action: confirm/upload the `models--Systran--faster-whisper-medium.zip` (+ `.md5`) artifact on `smch.ir`** (or point the online `model_catalog` at the real location) before this entry can download. |
+| Slug | `model.name` | HF repo | Notes |
+|---|---|---|---|
+| `tiny.en` / `tiny` | `faster-whisper-tiny[.en]` | `Systran/faster-whisper-tiny[.en]` | Fastest, lowest accuracy, ~0.075 GB. |
+| `base.en` / `base` | `faster-whisper-base[.en]` | `Systran/faster-whisper-base[.en]` | Very fast, low accuracy, ~0.145 GB. |
+| `small.en` / `small` | `faster-whisper-small[.en]` | `Systran/faster-whisper-small[.en]` | Fast, moderate accuracy, ~0.5 GB. |
+| `medium.en` / `medium` | `faster-whisper-medium[.en]` | `Systran/faster-whisper-medium[.en]` | Slower, good accuracy, ~1.5 GB. `medium` (no `.en`) has an smch.ir mirror; `medium.en` downloads from `hf_repo`. |
+| `large-v1` / `large-v2` / `large-v3` | `faster-whisper-large-v1/v2/v3` | `Systran/faster-whisper-large-v1/v2/v3` | ~3 GB. `large-v3` is the **default** and has an smch.ir mirror; v1/v2 download from `hf_repo`. |
+| `distil-small.en` | `faster-distil-whisper-small.en` | `Systran/faster-distil-whisper-small.en` | Fast, English-only, ~0.4 GB. |
+| `distil-medium.en` | `faster-distil-whisper-medium.en` | `Systran/faster-distil-whisper-medium.en` | Fast, English-only, ~0.8 GB. |
+| `distil-large-v2` / `distil-large-v3` | `faster-distil-whisper-large-v2/v3` | `Systran/faster-distil-whisper-large-v2/v3` | Fast, English-only, ~1.5 GB. |
+| `distil-large-v3.5` | `faster-distil-whisper-large-v3.5` | `distil-whisper/distil-large-v3.5-ct2` | Fastest English-only, ~1.5 GB. Has an smch.ir mirror. |
+| `large-v3-turbo` | `faster-whisper-large-v3-turbo` | `mobiuslabsgmbh/faster-whisper-large-v3-turbo` | ~5× faster, similar accuracy, ~1.6 GB. Has an smch.ir mirror. |
+| `deepdml-large-v3-turbo` | `faster-whisper-large-v3-turbo-deepdml` | `deepdml/faster-whisper-large-v3-turbo-ct2` | Community CT2 conversion of Large v3 Turbo, multilingual, ~1.6 GB. |
 
-A bigger/denser model is slower — `large-v3` stays the default; the combo just lets the user pick. Switching the model triggers `ensure_model` for the new slug on the next load.
+Only `large-v3`, `large-v3-turbo`, `distil-large-v3.5`, and `medium` have an smch.ir mirror (`url`/`md5` non-empty). Every other entry has `url=""`/`md5=""` and `ensure_model` downloads it straight from `hf_repo` via `_download_via_huggingface` — the mirror attempt is skipped entirely for those.
 
-To add a model from the **online** config (no app update), put it under `model_catalog` in the hosted JSON:
+A bigger/denser model is slower — `large-v3` stays the default; the combo just lets the user pick. Switching the model triggers `ensure_model` for the new slug on the next load. The "?" button next to the picker shows the selected model's description and approximate size (`catalog_entry_info`).
+
+### HuggingFace fallback resolution (`hf_repo`)
+
+Every registry/catalog entry carries an explicit `hf_repo` (`Org/Repo`), which `_hf_model_ref` prefers over faster-whisper's own short-id map or a guess parsed from the mirror zip name. This makes the fallback deterministic and correctly disambiguates models that would otherwise collide on the same faster-whisper short id — e.g. `deepdml-large-v3-turbo` and `large-v3-turbo` both map to faster-whisper's `large-v3-turbo` short id, but live under different HF orgs (`deepdml/...` vs `mobiuslabsgmbh/...`); `hf_repo` picks the right one for each.
+
+To add a model from the **online** config (no app update), put it under `model_catalog` in the hosted JSON (`configuration.json` at the repo root is the master copy):
 
 ```json
 {
@@ -85,15 +106,17 @@ To add a model from the **online** config (no app update), put it under `model_c
     "my-new-model": {
       "label": "My New Model (~2 GB)",
       "name": "faster-whisper-my-new-model",
-      "url": "https://host/models--Systran--faster-whisper-my-new-model.zip",
-      "md5": "https://host/models--Systran--faster-whisper-my-new-model.zip.md5",
-      "approx_size_gb": 2.0
+      "hf_repo": "SomeOrg/faster-whisper-my-new-model",
+      "url": "",
+      "md5": "",
+      "approx_size_gb": 2.0,
+      "info": "~2 GB. One or two lines describing speed/accuracy/language coverage."
     }
   }
 }
 ```
 
-A malformed catalog entry (missing `name`/`url`/`md5`, or not a dict) is skipped so a bad online payload never breaks the picker — the built-ins always survive.
+A malformed catalog entry (missing/empty `name`, or with no `url` AND no `hf_repo`, or not a dict) is skipped so a bad online payload never breaks the picker — the built-ins always survive.
 
 ### Video Tiling
 
