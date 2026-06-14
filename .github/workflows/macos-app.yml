@@ -22,11 +22,12 @@ jobs:
         include:
           - runner: macos-15  # Apple Silicon
             arch: arm64
-          # macos-13 (Ventura, Intel) instead of macos-15-intel: an older SDK
-          # with broader back-compat, so the x86_64 build is more likely to
-          # run on older/virtualised Intel Macs (e.g. Monterey 12) — see
-          # MACOSX_DEPLOYMENT_TARGET below for the matching deployment target.
-          - runner: macos-13  # Intel (Ventura) — so the .app runs on Monterey too
+          # x86_64 on macos-15-intel (NOT macos-13): the macos-13 Intel queue
+          # for this account never schedules (jobs sit "queued" indefinitely).
+          # macos-15-intel is available and, with MACOSX_DEPLOYMENT_TARGET=12.0
+          # + the numpy 1.26.4 pin + full collect_all below, still produces a
+          # bundle that runs on older/virtualised Intel Macs (e.g. Monterey 12).
+          - runner: macos-15-intel  # Intel — runs on Monterey via deployment target
             arch: x86_64
     env:
       # secrets.* is not allowed in a step-level `if`, so surface it as a
