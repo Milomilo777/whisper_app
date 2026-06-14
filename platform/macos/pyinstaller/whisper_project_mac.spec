@@ -34,7 +34,7 @@ from PyInstaller.utils.hooks import (
 # Same Silero VAD packaging note as the Windows specs: faster_whisper loads
 # silero_vad_v6.onnx by file path at runtime, so PyInstaller's module
 # collection alone is not enough.
-faster_whisper_datas = collect_data_files('faster_whisper')
+_fw_datas, _fw_binaries, _fw_hidden = collect_all('faster_whisper')
 
 # pywhispercpp ships its native whisper.cpp extension as a TOP-LEVEL module
 # `_pywhispercpp` at site-packages root. collect_dynamic_libs returns [] for
@@ -129,6 +129,7 @@ a = Analysis(
     [os.path.join(_REPO_ROOT, 'gui.py')],
     pathex=[_REPO_ROOT],
     binaries=[
+        *_fw_binaries,
         *whisper_cpp_binaries,
         *alignment_binaries,
         *_gcloud_binaries,
@@ -145,7 +146,7 @@ a = Analysis(
         # exact table styling). Resolved at runtime via
         # core.paths.resource_base -> core/writers/templates/.
         (os.path.join(_REPO_ROOT, 'core', 'writers', 'templates'), 'core/writers/templates'),
-        *faster_whisper_datas,
+        *_fw_datas,
         *whisper_cpp_datas,
         *alignment_datas,
         *creds_datas,
@@ -153,6 +154,7 @@ a = Analysis(
         *_npstack_datas,
     ],
     hiddenimports=[
+        *_fw_hidden,
         *whisper_cpp_hidden,
         *alignment_hidden,
         *_gcloud_hidden,
