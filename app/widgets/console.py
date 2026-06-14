@@ -1,6 +1,7 @@
 """The black/lime Text widget at the bottom of the App (the log feed)."""
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 
 
@@ -58,3 +59,8 @@ def _attach_context_menu(txt: tk.Text) -> None:
         return "break"
 
     txt.bind("<Button-3>", _popup)
+    if sys.platform == "darwin":
+        # macOS Tk reports right-click as Button-2 (Button-3 is the
+        # middle/third button there, which mac mice/trackpads rarely
+        # generate). Bind both so the context menu opens either way.
+        txt.bind("<Button-2>", _popup)

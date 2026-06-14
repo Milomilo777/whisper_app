@@ -6,6 +6,7 @@ SponsorBlock category checkboxes, and the auto-transcribe-after-download flag.
 from __future__ import annotations
 
 import logging
+import sys
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
@@ -272,9 +273,14 @@ class AdvancedDialog(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
+        # macOS Tk reports event.delta as +/-1 per notch; Windows reports
+        # +/-120. Linux doesn't generate <MouseWheel> at all (Button-4/5
+        # below), so this divisor only needs to vary between win/mac.
+        _wheel_divisor = 1 if sys.platform == "darwin" else 120
+
         def _on_mousewheel(event):
             if canvas.winfo_exists():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                canvas.yview_scroll(int(-1 * (event.delta / _wheel_divisor)), "units")
 
         def _bind_mousewheel(_event):
             canvas.bind_all("<MouseWheel>", _on_mousewheel)
@@ -547,10 +553,16 @@ class AdvancedDialog(tk.Toplevel):
         # Tray + telemetry
         misc = ttk.LabelFrame(body, text="App behaviour")
         misc.pack(fill="x", pady=(0, 8))
-        ttk.Checkbutton(
+        tray_check = ttk.Checkbutton(
             misc, text="Minimise to system tray instead of exit",
             variable=self._minimise_to_tray,
-        ).pack(anchor="w", padx=8, pady=4)
+        )
+        tray_check.pack(anchor="w", padx=8, pady=4)
+        if sys.platform == "darwin":
+            # System tray is unsupported on macOS (TrayController bails
+            # out for darwin); disable the checkbox so it can't be
+            # enabled and silently do nothing.
+            tray_check.state(["disabled"])
         ttk.Checkbutton(
             misc, text="Send anonymous crash reports + launch counts (opt-in)",
             variable=self._telemetry_opt_in,

@@ -509,6 +509,10 @@ class TranscriptViewer(tk.Toplevel):
         # extensible later. Track which item was clicked so the menu
         # acts on the right row even when no row is selected.
         self.tree.bind("<Button-3>", self._on_segment_right_click)
+        if sys.platform == "darwin":
+            # macOS Tk generates Button-2 for a right-click (Button-3 is
+            # the rarely-used third button there).
+            self.tree.bind("<Button-2>", self._on_segment_right_click)
 
         right = ttk.Frame(body, padding=(8, 0, 0, 0))
         body.add(right, weight=2)

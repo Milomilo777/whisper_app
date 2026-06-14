@@ -23,6 +23,7 @@ modal UI surface during the wait.
 """
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import ttk
 
@@ -51,10 +52,13 @@ class ModelLoadingDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=18)
         body.grid(row=0, column=0, sticky="nsew")
 
+        # "Segoe UI" doesn't exist on macOS; fall back to the platform's
+        # default UI font there while keeping the Windows look unchanged.
+        _title_font = ("TkDefaultFont", 11, "bold") if sys.platform == "darwin" else ("Segoe UI", 11, "bold")
         ttk.Label(
             body,
             text="Loading the Whisper model — this takes a few seconds…",
-            font=("Segoe UI", 11, "bold"),
+            font=_title_font,
         ).grid(row=0, column=0, sticky="w")
 
         ttk.Label(

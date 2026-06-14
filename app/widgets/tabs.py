@@ -7,6 +7,7 @@ sibling components.
 from __future__ import annotations
 
 import os
+import sys
 import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
@@ -496,6 +497,10 @@ def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
     queue_device_badge.pack(side="left", padx=(12, 0))
     app.register_device_badge_label(queue_device_badge)
     app.tree.bind("<Button-3>", app.menu_row)
+    if sys.platform == "darwin":
+        # macOS Tk generates Button-2 for a right-click (Button-3 is
+        # the rarely-used third button there).
+        app.tree.bind("<Button-2>", app.menu_row)
     # Double-click on a finished row -> open the file's containing
     # folder. Discoverable shortcut for the right-click menu entry.
     app.tree.bind("<Double-Button-1>", app.queue_row_double_click)
@@ -742,6 +747,10 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     app.download_tree.grid(row=0, column=0, sticky="nsew")
     _dvsb.grid(row=0, column=1, sticky="ns")
     app.download_tree.bind("<Button-3>", app.download_menu_row)
+    if sys.platform == "darwin":
+        # See the Queue-tab tree binding above: macOS right-click is
+        # Button-2, not Button-3.
+        app.download_tree.bind("<Button-2>", app.download_menu_row)
     # See `app.row_map` above — annotation belongs on the class.
     app.download_row_map = {}
 

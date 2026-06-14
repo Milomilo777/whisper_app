@@ -4378,6 +4378,9 @@ class App(tk.Tk):
 
         for cls in ("TEntry", "Entry", "Text"):
             self.bind_class(cls, "<Button-3>", _popup, add="+")
+            if sys.platform == "darwin":
+                # macOS Tk reports right-click as Button-2, not Button-3.
+                self.bind_class(cls, "<Button-2>", _popup, add="+")
 
     def _install_icon(self) -> None:
         """Set the window-title-bar + taskbar icon from ``assets/whisper.ico``.

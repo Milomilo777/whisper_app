@@ -1,6 +1,7 @@
 """ModelDownloadDialog — modal Toplevel that drives ``ensure_model``."""
 from __future__ import annotations
 
+import sys
 import threading
 import time
 import tkinter as tk
@@ -65,7 +66,10 @@ class ModelDownloadDialog(tk.Toplevel):
         body = ttk.Frame(self, padding=18)
         body.grid(row=0, column=0, sticky="nsew")
 
-        ttk.Label(body, text="Downloading required model", font=("Segoe UI", 11, "bold")).grid(
+        # "Segoe UI" doesn't exist on macOS; fall back to the platform's
+        # default UI font there while keeping the Windows look unchanged.
+        _title_font = ("TkDefaultFont", 11, "bold") if sys.platform == "darwin" else ("Segoe UI", 11, "bold")
+        ttk.Label(body, text="Downloading required model", font=_title_font).grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
         ttk.Label(body, textvariable=self.status_var).grid(
