@@ -294,22 +294,23 @@ coll = COLLECT(
     upx_exclude=[],
     name='Whisper Project',
 )
-# macOS .app wrapper. Version is kept at 1.3.6 to match the Info.plist the
-# install.command writes for the source/venv path — do NOT bump it here; the
-# release version is governed by core.__version__ + the git tag, and the mac
-# path is still unbuilt/untested on real hardware.
+# macOS .app wrapper. Keep CFBundleVersion / CFBundleShortVersionString in
+# lock-step with core.__version__ (bump alongside it on every release) —
+# they were previously left at a stale 1.3.6 while core.__version__ moved
+# on. The install.command source/venv path writes its own Info.plist
+# separately and is tracked independently.
 app = BUNDLE(
     coll,
     name='Whisper Project.app',
     icon=_icon,
     bundle_identifier='com.translation-robot.whisperproject',
-    version='1.3.6',
+    version='1.3.9',
     info_plist={
         'CFBundleName': 'Whisper Project',
         'CFBundleDisplayName': 'Whisper Project',
         'CFBundleIdentifier': 'com.translation-robot.whisperproject',
-        'CFBundleVersion': '1.3.6',
-        'CFBundleShortVersionString': '1.3.6',
+        'CFBundleVersion': '1.3.9',
+        'CFBundleShortVersionString': '1.3.9',
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         # The app reads media files the user drops / picks; declaring a

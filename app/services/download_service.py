@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -582,6 +583,12 @@ class DownloadService:
     def maybe_update_yt_dlp(self, task: "VideoDownloadTask") -> None:
         cfg = self.app.app_config
         if not cfg.get("auto_update_yt_dlp", False):
+            return
+        # A frozen build's bundled yt-dlp lives inside the read-only app
+        # bundle/install dir; "yt-dlp --update" can't write there and would
+        # just fail silently every 24h (matches the core.tiling self-heal
+        # guard for the same reason).
+        if getattr(sys, "frozen", False):
             return
         last = cfg.get("last_yt_dlp_update_check") or ""
         if last:

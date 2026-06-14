@@ -1075,6 +1075,13 @@ class TilingController:
         """Update yt-dlp via ``-U`` with a pip fallback. Blocking; run on a
         background thread by the caller. Gated so it does the right thing in a
         frozen build (where ``-m pip`` would relaunch the app)."""
+        if getattr(sys, "frozen", False):
+            # The bundled yt-dlp lives inside the read-only app
+            # bundle/install dir — `-U` can't overwrite it (and the pip
+            # fallback below is already disabled for frozen builds), so
+            # don't even attempt it.
+            log("yt-dlp update needs a manual upgrade (frozen build).")
+            return
         path = bundled_binary("yt-dlp")
         if not (os.path.isfile(path) or shutil.which(path)):
             log("Update yt-dlp: not found on PATH.")

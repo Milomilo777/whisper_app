@@ -35,4 +35,28 @@ def bundled_binary(name: str) -> str:
     """Absolute path to a bundled binary; falls back to PATH lookup name."""
     exe = f"{name}.exe" if os.name == "nt" else name
     candidate = os.path.join(bin_dir(), exe)
-    return candidate if os.path.isfile(candidate) else name
+    if not os.path.isfile(candidate):
+        return name
+    if os.name != "nt":
+        _ensure_executable(candidate)
+    return candidate
+
+
+def _ensure_executable(path: str) -> None:
+    """Best-effort ``chmod +x`` for a bundled POSIX binary.
+
+    PyInstaller's ``datas`` copy (used to bundle ``bin/`` into the macOS
+    .app via ``whisper_project_mac.spec``) does not reliably preserve the
+    source files' executable bit through COLLECT/BUNDLE on every PyInstaller
+    version. A bundled ffmpeg/ffprobe/ffplay/yt-dlp that lost +x would make
+    every ``subprocess`` call against it fail with "Permission denied" —
+    so re-assert +x here, once per resolved path. Never raises: a read-only
+    bundle (the common case once installed) simply keeps whatever bit it
+    already has, and chmod failing there is harmless.
+    """
+    try:
+        st = os.stat(path)
+        if not (st.st_mode & 0o111):
+            os.chmod(path, st.st_mode | 0o111)
+    except OSError:
+        pass

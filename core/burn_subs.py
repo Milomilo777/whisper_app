@@ -20,6 +20,7 @@ import subprocess
 import tempfile
 from typing import Any
 
+from ._proc import new_session_kwargs
 from .paths import bundled_binary
 
 
@@ -75,8 +76,9 @@ def burn(
         cmd.append(out_path)
 
         kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        # CREATE_NO_WINDOW on Windows; start_new_session=True on POSIX so
+        # kill_process_tree can killpg this ffmpeg's OWN group if needed.
+        kwargs.update(new_session_kwargs())
 
         try:
             subprocess.run(cmd, check=True, timeout=timeout, **kwargs)
