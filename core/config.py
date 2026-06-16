@@ -294,13 +294,15 @@ DEFAULT_CONFIG = {
     # ship without an app update; a LOCAL override file can pin its own.
     "model_catalog": {},
     # App-level URLs/info that the ONLINE config is allowed to set. Defaulted
-    # here (empty/placeholder) so reads never KeyError. ``stats_url`` is the
-    # usage-stats POST endpoint; ``latest_version`` is the newest published
-    # version string; ``ffplay_downloads`` maps a platform key
-    # ("windows"/"macos"/...) to a download URL for the Video-Tiling ffplay
-    # binary (which is NOT bundled). All three are SAFE for the online layer
-    # to control.
-    "stats_url": "",
+    # here so reads never KeyError. ``stats_url`` is the usage-stats POST
+    # endpoint, defaulted to the project's smch.ir collector so opted-in
+    # stats work out of the box (still a no-op unless ``telemetry_opt_in``
+    # is on — see core.stats.post_stats_async); ``latest_version`` is the
+    # newest published version string; ``ffplay_downloads`` maps a platform
+    # key ("windows"/"macos"/...) to a download URL for the Video-Tiling
+    # ffplay binary (which is NOT bundled). All three are SAFE for the online
+    # layer to control.
+    "stats_url": "https://smch.ir/stats/transcription_stats.php",
     "latest_version": "",
     # ffplay (Video Tiling) is NOT bundled. When it's missing, the app can
     # auto-download it from the platform's URL here (see
