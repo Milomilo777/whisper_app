@@ -269,10 +269,15 @@ DEFAULT_CONFIG = {
     # other key:
     #   minimise_to_tray  — when True the window's X button hides to the system
     #     tray instead of exiting (app.py close handler + widgets.tray).
-    #   telemetry_opt_in  — when True an anonymous launch ping is sent
-    #     (app.observability); OFF means the telemetry module is inert.
+    #   telemetry_opt_in  — gates anonymous usage stats (core.stats POSTs a
+    #     per-transcription row to stats_url) plus the optional launch ping /
+    #     Sentry crash reports. ON by default so opted-in usage stats flow for
+    #     this distribution; a user can turn it off in the Advanced dialog. The
+    #     launch ping and Sentry stay inert unless their WHISPER_TELEMETRY_URL /
+    #     SENTRY_DSN env vars are ALSO set (a plain build sets neither), so this
+    #     default only activates the stats_url POST.
     "minimise_to_tray": False,
-    "telemetry_opt_in": False,
+    "telemetry_opt_in": True,
     # --- Three-level config: ONLINE layer (P4-1) -------------------------
     # URL of an app-level JSON config the maintainer hosts, fetched on
     # startup so APP-LEVEL settings (model catalog, stats endpoint, latest

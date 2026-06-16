@@ -354,9 +354,10 @@ def test_merge_sources_online_null_reverts_to_default():
 def test_tray_and_telemetry_keys_have_bool_defaults():
     # BUG H: minimise_to_tray + telemetry_opt_in are read at runtime (app.py,
     # tray.py, observability.py) and written by the Advanced dialog, so they
-    # must be declared in DEFAULT_CONFIG (both OFF) to get merge + coercion.
+    # must be declared in DEFAULT_CONFIG to get merge + coercion. telemetry is
+    # ON by default for this distribution (opted-in usage stats); tray is OFF.
     assert cfg.DEFAULT_CONFIG["minimise_to_tray"] is False
-    assert cfg.DEFAULT_CONFIG["telemetry_opt_in"] is False
+    assert cfg.DEFAULT_CONFIG["telemetry_opt_in"] is True
 
 
 def test_tray_and_telemetry_merged_into_old_config(isolated_dirs, monkeypatch):
@@ -366,7 +367,7 @@ def test_tray_and_telemetry_merged_into_old_config(isolated_dirs, monkeypatch):
     Path(cfg.config_path()).write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
     config = cfg.load_config()
     assert config["minimise_to_tray"] is False
-    assert config["telemetry_opt_in"] is False
+    assert config["telemetry_opt_in"] is True
 
 
 def test_tray_and_telemetry_wrong_type_coerced(isolated_dirs, monkeypatch):

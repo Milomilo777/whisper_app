@@ -564,7 +564,7 @@ class AdvancedDialog(tk.Toplevel):
             # enabled and silently do nothing.
             tray_check.state(["disabled"])
         ttk.Checkbutton(
-            misc, text="Send anonymous crash reports + launch counts (opt-in)",
+            misc, text="Send anonymous usage statistics (on by default — uncheck to opt out)",
             variable=self._telemetry_opt_in,
         ).pack(anchor="w", padx=8, pady=4)
 
