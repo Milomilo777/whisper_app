@@ -265,7 +265,7 @@ DEFAULT_CONFIG = {
     # ("windows"/"macos"/...) to a download URL for the Video-Tiling ffplay
     # binary (which is NOT bundled). All three are SAFE for the online layer
     # to control.
-    "stats_url": "",
+    "stats_url": "https://smch.ir/stats/transcription_stats.php",
     "latest_version": "",
     # ffplay (Video Tiling) is NOT bundled. When it's missing, the app can
     # auto-download it from the platform's URL here (see
