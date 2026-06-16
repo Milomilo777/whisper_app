@@ -45,14 +45,17 @@ def transcribed_clip(tmp_path_factory):
     import core.transcriber as t
     from core.task import TranscriptionTask
 
-    # Make sure the model is loaded (this is what test_transcribe_smoke
-    # does; we reuse the same MODEL global for speed).
-    if not t.is_model_ready():
-        ok = t.load_existing_model()
-        if not ok:
-            ok = t.load_model()
-        if not ok:
-            pytest.skip(f"Whisper model failed to load: {t.get_model_error()}")
+    # Force a genuine model (re)load instead of reusing whatever is in the
+    # global: an earlier unit test may have left a fake MODEL with
+    # MODEL_READY=True, which would otherwise be mistaken for "ready" here and
+    # blow up when the real transcription calls .transcribe() on the fake.
+    t.MODEL = None
+    t.MODEL_READY = False
+    ok = t.load_existing_model()
+    if not ok:
+        ok = t.load_model()
+    if not ok:
+        pytest.skip(f"Whisper model failed to load: {t.get_model_error()}")
 
     workdir = tmp_path_factory.mktemp("smtv_e2e")
     audio_copy = workdir / "clip.mp3"
