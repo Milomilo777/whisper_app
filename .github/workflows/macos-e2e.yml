@@ -24,6 +24,14 @@ jobs:
           python -m pip install --upgrade pip
           grep -viE '^stable-ts' requirements.txt > requirements.slim.txt
           pip install -r requirements.slim.txt
+
+      # See macos-app.yml for the full rationale: pin numpy to a conservative
+      # 1.x AFTER the slim install so faster-whisper/ctranslate2's transitive
+      # numpy 2.x resolution doesn't ship a build that fails to import on
+      # older/virtualised Intel Macs (Monterey). ctranslate2 4.x and
+      # faster-whisper 1.x both accept numpy>=1.21,<3.
+      - name: Pin numpy to a Monterey/VM-safe 1.x
+        run: pip install "numpy==1.26.4"
       - name: Generate real speech with macOS `say`, convert to 16k mono WAV
         run: |
           brew install ffmpeg

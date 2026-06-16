@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover
     BatchedInferencePipeline = None  # type: ignore[assignment]
 
 from . import _checkpoint
+from ._proc import new_session_kwargs
 from .config import load_config
 from .model_manager import DownloadCancelled, ensure_model
 from .paths import bundled_binary
@@ -1815,8 +1816,9 @@ def _slice_audio_from(
         str(slice_path),
     ]
     kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
-    if os.name == "nt":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    # CREATE_NO_WINDOW on Windows; start_new_session=True on POSIX so
+    # kill_process_tree can killpg this ffmpeg's OWN group if needed.
+    kwargs.update(new_session_kwargs())
     try:
         result = subprocess.run(cmd, timeout=600, **kwargs)
     except subprocess.TimeoutExpired as e:

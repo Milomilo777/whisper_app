@@ -61,12 +61,42 @@ for _name in ('stable_whisper', 'whisper', 'tiktoken'):
     except Exception:
         pass
 
+# Optional Google Cloud service-account key (gitignored — only present in a
+# trusted local build tree, never in a source/CI checkout). Bundled under
+# creds/ so core.backends.google_cloud_stt.bundled_credentials_path() finds
+# it at <resource_base>/creds/gcloud_stt.json. Skipped cleanly when absent —
+# the cloud backend just falls back to user-supplied credentials.
+import os as _os
+creds_datas = (
+    [('creds/gcloud_stt.json', 'creds')]
+    if _os.path.isfile('creds/gcloud_stt.json')
+    else []
+)
+
+# google-cloud-speech + google-cloud-storage + grpcio are now REQUIRED
+# runtime deps — the Google Cloud STT backend is the default engine.
+# collect_all gathers datas + binaries (the native grpc .pyd!) + every
+# submodule of these namespace-package stacks, which PyInstaller's static
+# analysis cannot fully discover on its own.
+_gcloud_datas, _gcloud_binaries, _gcloud_hidden = [], [], []
+for _pkg in ('grpc', 'google.cloud.speech_v2', 'google.cloud.storage',
+             'google.api_core', 'google.auth', 'google.oauth2',
+             'google.protobuf', 'proto'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _gcloud_datas += _d
+        _gcloud_binaries += _b
+        _gcloud_hidden += _h
+    except Exception:
+        pass
+
 a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[
         *whisper_cpp_binaries,
         *alignment_binaries,
+        *_gcloud_binaries,
     ],
     datas=[
         ('bin', 'bin'),
@@ -82,10 +112,18 @@ a = Analysis(
         *faster_whisper_datas,
         *whisper_cpp_datas,
         *alignment_datas,
+        *creds_datas,
+        *_gcloud_datas,
     ],
     hiddenimports=[
         *whisper_cpp_hidden,
         *alignment_hidden,
+        *_gcloud_hidden,
+        'google.cloud.speech_v2',
+        'google.cloud.storage',
+        'google.oauth2.service_account',
+        'grpc',
+        'grpc._cython.cygrpc',
         'app',
         'app.app',
         'app.dialogs',
@@ -118,6 +156,7 @@ a = Analysis(
         'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
+        'core.backends.availability',
         'core.chapters',
         'core.llm',
         'core.recorder',

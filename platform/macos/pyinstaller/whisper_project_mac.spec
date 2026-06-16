@@ -34,7 +34,7 @@ from PyInstaller.utils.hooks import (
 # Same Silero VAD packaging note as the Windows specs: faster_whisper loads
 # silero_vad_v6.onnx by file path at runtime, so PyInstaller's module
 # collection alone is not enough.
-faster_whisper_datas = collect_data_files('faster_whisper')
+_fw_datas, _fw_binaries, _fw_hidden = collect_all('faster_whisper')
 
 # pywhispercpp ships its native whisper.cpp extension as a TOP-LEVEL module
 # `_pywhispercpp` at site-packages root. collect_dynamic_libs returns [] for
@@ -83,12 +83,57 @@ _REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir, os.pardir, os.par
 _icns = os.path.join(_REPO_ROOT, 'assets', 'whisper.icns')
 _icon = _icns if os.path.isfile(_icns) else None
 
+# Optional Google Cloud service-account key (gitignored — only present in a
+# trusted local build tree, never in a source/CI checkout). Bundled under
+# creds/ so core.backends.google_cloud_stt.bundled_credentials_path() finds
+# it at <resource_base>/creds/gcloud_stt.json. Skipped cleanly when absent —
+# the cloud backend just falls back to user-supplied credentials.
+_creds_key = os.path.join(_REPO_ROOT, 'creds', 'gcloud_stt.json')
+creds_datas = [(_creds_key, 'creds')] if os.path.isfile(_creds_key) else []
+
+# google-cloud-speech + google-cloud-storage + grpcio are now REQUIRED
+# runtime deps — the Google Cloud STT backend is the default engine.
+# collect_all gathers datas + binaries (the native grpc .so!) + every
+# submodule of these namespace-package stacks, which PyInstaller's static
+# analysis cannot fully discover on its own.
+_gcloud_datas, _gcloud_binaries, _gcloud_hidden = [], [], []
+for _pkg in ('grpc', 'google.cloud.speech_v2', 'google.cloud.storage',
+             'google.api_core', 'google.auth', 'google.oauth2',
+             'google.protobuf', 'proto'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _gcloud_datas += _d
+        _gcloud_binaries += _b
+        _gcloud_hidden += _h
+    except Exception:
+        pass
+
+# numpy + its C-extension stack (ctranslate2, scipy, av, onnxruntime) ship
+# native .so/.dylib files that PyInstaller's static analysis can miss,
+# especially their dependent dylibs (e.g. numpy's bundled OpenBLAS, scipy's
+# .libs). A macOS build that's missing these can launch (the GUI imports lazily)
+# but fail later with "Importing the numpy C-extensions failed" on the user's
+# machine. collect_all gathers datas + binaries + every submodule for each,
+# same pattern as the google/grpc block above.
+_npstack_datas, _npstack_binaries, _npstack_hidden = [], [], []
+for _pkg in ('numpy', 'ctranslate2', 'scipy', 'av', 'onnxruntime'):
+    try:
+        _d, _b, _h = collect_all(_pkg)
+        _npstack_datas += _d
+        _npstack_binaries += _b
+        _npstack_hidden += _h
+    except Exception:
+        pass
+
 a = Analysis(
     [os.path.join(_REPO_ROOT, 'gui.py')],
     pathex=[_REPO_ROOT],
     binaries=[
+        *_fw_binaries,
         *whisper_cpp_binaries,
         *alignment_binaries,
+        *_gcloud_binaries,
+        *_npstack_binaries,
     ],
     datas=[
         (os.path.join(_REPO_ROOT, 'bin'), 'bin'),
@@ -101,13 +146,24 @@ a = Analysis(
         # exact table styling). Resolved at runtime via
         # core.paths.resource_base -> core/writers/templates/.
         (os.path.join(_REPO_ROOT, 'core', 'writers', 'templates'), 'core/writers/templates'),
-        *faster_whisper_datas,
+        *_fw_datas,
         *whisper_cpp_datas,
         *alignment_datas,
+        *creds_datas,
+        *_gcloud_datas,
+        *_npstack_datas,
     ],
     hiddenimports=[
+        *_fw_hidden,
         *whisper_cpp_hidden,
         *alignment_hidden,
+        *_gcloud_hidden,
+        *_npstack_hidden,
+        'google.cloud.speech_v2',
+        'google.cloud.storage',
+        'google.oauth2.service_account',
+        'grpc',
+        'grpc._cython.cygrpc',
         'app',
         'app.app',
         'app.dialogs',
@@ -140,6 +196,7 @@ a = Analysis(
         'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
+        'core.backends.availability',
         'core.chapters',
         'core.llm',
         'core.recorder',
@@ -236,22 +293,23 @@ coll = COLLECT(
     upx_exclude=[],
     name='Whisper Project',
 )
-# macOS .app wrapper. Version is kept at 1.3.6 to match the Info.plist the
-# install.command writes for the source/venv path — do NOT bump it here; the
-# release version is governed by core.__version__ + the git tag, and the mac
-# path is still unbuilt/untested on real hardware.
+# macOS .app wrapper. Keep CFBundleVersion / CFBundleShortVersionString in
+# lock-step with core.__version__ (bump alongside it on every release) —
+# they were previously left at a stale 1.3.6 while core.__version__ moved
+# on. The install.command source/venv path writes its own Info.plist
+# separately and is tracked independently.
 app = BUNDLE(
     coll,
     name='Whisper Project.app',
     icon=_icon,
     bundle_identifier='com.translation-robot.whisperproject',
-    version='1.3.6',
+    version='1.3.9',
     info_plist={
         'CFBundleName': 'Whisper Project',
         'CFBundleDisplayName': 'Whisper Project',
         'CFBundleIdentifier': 'com.translation-robot.whisperproject',
-        'CFBundleVersion': '1.3.6',
-        'CFBundleShortVersionString': '1.3.6',
+        'CFBundleVersion': '1.3.9',
+        'CFBundleShortVersionString': '1.3.9',
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         # The app reads media files the user drops / picks; declaring a

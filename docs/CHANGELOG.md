@@ -4,6 +4,48 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.3.9] — 2026-06-08
+
+> Frontend-stability + cloud-default release on top of v1.3.8. Adds an engine
+> picker to the Transcribe tab so the transcription engine can be chosen without
+> opening Advanced settings, makes Google Cloud STT the default engine in trusted
+> builds that ship a key (fully offline faster-whisper otherwise), and folds in a
+> small batch of frontend stability fixes. pyright `app/ core/` 0/0/0; hermetic
+> suite green.
+
+### Added
+
+- **Transcribe-tab engine picker** — choose the transcription engine (offline
+  Faster-Whisper, whisper.cpp, Parakeet, Gemini cloud, Google Cloud STT) right on
+  the Transcribe tab, with a readiness line (✓ Ready / ⚠ needs setup) for the
+  chosen engine. Switching the engine restarts the worker so the change takes
+  effect on the next transcription. The engine list + availability live in the
+  new `core/backends/availability.py` shared by the tab and the Advanced dialog.
+- **Google Cloud STT as the default engine** in builds that bundle a
+  service-account key (`creds/gcloud_stt.json`, never committed — gitignored,
+  build-tree only); a source checkout with no key stays fully offline on
+  faster-whisper. The Advanced dialog now shows when the bundled key is loaded
+  and auto-runs the connection test on open.
+
+### Fixed
+
+- **Worker stdin reader** could park forever on a Windows pipe — now uses a
+  bounded `readline` so short JSON commands return promptly.
+- **Checkpoint probe** no longer needs `model_path` set: it resolves the model
+  folder from the configured model + hub folder, so the ~3 GB download dialog is
+  not shown when the model is already present.
+- **Download time-range sliders** no longer cross over — dragging one knob past
+  the other snaps both so the visible range stays valid.
+- **Engine switch now restarts the worker.** The live worker snapshots the
+  backend at spawn and the dispatch preferred that stale value, so a switch did
+  not take effect until the process restarted; both the picker and the Advanced
+  dialog now stop the worker on a backend change.
+- **CLI** `transcribe --formats` choices come from the writer registry (so
+  `smtv_docx` is accepted) and the CLI reports the real written paths + live
+  progress.
+- The Advanced dialog refuses to save the unsupported Google Cloud STT +
+  diarization combination.
+
 ## [1.3.8] — 2026-06-06
 
 > Hardening release on top of v1.3.7: the Phase 1–6 feature work (Google
