@@ -137,7 +137,7 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "ps": "Pashto",
     "fa": "Persian",
     "pl": "Polish",
-    "pt": "Portuguese (Portugal, Brazil)",
+    "pt": "Portuguese",
     "pa": "Punjabi",
     "ro": "Romanian",
     "ru": "Russian",
