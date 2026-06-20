@@ -156,6 +156,7 @@ a = Analysis(
         'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
+        'core.backends.nvidia_asr',
         'core.backends.availability',
         'core.chapters',
         'core.llm',
