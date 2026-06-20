@@ -28,6 +28,11 @@ Currently supported:
     breaks the offline guarantee). Authenticates with a service-account
     JSON file (NOT an API key); supports word timestamps + diarization
     and a cheaper GCS batch mode. Opt-in via the Advanced dialog.
+
+  * ``nvidia_asr`` — OPTIONAL cloud transcription via NVIDIA Nemotron 3.5
+    ASR (NVCF gRPC streaming endpoint). Uploads audio to NVIDIA; requires
+    a free API key from build.nvidia.com. Supports ~40 BCP-47 locales and
+    word-level timestamps. Opt-in via the Advanced dialog.
 """
 from __future__ import annotations
 
@@ -53,6 +58,9 @@ def get_backend(name: str) -> Backend:
     if name == "google_cloud_stt":
         from .google_cloud_stt import GoogleCloudSttBackend
         return GoogleCloudSttBackend()
+    if name == "nvidia_asr":
+        from .nvidia_asr import NvidiaAsrBackend
+        return NvidiaAsrBackend()
     from .faster_whisper_be import FasterWhisperBackend
     return FasterWhisperBackend()
 

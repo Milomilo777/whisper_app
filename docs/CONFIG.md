@@ -186,6 +186,26 @@ usage note are in [`CLOUD_STT_GOOGLE.md`](CLOUD_STT_GOOGLE.md).
 | `gcloud_stt_minutes_month` | string | `""` | The `"YYYY-MM"` marker for the month `gcloud_stt_minutes_used` belongs to. When the current month differs, the counter resets to 0 before the run is added. |
 | `gcloud_stt_free_minutes_cap` | int | `60` | Informational free-tier figure (60 min/month) shown in the live usage display. Not enforced — it does not block transcription. |
 
+### NVIDIA Nemotron 3.5 ASR (optional, free API key)
+
+A third cloud option, selected by setting `transcribe_backend` to
+`nvidia_asr` (in **Advanced > Backend** — labelled "NVIDIA Nemotron 3.5
+ASR"). It streams audio to NVIDIA's hosted Riva ASR service over **gRPC**
+(the NVCF endpoint) using the Nemotron-3.5 streaming model (~40 BCP-47
+locales, word-level timestamps). Authentication is a **simple pasted API
+key** — get a free one at `build.nvidia.com` → *Nemotron ASR Streaming* →
+*Get API Key*. The gRPC client (`nvidia-riva-client`) is **installed on
+demand on first use** (it is not bundled). Like every cloud option it
+**uploads your audio to NVIDIA** and breaks the offline guarantee.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `nvidia_asr_api_key` | string | `""` | Free NVIDIA API key pasted from `build.nvidia.com`. Empty = the backend reports a clear "no NVIDIA API key set" error. Stored in cleartext; sent only in the gRPC `authorization: Bearer …` metadata, never logged. |
+| `nvidia_asr_function_id` | string | `"bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"` | The NVCF function-id for the Nemotron ASR Streaming model. A config value so a re-published function needs no code change. |
+| `nvidia_asr_server` | string | `"grpc.nvcf.nvidia.com:443"` | The NVCF gRPC endpoint (SSL). Override only if NVIDIA changes the host or you self-host a Riva server. |
+| `nvidia_asr_chunk_seconds` | int | `300` | Audio window length (seconds) per streaming request. The local file is sliced into back-to-back windows whose timestamps are offset and stitched into one timeline. |
+| `nvidia_asr_language` | string | `""` | BCP-47 locale override (e.g. `"es-US"`, `"fr-FR"`). Empty = follow the Transcribe-tab language (or `"en-US"` when that is Auto). A bare `"en"` is promoted to `"en-US"`. |
+
 ### Web / LAN access (optional local HTTP job server)
 
 Backs both the `gui.py serve` CLI and the one-click **Web / LAN access**

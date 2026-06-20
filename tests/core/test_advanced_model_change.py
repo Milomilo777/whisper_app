@@ -45,6 +45,7 @@ def _advanced_fake(app, *, chosen_label, slug_map):
         _gcloud_batch_mode=_V(False),
         _gcloud_bucket=_V(""),
         _gcloud_diarization=_V(False),
+        _nvidia_api_key=_V(""),
         _alignment=_V("none"),
         _hallucination_detect=_V(True),
         _demucs_enabled=_V(False),

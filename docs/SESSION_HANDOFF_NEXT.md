@@ -5,6 +5,47 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ CURRENT STATE (2026-06-21) — NVIDIA Nemotron 3.5 ASR engine added (read FIRST)
+
+One self-contained feature added on `master` and **pushed** (owner asked: "test it,
+if green push to master; no exe / no mac build"):
+
+- **New free cloud engine `nvidia_asr`** — NVIDIA Nemotron 3.5 ASR via the hosted
+  Riva gRPC endpoint (NVCF, `grpc.nvcf.nvidia.com:443`, function-id
+  `bb0837de-…`, `authorization: Bearer <key>`). Streaming model, ~40 locales,
+  word-level timestamps. Simple **free** API key from `build.nvidia.com` →
+  *Nemotron ASR Streaming* → *Get API Key*. New module
+  `core/backends/nvidia_asr.py` (pure testable seams: `normalize_language_code`,
+  `results_to_segments` (ms→seconds), `classify_riva_error`; lazy riva import;
+  chunked WAV via bundled ffmpeg; reuses `cloud_stt.plan_chunks` + `offset_segments`).
+  Registered in the factory, `availability.ENGINE_CHOICES` + probe + deep path,
+  the Advanced dialog (`_BACKEND_CHOICES` + key field + privacy warning), 5
+  `DEFAULT_CONFIG` keys (`nvidia_asr_api_key/_function_id/_server/_chunk_seconds/_language`),
+  and `optional_deps.FEATURES` (`nvidia-riva-client` installs on-demand on first
+  use — NOT bundled, NOT in requirements.txt, like the torch features).
+- **Verification:** pyright `app/ core/` **0/0/0**; full hermetic suite **green**
+  (exit 0) in BOTH the riva-absent state (workflow run) and the riva-present state
+  (after a real `pip install nvidia-riva-client 2.26.0`). The 32-test
+  `tests/core/test_nvidia_asr.py` passes. **Real symbol test done:** installed
+  `nvidia-riva-client` and confirmed every API symbol the engine calls actually
+  exists (`Auth`, `ASRService`, `RecognitionConfig`, `StreamingRecognitionConfig`,
+  `AudioChunkFileIterator`, `AudioEncoding.LINEAR_PCM`).
+- **OPEN (owner live-test):** the live gRPC transcription path is UNTESTED
+  end-to-end — no NVIDIA key in this env. Owner: paste a free key in
+  **Advanced > Backend** (or pick the engine on the Transcribe tab) → run one
+  file → confirm a transcript lands. (Same "needs the owner's key" caveat as the
+  Gemini/Google Cloud engines.) Two robustness hardenings beyond the subagent's
+  draft: gRPC errors now surface to `classify_riva_error` (the stream is
+  materialised before the pure parser, which would otherwise swallow an auth/quota
+  error as "0 segments"); the unknown-duration EOF threshold was raised from 64 to
+  `_EMPTY_WAV_BYTES = 2048` (a fat WAV header could slip past 64).
+- Docs: `CONFIG.md` (5 keys) + `CHANGELOG.md` `[Unreleased]` updated. No version
+  bump, no exe/mac build (per the owner's scope). Pre-existing uncommitted
+  `.project_index.json` / `PROJECT_INDEX.md` / `online_*.png` were left untouched
+  (NOT part of this commit).
+
+---
+
 ## ⭐ CURRENT STATE (2026-06-08) — read this FIRST (supersedes the 06-07 note below)
 
 Branch `frontend-stability-fix` (off `master`/`a2fd666`). Two new LOCAL commits — **NOT

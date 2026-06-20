@@ -52,6 +52,11 @@ FEATURES: dict[str, tuple[str, list[str]]] = {
         "google.cloud.speech_v2",
         ["google-cloud-speech", "google-cloud-storage"],
     ),
+    # NVIDIA Nemotron 3.5 ASR backend (gRPC streaming via NVCF). The
+    # nvidia-riva-client package pulls grpcio + protobuf; it is NOT
+    # bundled so it installs on first use. The probe import is the top-level
+    # riva.client namespace.
+    "nvidia_asr": ("riva.client", ["nvidia-riva-client"]),
 }
 
 

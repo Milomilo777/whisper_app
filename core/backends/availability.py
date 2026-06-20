@@ -31,6 +31,10 @@ ENGINE_CHOICES: list[tuple[str, str]] = [
         "Google Cloud Speech-to-Text — service account (60 min/mo free)",
         "google_cloud_stt",
     ),
+    (
+        "NVIDIA Nemotron 3.5 ASR — cloud, free API key (40 langs)",
+        "nvidia_asr",
+    ),
 ]
 LABEL_TO_VALUE: dict[str, str] = {label: value for label, value in ENGINE_CHOICES}
 VALUE_TO_LABEL: dict[str, str] = {value: label for label, value in ENGINE_CHOICES}
@@ -185,6 +189,16 @@ def _cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
     )
 
 
+def _nvidia_asr_status(cfg: Mapping[str, Any]) -> EngineStatus:
+    if str(cfg.get("nvidia_asr_api_key") or "").strip():
+        return EngineStatus("nvidia_asr", True, "")
+    return EngineStatus(
+        "nvidia_asr",
+        False,
+        "paste a free NVIDIA API key (build.nvidia.com) in Advanced settings",
+    )
+
+
 def _google_cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
     have_key = has_gcloud_key(cfg)
     try:
@@ -214,6 +228,7 @@ _PROBES: dict[str, Callable[[Mapping[str, Any]], EngineStatus]] = {
     "parakeet": _parakeet_status,
     "cloud_stt": _cloud_stt_status,
     "google_cloud_stt": _google_cloud_stt_status,
+    "nvidia_asr": _nvidia_asr_status,
 }
 
 
@@ -237,6 +252,8 @@ def engine_status(value: Any, cfg: Mapping[str, Any], *, deep: bool = True) -> E
             )
         if engine == "cloud_stt":
             return _cloud_stt_status(cfg)
+        if engine == "nvidia_asr":
+            return _nvidia_asr_status(cfg)
         if engine == "faster_whisper":
             return _faster_whisper_status(cfg)
         return EngineStatus(engine, True, "")

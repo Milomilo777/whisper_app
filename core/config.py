@@ -177,6 +177,20 @@ DEFAULT_CONFIG = {
     #     minute counter (the 60-min/month free tier is NOT readable from a
     #     service-account key, so we track it here and reset on a new month;
     #     the UI displays it). The marker is a "YYYY-MM" string.
+    # OPTIONAL NVIDIA Nemotron 3.5 ASR backend (gRPC streaming via NVCF).
+    # Off unless the user selects transcribe_backend="nvidia_asr". A free
+    # API key is available at build.nvidia.com (Nemotron ASR Streaming).
+    # Audio is uploaded to NVIDIA (breaks the offline guarantee).
+    #   nvidia_asr_api_key     : pasted free key from build.nvidia.com.
+    #   nvidia_asr_function_id : NVCF function-id for Nemotron ASR Streaming.
+    #   nvidia_asr_server      : NVCF gRPC endpoint.
+    #   nvidia_asr_chunk_seconds: audio window length (seconds) per request.
+    #   nvidia_asr_language    : BCP-47 locale override (empty = "en-US").
+    "nvidia_asr_api_key": "",
+    "nvidia_asr_function_id": "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa",
+    "nvidia_asr_server": "grpc.nvcf.nvidia.com:443",
+    "nvidia_asr_chunk_seconds": 300,
+    "nvidia_asr_language": "",
     "gcloud_stt_credentials_json": "",
     "gcloud_stt_model": "chirp_2",
     "gcloud_stt_location": "us-central1",
