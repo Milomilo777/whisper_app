@@ -59,7 +59,7 @@ _BACKEND_CHOICES: list[tuple[str, str]] = [
         "google_cloud_stt",
     ),
     (
-        "NVIDIA Nemotron 3.5 ASR — cloud, free API key (40 langs)",
+        "NVIDIA Parakeet TDT v3 — local, multilingual (transformers)",
         "nvidia_asr",
     ),
 ]
@@ -168,9 +168,9 @@ class AdvancedDialog(tk.Toplevel):
         )
         self._gcloud_test_result = tk.StringVar(value="")
         self._gcloud_usage_text = tk.StringVar(value="")
-        # NVIDIA Nemotron 3.5 ASR (gRPC via NVCF) — opt-in, uploads audio.
-        self._nvidia_api_key = tk.StringVar(
-            value=str(cfg.get("nvidia_asr_api_key") or "")
+        # NVIDIA Parakeet/FastConformer — LOCAL transformers backend (offline).
+        self._nvidia_model_id = tk.StringVar(
+            value=str(cfg.get("nvidia_asr_model_id") or "")
         )
         # Backend picker uses a human label internally; map back on save.
         self._backend_display = tk.StringVar(
@@ -541,38 +541,36 @@ class AdvancedDialog(tk.Toplevel):
         link.bind("<Button-1>", lambda _e: self._open_billing_console())
         cloud.columnconfigure(1, weight=1)
 
-        # NVIDIA Nemotron 3.5 ASR — OPTIONAL, uploads audio via gRPC.
+        # NVIDIA Parakeet / FastConformer — LOCAL, runs offline via transformers.
         nvidia = ttk.LabelFrame(
             body,
-            text=(
-                "NVIDIA Nemotron 3.5 ASR — optional, uploads audio"
-            ),
+            text="NVIDIA Parakeet / FastConformer — local, runs offline",
         )
         nvidia.pack(fill="x", pady=(0, 8))
         ttk.Label(
             nvidia,
             text=(
-                "PRIVACY: selecting the 'nvidia_asr' backend UPLOADS your "
-                "audio to NVIDIA's cloud servers for transcription. This "
-                "BREAKS the offline guarantee — only use it for content you "
-                "may send to a cloud service."
+                "Runs ENTIRELY on this machine (no audio leaves the device). "
+                "On first use, transformers + torch and the model download "
+                "automatically (a few GB, one time). The default is NVIDIA's "
+                "multilingual Parakeet TDT v3; you can point this at any "
+                "Hugging Face automatic-speech-recognition model id or a local "
+                "folder. (NVIDIA's exact Nemotron-3.5 .nemo checkpoint needs "
+                "the NeMo toolkit and is not loadable here.)"
             ),
-            foreground="#b00020",
+            foreground="#444",
             wraplength=820,
             justify="left",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
-        ttk.Label(nvidia, text="NVIDIA API key").grid(
+        ttk.Label(nvidia, text="Model (HF id or local path)").grid(
             row=1, column=0, sticky="w", padx=8, pady=4
         )
         ttk.Entry(
-            nvidia, textvariable=self._nvidia_api_key, show="*", width=52,
+            nvidia, textvariable=self._nvidia_model_id, width=52,
         ).grid(row=1, column=1, sticky="ew", padx=8, pady=4)
         ttk.Label(
             nvidia,
-            text=(
-                "Get a free key at build.nvidia.com "
-                "(Nemotron ASR Streaming -> Get API Key)."
-            ),
+            text="Default: nvidia/parakeet-tdt-0.6b-v3",
             foreground="#666",
         ).grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         nvidia.columnconfigure(1, weight=1)
@@ -935,8 +933,8 @@ class AdvancedDialog(tk.Toplevel):
         cfg["gcloud_stt_batch_mode"] = bool(self._gcloud_batch_mode.get())
         cfg["gcloud_stt_bucket"] = (self._gcloud_bucket.get() or "").strip()
         cfg["gcloud_stt_diarization"] = bool(self._gcloud_diarization.get())
-        # NVIDIA Nemotron 3.5 ASR settings.
-        cfg["nvidia_asr_api_key"] = self._nvidia_api_key.get().strip()
+        # NVIDIA Parakeet / FastConformer (local transformers) settings.
+        cfg["nvidia_asr_model_id"] = self._nvidia_model_id.get().strip()
         if cfg.get("transcribe_backend") == "google_cloud_stt":
             # Google Cloud STT v2 rejects diarization on this recognizer.
             # Keep the GUI from saving an unsupported combination that would

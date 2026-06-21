@@ -177,20 +177,25 @@ DEFAULT_CONFIG = {
     #     minute counter (the 60-min/month free tier is NOT readable from a
     #     service-account key, so we track it here and reset on a new month;
     #     the UI displays it). The marker is a "YYYY-MM" string.
-    # OPTIONAL NVIDIA Nemotron 3.5 ASR backend (gRPC streaming via NVCF).
-    # Off unless the user selects transcribe_backend="nvidia_asr". A free
-    # API key is available at build.nvidia.com (Nemotron ASR Streaming).
-    # Audio is uploaded to NVIDIA (breaks the offline guarantee).
-    #   nvidia_asr_api_key     : pasted free key from build.nvidia.com.
-    #   nvidia_asr_function_id : NVCF function-id for Nemotron ASR Streaming.
-    #   nvidia_asr_server      : NVCF gRPC endpoint.
-    #   nvidia_asr_chunk_seconds: audio window length (seconds) per request.
-    #   nvidia_asr_language    : BCP-47 locale override (empty = "en-US").
-    "nvidia_asr_api_key": "",
-    "nvidia_asr_function_id": "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa",
-    "nvidia_asr_server": "grpc.nvcf.nvidia.com:443",
-    "nvidia_asr_chunk_seconds": 300,
-    "nvidia_asr_language": "",
+    # OPTIONAL local NVIDIA Parakeet / FastConformer ASR backend, run through
+    # Hugging Face transformers. Off unless transcribe_backend="nvidia_asr".
+    # Runs fully ON THIS MACHINE (no audio leaves the device). transformers +
+    # torch are heavy and install on first use (NOT bundled, like the other
+    # torch features). The default is the transformers-native multilingual
+    # FastConformer model; point model_id at any transformers
+    # automatic-speech-recognition model (a HF repo id OR a local dir path).
+    # (NVIDIA's exact nemotron-3.5-asr checkpoint ships only a NeMo .nemo file
+    # which transformers cannot load, so its parakeet sibling is the default.)
+    #   nvidia_asr_model_id      : HF repo id OR local dir path of the model.
+    #   nvidia_asr_device        : "auto" | "cpu" | "cuda".
+    #   nvidia_asr_dtype         : "auto" | "float32" | "float16".
+    #   nvidia_asr_chunk_seconds : audio window length (seconds) per inference;
+    #     also the segment granularity when the model returns text-only (no word
+    #     timestamps), so smaller = finer subtitles.
+    "nvidia_asr_model_id": "nvidia/parakeet-tdt-0.6b-v3",
+    "nvidia_asr_device": "auto",
+    "nvidia_asr_dtype": "auto",
+    "nvidia_asr_chunk_seconds": 30,
     "gcloud_stt_credentials_json": "",
     "gcloud_stt_model": "chirp_2",
     "gcloud_stt_location": "us-central1",

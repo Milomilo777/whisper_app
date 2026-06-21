@@ -6,22 +6,27 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
-- **NVIDIA Nemotron 3.5 ASR cloud engine** (`nvidia_asr`) — a third cloud
-  transcription option with a **free, simple-API-key** sign-up. Streams audio to
-  NVIDIA's hosted Riva ASR service over gRPC (the NVCF endpoint) using the
-  Nemotron-3.5 streaming model (~40 BCP-47 locales, word-level timestamps). Get a
-  free key at `build.nvidia.com` → *Nemotron ASR Streaming* → *Get API Key*, then
-  paste it in **Advanced > Backend** (or pick "NVIDIA Nemotron 3.5 ASR" in the
-  Transcribe-tab engine picker). The gRPC client (`nvidia-riva-client`) installs
-  on demand on first use — it is not bundled, so the base install stays slim. Like
-  every cloud option it uploads audio to NVIDIA and breaks the offline guarantee
-  (loud privacy opt-in in the dialog). New config keys `nvidia_asr_api_key` /
-  `_function_id` / `_server` / `_chunk_seconds` / `_language` (see
-  [`CONFIG.md`](CONFIG.md)). New module `core/backends/nvidia_asr.py`; registered
-  in the engine factory, the shared `availability` registry, the Advanced dialog,
-  and `optional_deps`. Hermetic test suite in `tests/core/test_nvidia_asr.py`.
-  pyright `app/ core/` 0/0/0; hermetic suite green. (The live gRPC path needs a
-  real free key to exercise end-to-end.)
+- **Local NVIDIA Parakeet / FastConformer engine** (`nvidia_asr`) — a new
+  **fully offline** transcription engine that runs a Hugging Face transformers
+  `automatic-speech-recognition` model entirely on this machine (no audio leaves
+  the device). The default is NVIDIA's transformers-native multilingual
+  FastConformer model `nvidia/parakeet-tdt-0.6b-v3`; it is configurable via
+  `nvidia_asr_model_id` to any transformers ASR model id or local folder. Pick
+  "NVIDIA Parakeet TDT v3 — local" in the Transcribe-tab engine picker or
+  Advanced > Backend. The heavy libraries (`transformers` + `torch` + `librosa`)
+  and the model weights are not bundled — they install / download on first use (a
+  few GB, one time), like the openai-whisper backend, so the base install stays
+  slim. The file is transcribed window by window (`nvidia_asr_chunk_seconds`) for
+  progress + cancel; word timestamps are used when the model provides them, else
+  one segment per window. New config keys `nvidia_asr_model_id` / `_device` /
+  `_dtype` / `_chunk_seconds` (see [`CONFIG.md`](CONFIG.md)). New module
+  `core/backends/nvidia_asr.py`; registered in the engine factory, the shared
+  `availability` registry, the Advanced dialog, and `optional_deps`. Hermetic
+  tests in `tests/core/test_nvidia_asr.py`; verified end-to-end on real speech
+  with `parakeet-tdt-0.6b-v3`. pyright `app/ core/` 0/0/0; hermetic suite green.
+  (NVIDIA's exact `nemotron-3.5-asr-streaming-0.6b` repo ships only a NeMo
+  `.nemo` checkpoint that transformers cannot load — its parakeet sibling is the
+  default; a different model needs the NeMo toolkit.)
 
 ## [1.3.9] — 2026-06-08
 

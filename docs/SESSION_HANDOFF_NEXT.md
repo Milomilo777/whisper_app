@@ -5,44 +5,57 @@ this repo. Read this file before anything else.
 
 ---
 
-## ⭐ CURRENT STATE (2026-06-21) — NVIDIA Nemotron 3.5 ASR engine added (read FIRST)
+## ⭐ CURRENT STATE (2026-06-21) — LOCAL NVIDIA Parakeet ASR engine (read FIRST)
 
-One self-contained feature added on `master` and **pushed** (owner asked: "test it,
-if green push to master; no exe / no mac build"):
+A new local transcription engine `nvidia_asr`, on `master` and **pushed**.
 
-- **New free cloud engine `nvidia_asr`** — NVIDIA Nemotron 3.5 ASR via the hosted
-  Riva gRPC endpoint (NVCF, `grpc.nvcf.nvidia.com:443`, function-id
-  `bb0837de-…`, `authorization: Bearer <key>`). Streaming model, ~40 locales,
-  word-level timestamps. Simple **free** API key from `build.nvidia.com` →
-  *Nemotron ASR Streaming* → *Get API Key*. New module
-  `core/backends/nvidia_asr.py` (pure testable seams: `normalize_language_code`,
-  `results_to_segments` (ms→seconds), `classify_riva_error`; lazy riva import;
-  chunked WAV via bundled ffmpeg; reuses `cloud_stt.plan_chunks` + `offset_segments`).
-  Registered in the factory, `availability.ENGINE_CHOICES` + probe + deep path,
-  the Advanced dialog (`_BACKEND_CHOICES` + key field + privacy warning), 5
-  `DEFAULT_CONFIG` keys (`nvidia_asr_api_key/_function_id/_server/_chunk_seconds/_language`),
-  and `optional_deps.FEATURES` (`nvidia-riva-client` installs on-demand on first
-  use — NOT bundled, NOT in requirements.txt, like the torch features).
-- **Verification:** pyright `app/ core/` **0/0/0**; full hermetic suite **green**
-  (exit 0) in BOTH the riva-absent state (workflow run) and the riva-present state
-  (after a real `pip install nvidia-riva-client 2.26.0`). The 32-test
-  `tests/core/test_nvidia_asr.py` passes. **Real symbol test done:** installed
-  `nvidia-riva-client` and confirmed every API symbol the engine calls actually
-  exists (`Auth`, `ASRService`, `RecognitionConfig`, `StreamingRecognitionConfig`,
-  `AudioChunkFileIterator`, `AudioEncoding.LINEAR_PCM`).
-- **OPEN (owner live-test):** the live gRPC transcription path is UNTESTED
-  end-to-end — no NVIDIA key in this env. Owner: paste a free key in
-  **Advanced > Backend** (or pick the engine on the Transcribe tab) → run one
-  file → confirm a transcript lands. (Same "needs the owner's key" caveat as the
-  Gemini/Google Cloud engines.) Two robustness hardenings beyond the subagent's
-  draft: gRPC errors now surface to `classify_riva_error` (the stream is
-  materialised before the pure parser, which would otherwise swallow an auth/quota
-  error as "0 segments"); the unknown-duration EOF threshold was raised from 64 to
-  `_EMPTY_WAV_BYTES = 2048` (a fat WAV header could slip past 64).
-- Docs: `CONFIG.md` (5 keys) + `CHANGELOG.md` `[Unreleased]` updated. No version
-  bump, no exe/mac build (per the owner's scope). Pre-existing uncommitted
-  `.project_index.json` / `PROJECT_INDEX.md` / `online_*.png` were left untouched
-  (NOT part of this commit).
+History (important): this started as a *cloud* gRPC engine (commits `fa91eaa` +
+`7f4d3d5`) because "NVIDIA Nemotron 3.5 ASR" was assumed to be the hosted API.
+The owner clarified they wanted it **LOCAL** (model downloaded from Hugging
+Face), and a colleague's `transcribe_nemotron.py` showed the transformers
+approach. So the cloud engine was **replaced** by a local transformers engine.
+
+- **`nvidia_asr` = local, fully offline** transformers `automatic-speech-recognition`
+  pipeline (no audio leaves the machine). Default model
+  `nvidia/parakeet-tdt-0.6b-v3` (transformers-native multilingual FastConformer);
+  configurable via `nvidia_asr_model_id` to any transformers ASR model id / local
+  dir. New module `core/backends/nvidia_asr.py` — pure seams `resolve_device`,
+  `resolve_dtype`, `chunks_to_segments`, `text_to_segment`, `friendly_load_error`;
+  decodes each window to a 16 kHz mono float32 array with the bundled ffmpeg and
+  runs the pipeline window-by-window (progress + cancel); reuses
+  `cloud_stt.plan_chunks` + `offset_segments`.
+- **Why parakeet, not the literal Nemotron-3.5:** NVIDIA's
+  `nemotron-3.5-asr-streaming-0.6b` (and the `-en` variant) HF repos ship ONLY a
+  NeMo `.nemo` checkpoint (`library_name: nemo`, no transformers config/weights),
+  so `transformers.pipeline` cannot load them — that exact model needs the heavy
+  NeMo toolkit. `parakeet-tdt-0.6b-v3` is the transformers-native sibling and the
+  owner approved it (AskUserQuestion → "transformers + Parakeet v3").
+- **Timestamp reality:** parakeet via transformers 5.12 raises on
+  `return_timestamps="word"` / `chunk_length_s` and returns text only. So the
+  engine tries word timestamps once, then falls back to ONE segment per window
+  timed to the window bounds — hence the small default `nvidia_asr_chunk_seconds`
+  = 30 (smaller = finer subtitles). If a future model/transformers supports word
+  timestamps, they're used automatically. (Gotcha fixed: the pipeline mutates the
+  input dict in preprocess, so each call builds a FRESH `{"raw":…}` dict.)
+- **Config keys** (replaced the old cloud keys): `nvidia_asr_model_id` /
+  `_device` ("auto"|"cpu"|"cuda") / `_dtype` ("auto"|"float32"|"float16") /
+  `_chunk_seconds` (30). `optional_deps.FEATURES["nvidia_asr"]` installs
+  `transformers` + `torch` + `librosa` on first use (NOT bundled, NOT in
+  requirements.txt — librosa is required by the ParakeetFeatureExtractor).
+- **Verification (REAL):** pyright `app/ core/` **0/0/0**; full hermetic suite
+  **green**. Installed `transformers 5.12.1` + `torch 2.12.0+cpu` + `librosa` and
+  ran the actual `NvidiaAsrBackend` end-to-end on 25 s of real speech (the test
+  video) — it downloaded `parakeet-tdt-0.6b-v3`, transcribed correctly, and
+  produced window-timed segments. `tests/core/test_nvidia_asr.py` (pure seams +
+  factory + availability + registry sync) passes.
+- **OPEN (owner):** first selection of the engine triggers a multi-GB one-time
+  download of torch/transformers + the model — warn friends. GPU users get
+  float16/CUDA automatically. The exact Nemotron-3.5 `.nemo` is still NOT
+  supported (would need a NeMo integration — separate, heavy task).
+- Specs: `core.backends.nvidia_asr` is in all three PyInstaller hiddenimports
+  (module name unchanged from the cloud version). No version bump, no exe/mac
+  build (owner scope). Pre-existing uncommitted `.project_index.json` /
+  `PROJECT_INDEX.md` / `online_*.png` left untouched.
 
 ---
 

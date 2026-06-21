@@ -186,25 +186,35 @@ usage note are in [`CLOUD_STT_GOOGLE.md`](CLOUD_STT_GOOGLE.md).
 | `gcloud_stt_minutes_month` | string | `""` | The `"YYYY-MM"` marker for the month `gcloud_stt_minutes_used` belongs to. When the current month differs, the counter resets to 0 before the run is added. |
 | `gcloud_stt_free_minutes_cap` | int | `60` | Informational free-tier figure (60 min/month) shown in the live usage display. Not enforced — it does not block transcription. |
 
-### NVIDIA Nemotron 3.5 ASR (optional, free API key)
+### NVIDIA Parakeet / FastConformer — local (optional)
 
-A third cloud option, selected by setting `transcribe_backend` to
-`nvidia_asr` (in **Advanced > Backend** — labelled "NVIDIA Nemotron 3.5
-ASR"). It streams audio to NVIDIA's hosted Riva ASR service over **gRPC**
-(the NVCF endpoint) using the Nemotron-3.5 streaming model (~40 BCP-47
-locales, word-level timestamps). Authentication is a **simple pasted API
-key** — get a free one at `build.nvidia.com` → *Nemotron ASR Streaming* →
-*Get API Key*. The gRPC client (`nvidia-riva-client`) is **installed on
-demand on first use** (it is not bundled). Like every cloud option it
-**uploads your audio to NVIDIA** and breaks the offline guarantee.
+A local, **fully offline** engine, selected by setting `transcribe_backend`
+to `nvidia_asr` (in **Advanced > Backend** — labelled "NVIDIA Parakeet TDT
+v3 — local"). It runs a Hugging Face **transformers**
+`automatic-speech-recognition` model entirely on this machine (no audio
+leaves the device). The default is NVIDIA's transformers-native multilingual
+FastConformer model `nvidia/parakeet-tdt-0.6b-v3`; you can point it at any
+transformers ASR model id or a local directory.
+
+The heavy libraries (`transformers` + `torch` + `librosa`) and the model
+weights are **not bundled** — they install / download on first use (a few GB,
+one time), mirroring the on-demand openai-whisper backend.
+
+> NVIDIA's exact `nemotron-3.5-asr-streaming-0.6b` repo ships only a NeMo
+> `.nemo` checkpoint (no transformers weights), so the transformers pipeline
+> cannot load it — that precise model needs the heavy NeMo toolkit.
+> `parakeet-tdt-0.6b-v3` is its transformers-native FastConformer sibling and
+> is the default here. Some models (this one in current transformers
+> included) return text only, not per-word timestamps; in that case the engine
+> emits one segment per window, so a smaller `nvidia_asr_chunk_seconds` gives
+> finer subtitles.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `nvidia_asr_api_key` | string | `""` | Free NVIDIA API key pasted from `build.nvidia.com`. Empty = the backend reports a clear "no NVIDIA API key set" error. Stored in cleartext; sent only in the gRPC `authorization: Bearer …` metadata, never logged. |
-| `nvidia_asr_function_id` | string | `"bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"` | The NVCF function-id for the Nemotron ASR Streaming model. A config value so a re-published function needs no code change. |
-| `nvidia_asr_server` | string | `"grpc.nvcf.nvidia.com:443"` | The NVCF gRPC endpoint (SSL). Override only if NVIDIA changes the host or you self-host a Riva server. |
-| `nvidia_asr_chunk_seconds` | int | `300` | Audio window length (seconds) per streaming request. The local file is sliced into back-to-back windows whose timestamps are offset and stitched into one timeline. |
-| `nvidia_asr_language` | string | `""` | BCP-47 locale override (e.g. `"es-US"`, `"fr-FR"`). Empty = follow the Transcribe-tab language (or `"en-US"` when that is Auto). A bare `"en"` is promoted to `"en-US"`. |
+| `nvidia_asr_model_id` | string | `"nvidia/parakeet-tdt-0.6b-v3"` | Hugging Face repo id OR a local directory of a transformers `automatic-speech-recognition` model. Empty = the default. |
+| `nvidia_asr_device` | string | `"auto"` | `"auto"` (CUDA if available, else CPU), or force `"cpu"` / `"cuda"` / `"cuda:1"`. |
+| `nvidia_asr_dtype` | string | `"auto"` | `"auto"` (float16 on CUDA, float32 on CPU), or force `"float32"` / `"float16"`. |
+| `nvidia_asr_chunk_seconds` | int | `30` | Audio window length (seconds) per inference; also the segment granularity when the model returns text-only. The file is sliced into back-to-back windows whose timestamps are offset and stitched into one timeline. |
 
 ### Web / LAN access (optional local HTTP job server)
 

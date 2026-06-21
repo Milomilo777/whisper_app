@@ -32,7 +32,7 @@ ENGINE_CHOICES: list[tuple[str, str]] = [
         "google_cloud_stt",
     ),
     (
-        "NVIDIA Nemotron 3.5 ASR — cloud, free API key (40 langs)",
+        "NVIDIA Parakeet TDT v3 — local, multilingual (transformers)",
         "nvidia_asr",
     ),
 ]
@@ -190,13 +190,23 @@ def _cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
 
 
 def _nvidia_asr_status(cfg: Mapping[str, Any]) -> EngineStatus:
-    if str(cfg.get("nvidia_asr_api_key") or "").strip():
-        return EngineStatus("nvidia_asr", True, "")
-    return EngineStatus(
-        "nvidia_asr",
-        False,
-        "paste a free NVIDIA API key (build.nvidia.com) in Advanced settings",
-    )
+    # Local transformers backend: ready once the transformers package is
+    # importable (it pulls torch). Both install on first use, so a fresh
+    # checkout reports "installs on first use" rather than a hard failure.
+    # The model itself downloads on first run (like faster-whisper).
+    import importlib.util
+
+    try:
+        have = importlib.util.find_spec("transformers") is not None
+    except Exception:  # noqa: BLE001 — find_spec can raise on broken installs
+        have = False
+    if not have:
+        return EngineStatus(
+            "nvidia_asr",
+            False,
+            "transformers + torch install on first use",
+        )
+    return EngineStatus("nvidia_asr", True, "")
 
 
 def _google_cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
@@ -252,8 +262,6 @@ def engine_status(value: Any, cfg: Mapping[str, Any], *, deep: bool = True) -> E
             )
         if engine == "cloud_stt":
             return _cloud_stt_status(cfg)
-        if engine == "nvidia_asr":
-            return _nvidia_asr_status(cfg)
         if engine == "faster_whisper":
             return _faster_whisper_status(cfg)
         return EngineStatus(engine, True, "")

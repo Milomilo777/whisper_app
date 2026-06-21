@@ -1,41 +1,52 @@
-"""Optional cloud transcription backend via the NVIDIA Nemotron 3.5 ASR API.
+"""Local, offline transcription via a Hugging Face transformers ASR model.
 
-This backend streams audio to NVIDIA's hosted Riva ASR service (NVCF) and
-transcribes it with the Nemotron-3.5 streaming model. It is **opt-in** and
-breaks the project's "everything stays on this machine" guarantee — the audio
-leaves the device. The UI makes that trade-off explicit.
+Default model: ``nvidia/parakeet-tdt-0.6b-v3`` — NVIDIA's transformers-native
+multilingual FastConformer-TDT model. Configurable to ANY transformers
+``automatic-speech-recognition`` model (a Hugging Face repo id OR a local
+directory) via the ``nvidia_asr_model_id`` config key.
 
-API contract (NVIDIA Riva / NVCF, gRPC streaming)
---------------------------------------------------
-* pip package : nvidia-riva-client  (import name: riva.client) — NOT bundled.
-  Installed on-demand on first use via core.optional_deps.
-* Server URI  : grpc.nvcf.nvidia.com:443  with use_ssl=True
-* Auth via NVCF metadata:
-    ["function-id", "<nemotron-asr-streaming function id>"]
-    ["authorization", "Bearer <NVIDIA_API_KEY>"]
-* The model is streaming-only; each audio chunk is sent as a 16 kHz mono PCM
-  WAV file via AudioChunkFileIterator and the streaming_response_generator.
-* Word timestamps are integers in MILLISECONDS; we divide by 1000.0.
-* gRPC errors are grpc.RpcError with .code() (grpc.StatusCode) + .details().
+Everything runs ON THIS MACHINE — no audio leaves the device. This follows the
+approach in the colleague's ``transcribe_nemotron.py``: a transformers
+``pipeline("automatic-speech-recognition", …)`` call whose output is turned into
+subtitle-sized segments.
 
-Free-tier note
---------------
-NVIDIA offers a limited free call quota on build.nvidia.com for the hosted
-Nemotron ASR Streaming endpoint. A free API key can be generated at:
-    https://build.nvidia.com  ->  Nemotron ASR Streaming  ->  Get API Key
-Approximately 40 BCP-47 locales are supported; the default is en-US. Set
-nvidia_asr_language in Advanced > Backend to override (empty = en-US).
+Timestamps
+----------
+Some transformers ASR models return per-word timestamps for
+``return_timestamps="word"``; others (parakeet-tdt-0.6b-v3 in transformers 5.x
+included) raise on that path and only return plain text. So this backend
+transcribes WINDOW BY WINDOW (``nvidia_asr_chunk_seconds``, default 30 s): it
+tries word timestamps once and, if the model doesn't support them, falls back to
+emitting one segment per window timed to the window bounds. Smaller windows ->
+finer subtitle granularity in the text-only fallback.
+
+Note on "Nemotron 3.5 ASR"
+--------------------------
+NVIDIA's exact ``nemotron-3.5-asr-streaming-0.6b`` repo ships ONLY a NeMo
+``.nemo`` checkpoint (``library_name: nemo``, no transformers config/weights), so
+the transformers pipeline cannot load it — running that precise model needs the
+heavy NeMo toolkit. ``parakeet-tdt-0.6b-v3`` is its transformers-native
+FastConformer sibling (same architecture family, multilingual) and is the
+default here.
+
+Dependencies
+------------
+``transformers`` + ``torch`` + ``librosa`` (the ParakeetFeatureExtractor needs
+librosa for its mel front-end) are heavy and NOT bundled in the slim build; they
+install on first use via :mod:`core.optional_deps`, mirroring the openai-whisper
+backend. Model weights download from the Hugging Face Hub on first use and are
+cached for later runs.
 """
 from __future__ import annotations
 
 import logging
 import os
 import subprocess
-import tempfile
 import threading
 import time
 from typing import Any, Callable
 
+from .._liveness_tick import liveness_tick
 from ..config import load_config
 from .base import Backend, LanguageInfo
 from .cloud_stt import offset_segments, plan_chunks
@@ -45,204 +56,201 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- constants
 
-NVIDIA_SERVER = "grpc.nvcf.nvidia.com:443"
-NVIDIA_FUNCTION_ID = "bb0837de-8c7b-481f-9ec8-ef5663e9c1fa"
-DEFAULT_LANGUAGE = "en-US"
-DEFAULT_CHUNK_SECONDS = 300.0
-
-#: WAV 16 kHz mono PCM-s16le is the format Riva ASR streaming expects.
-CHUNK_MIME = "audio/wav"
-CHUNK_EXT = ".wav"
-
-#: An empty past-EOF slice decodes to just the WAV header (~44 bytes, up to
-#: ~80 with ffmpeg's fact/LIST chunks). 1 s of 16 kHz mono s16le is 32 000
-#: bytes, so this ceiling never trips on a real (non-empty) chunk but reliably
-#: detects an end-of-file empty slice on the unknown-duration path. (44 bytes
-#: was too tight — a header with an extra chunk could slip past it.)
-_EMPTY_WAV_BYTES = 2048
+DEFAULT_MODEL_ID = "nvidia/parakeet-tdt-0.6b-v3"
+#: Window length (seconds) per pipeline call. Also the segment granularity when
+#: the model returns text only (no word timestamps). Kept modest so the
+#: text-only fallback still yields usable subtitle-sized segments and so cancel /
+#: progress stay responsive.
+DEFAULT_CHUNK_SECONDS = 30.0
+#: Long-form sub-chunk length used only in the (optional) word-timestamp call.
+PIPELINE_CHUNK_LENGTH_S = 30
+#: Group word tokens into one segment once it spans this many seconds (used only
+#: when the model DOES return word timestamps).
+MAX_SEGMENT_SECONDS = 10.0
+TARGET_SR = 16000
+#: A past-EOF window decodes to ~no audio; fewer than this many samples = EOF.
+#: 1024 samples = 64 ms at 16 kHz; a real window is hundreds of thousands+.
+_EMPTY_PCM_SAMPLES = 1024
 
 
 # ---------------------------------------------------------------- pure seams
-# Everything below is network-free and unit-testable without riva installed.
+# Everything below is import-light and unit-testable without torch/transformers.
 
 
-def normalize_language_code(language: str | None) -> str:
-    """Map a language hint to a Riva-compatible BCP-47 locale string.
+def resolve_device(device_cfg: Any, cuda_available: bool) -> str:
+    """Map the ``nvidia_asr_device`` config to a concrete device string.
 
-    Rules (intentionally simple — a full mapping is not needed):
-
-    * None or empty string -> default "en-US".
-    * A code that already contains "-" is passed through verbatim (e.g.
-      "es-US", "fr-FR") — the caller is assumed to know the exact locale.
-    * A two-letter code without a region tag (e.g. "en", "fr") is promoted
-      to "en-US" (default) or returned as-is so callers that do not know the
-      region can at least signal the language; the model may correct silently.
-
-    Nemotron supports ~40 locales. This helper keeps the common case clean
-    while still allowing an expert to paste the exact BCP-47 tag in the
-    config field and have it pass through unchanged.
+    ``"auto"`` (or empty) picks ``"cuda"`` when a GPU is usable, else ``"cpu"``.
+    Any explicit value (``"cpu"`` / ``"cuda"`` / ``"cuda:1"``) passes through.
     """
-    if not language:
-        return DEFAULT_LANGUAGE
-    lang = language.strip()
-    if not lang:
-        return DEFAULT_LANGUAGE
-    # Already a full BCP-47 locale (contains a hyphen).
-    if "-" in lang:
-        return lang
-    # Bare two-letter code: promote "en" to the full default; other codes
-    # are returned as-is rather than guessing a wrong region tag.
-    if lang.lower() == "en":
-        return DEFAULT_LANGUAGE
-    return lang
+    d = str(device_cfg or "auto").strip().lower()
+    if d in ("", "auto"):
+        return "cuda" if cuda_available else "cpu"
+    return d
 
 
-def results_to_segments(results: Any) -> list[dict[str, Any]]:
-    """Convert Riva streaming-response objects to segment dicts.
+def resolve_dtype(dtype_cfg: Any, device: str) -> str:
+    """Map the ``nvidia_asr_dtype`` config to ``"float16"`` / ``"float32"``.
 
-    Duck-typed so the parser works without riva installed. Each *response*
-    in ``results`` is expected to carry a ``.results`` list; each result
-    carries ``.is_final`` (bool, absent = True) and ``.alternatives`` (list).
-    ``alternatives[0]`` has ``.transcript`` (str) and ``.words`` (list of
-    objects with ``.word``, ``.start_time`` (ms int), ``.end_time`` (ms int),
-    ``.confidence`` (float)).
+    ``"auto"`` uses float16 on CUDA (faster, smaller) and float32 on CPU
+    (float16 matmul is slow / unsupported on most CPUs).
+    """
+    t = str(dtype_cfg or "auto").strip().lower()
+    if t in ("", "auto"):
+        return "float16" if str(device).startswith("cuda") else "float32"
+    return t
 
-    Empty transcripts are silently skipped. Words timestamps are divided by
-    1000.0 to convert from milliseconds to seconds.
 
-    Returns a list of ``{start, end, text, words}`` dicts (empty list when
-    no final results with text are found).
+def _clean_word(text: Any) -> str:
+    """Normalise a transformers word token (which often has a leading space)."""
+    return str(text or "").strip()
+
+
+def chunks_to_segments(
+    chunks: Any, max_segment_seconds: float = MAX_SEGMENT_SECONDS
+) -> list[dict[str, Any]]:
+    """Group transformers word chunks into subtitle-sized segment dicts.
+
+    ``chunks`` is the ``result["chunks"]`` list a transformers ASR pipeline
+    returns for ``return_timestamps="word"`` — each entry a dict with
+    ``"text"`` and ``"timestamp": (start, end)`` (seconds). A ``None`` in the
+    timestamp tuple (the pipeline can't always time the final token) skips that
+    word. Returns ``[{start, end, text, words:[{word,start,end,probability}]}]``;
+    an empty list when there are no usable timed words. Pure — no model needed.
     """
     segments: list[dict[str, Any]] = []
-    try:
-        response_list = list(results)
-    except Exception:  # noqa: BLE001
+    if not chunks:
         return segments
-
-    for response in response_list:
-        inner_results = getattr(response, "results", None)
-        if not inner_results:
+    current: list[dict[str, Any]] = []
+    seg_start: float | None = None
+    for ch in chunks:
+        if not isinstance(ch, dict):
             continue
-        for result in inner_results:
-            # is_final defaults to True when absent (old / simple mocks).
-            if not getattr(result, "is_final", True):
-                continue
-            alternatives = getattr(result, "alternatives", None)
-            if not alternatives:
-                continue
-            alt = alternatives[0]
-            transcript = (getattr(alt, "transcript", None) or "").strip()
-            if not transcript:
-                continue
-
-            word_list: list[dict[str, Any]] = []
-            raw_words = getattr(alt, "words", None) or []
-            seg_start = 0.0
-            seg_end = 0.0
-            for i, w in enumerate(raw_words):
-                start_s = float(getattr(w, "start_time", 0)) / 1000.0
-                end_s = float(getattr(w, "end_time", 0)) / 1000.0
-                word_text = str(getattr(w, "word", ""))
-                confidence = float(getattr(w, "confidence", 1.0))
-                word_list.append({
-                    "start": start_s,
-                    "end": end_s,
-                    "word": word_text,
-                    "probability": confidence,
-                })
-                if i == 0:
-                    seg_start = start_s
-                seg_end = end_s
-
-            segments.append({
-                "start": seg_start,
-                "end": seg_end,
-                "text": transcript,
-                "words": word_list,
-            })
-
+        ts = ch.get("timestamp")
+        if not ts or len(ts) < 2 or ts[0] is None or ts[1] is None:
+            continue
+        start = float(ts[0])
+        end = float(ts[1])
+        word = _clean_word(ch.get("text"))
+        current.append({
+            "word": word,
+            "start": start,
+            "end": end,
+            "probability": 1.0,
+        })
+        if seg_start is None:
+            seg_start = start
+        if end - seg_start >= max_segment_seconds:
+            segments.append(_make_segment(current, seg_start, end))
+            current = []
+            seg_start = None
+    if current:
+        segments.append(
+            _make_segment(current, current[0]["start"], current[-1]["end"])
+        )
     return segments
 
 
-def classify_riva_error(exc: Any) -> str:
-    """Map a gRPC / Riva exception to a clear, user-facing message.
+def _make_segment(
+    words: list[dict[str, Any]], start: float, end: float
+) -> dict[str, Any]:
+    text = " ".join(w["word"] for w in words if w["word"])
+    text = " ".join(text.split())  # collapse any double spaces
+    return {
+        "start": float(start),
+        "end": float(end),
+        "text": text,
+        "words": [dict(w) for w in words],
+    }
 
-    Duck-typed: if ``exc`` has a ``.code()`` method whose ``str()`` value
-    contains a known gRPC status name, return a human-readable message;
-    otherwise fall through to a generic stringified message. Never raises.
+
+def text_to_segment(text: Any, start: float, end: float) -> list[dict[str, Any]]:
+    """Wrap a window's plain text into a single timed segment (no word timings).
+
+    Used when the model returns text only. Returns ``[]`` for empty text so a
+    silent / music-only window contributes nothing.
     """
-    code_str = ""
-    details_str = ""
-    try:
-        code_str = str(exc.code())
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        details_str = str(exc.details())
-    except Exception:  # noqa: BLE001
-        pass
+    clean = " ".join(str(text or "").split())
+    if not clean:
+        return []
+    return [{
+        "start": float(start),
+        "end": float(max(end, start)),
+        "text": clean,
+        "words": [],
+    }]
 
-    if "UNAUTHENTICATED" in code_str or "PERMISSION_DENIED" in code_str:
+
+def friendly_load_error(exc: Any) -> str:
+    """Turn a model-load exception into a clear, user-facing message."""
+    msg = str(exc)
+    low = msg.lower()
+    if "librosa" in low:
         return (
-            "NVIDIA API key is invalid or missing. Get a free key at "
-            "build.nvidia.com -> Nemotron ASR Streaming -> Get API Key, "
-            f"then paste it in Advanced > Backend. [{code_str}] {details_str}"
-        ).strip()
-    if "RESOURCE_EXHAUSTED" in code_str:
+            "The local NVIDIA ASR model needs the 'librosa' package, which "
+            "did not install. Try again, or install it manually: "
+            f"pip install librosa. [{msg[:200]}]"
+        )
+    if any(k in low for k in ("not a local folder", "is not a valid", "404", "repository not found")):
         return (
-            "NVIDIA free-tier quota reached for this API key. Wait for the "
-            "quota to reset, or check your usage at build.nvidia.com. "
-            f"[{code_str}] {details_str}"
-        ).strip()
-    if "UNAVAILABLE" in code_str:
-        return (
-            "NVIDIA Riva ASR servers are unreachable (offline or blocked). "
-            f"Check your network and retry. [{code_str}] {details_str}"
-        ).strip()
-    if "INVALID_ARGUMENT" in code_str:
-        return (
-            "NVIDIA ASR rejected the audio or configuration (bad format, "
-            "unsupported language code, etc.). "
-            f"[{code_str}] {details_str}"
-        ).strip()
-    # Generic fallback.
-    return f"NVIDIA ASR error: {exc}"
+            "Could not find the model. Set 'nvidia_asr_model_id' in Advanced > "
+            "Backend to a valid Hugging Face id or a local folder, and make "
+            f"sure you are online for the first download. [{msg[:200]}]"
+        )
+    return f"Could not load the local NVIDIA ASR model: {msg[:300]}"
 
 
 # ---------------------------------------------------------------- backend
 
 
 class NvidiaAsrBackend(Backend):
-    """NVIDIA Nemotron 3.5 ASR cloud transcription backend.
+    """Local transformers ASR backend (default: NVIDIA Parakeet TDT v3).
 
-    Stateless apart from the API key / server config read from config at
-    load(). Each transcribe_to_segments call decodes the audio to 16 kHz
-    mono PCM WAV chunks, streams each chunk to NVCF, and stitches the
-    chunk-relative timestamps onto the global timeline.
-
-    The nvidia-riva-client gRPC package is NOT bundled; it is installed on
-    first use via core.optional_deps.
+    Loads a Hugging Face ``automatic-speech-recognition`` pipeline once per
+    worker and transcribes each file by decoding it to 16 kHz mono PCM (bundled
+    ffmpeg), running the pipeline window-by-window for progress + cancel,
+    building segments (word timestamps when the model supports them, else one
+    segment per window), and stitching them onto the global timeline. No audio
+    leaves the machine.
     """
 
     name = "nvidia_asr"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config = config
-        self._api_key: str = ""
-        self._server: str = NVIDIA_SERVER
-        self._function_id: str = NVIDIA_FUNCTION_ID
+        self._model_id: str = DEFAULT_MODEL_ID
+        self._device_cfg: str = "auto"
+        self._dtype_cfg: str = "auto"
         self._chunk_seconds: float = DEFAULT_CHUNK_SECONDS
-        self._language: str = ""
+        self._device: str = "cpu"
         self._error: str | None = None
         self._ready = False
         self._lock = threading.Lock()
-        # Cached ASRService and Auth — built once per transcription worker.
-        self._asr: Any = None
+        self._pipe: Any = None
+        #: None = not probed yet; True/False = does the model return word
+        #: timestamps. Probed once on the first window, then reused.
+        self._supports_word_ts: bool | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
     def _cfg(self) -> dict[str, Any]:
         return self._config if self._config is not None else load_config()
+
+    def _read_config(self) -> None:
+        cfg = self._cfg()
+        self._model_id = (
+            str(cfg.get("nvidia_asr_model_id") or "").strip() or DEFAULT_MODEL_ID
+        )
+        self._device_cfg = str(cfg.get("nvidia_asr_device") or "auto").strip() or "auto"
+        self._dtype_cfg = str(cfg.get("nvidia_asr_dtype") or "auto").strip() or "auto"
+        try:
+            self._chunk_seconds = float(
+                cfg.get("nvidia_asr_chunk_seconds") or DEFAULT_CHUNK_SECONDS
+            )
+        except (TypeError, ValueError):
+            self._chunk_seconds = DEFAULT_CHUNK_SECONDS
+        if self._chunk_seconds <= 0:
+            self._chunk_seconds = DEFAULT_CHUNK_SECONDS
 
     def load(
         self,
@@ -252,41 +260,85 @@ class NvidiaAsrBackend(Backend):
     ) -> bool:
         self._ready = False
         self._error = None
-        self._asr = None
-        cfg = self._cfg()
-        self._api_key = str(cfg.get("nvidia_asr_api_key") or "").strip()
-        self._server = str(cfg.get("nvidia_asr_server") or NVIDIA_SERVER).strip() or NVIDIA_SERVER
-        self._function_id = (
-            str(cfg.get("nvidia_asr_function_id") or NVIDIA_FUNCTION_ID).strip()
-            or NVIDIA_FUNCTION_ID
-        )
-        try:
-            self._chunk_seconds = float(cfg.get("nvidia_asr_chunk_seconds") or DEFAULT_CHUNK_SECONDS)
-        except (TypeError, ValueError):
-            self._chunk_seconds = DEFAULT_CHUNK_SECONDS
-        self._language = str(cfg.get("nvidia_asr_language") or "").strip()
+        self._pipe = None
+        self._supports_word_ts = None
+        self._read_config()
 
-        if not self._api_key:
-            self._error = (
-                "No NVIDIA API key set — get a free key at build.nvidia.com "
-                "(Nemotron ASR Streaming -> Get API Key) and paste it in "
-                "Advanced > Backend."
-            )
+        # Ensure transformers/torch/librosa are importable; install on demand
+        # (mirrors the openai-whisper / google_cloud_stt on-demand pattern).
+        if not _transformers_available():
+            if status_cb:
+                status_cb(
+                    "Installing local NVIDIA ASR engine (transformers + torch + "
+                    "librosa) — one-time, this can take several minutes…"
+                )
+            try:
+                from .. import optional_deps
+
+                optional_deps.install("nvidia_asr", status_cb, cancel_event)
+            except Exception as e:  # noqa: BLE001
+                self._error = (
+                    "Could not install the local NVIDIA ASR dependencies "
+                    f"(transformers + torch + librosa): {e}"
+                )
+                if status_cb:
+                    status_cb(self._error)
+                return False
+            if not _transformers_available():
+                self._error = (
+                    "The local NVIDIA ASR dependencies did not import after "
+                    "installation. Install manually: pip install transformers "
+                    "torch librosa."
+                )
+                if status_cb:
+                    status_cb(self._error)
+                return False
+
+        try:
+            import torch  # type: ignore
+            from transformers import pipeline  # type: ignore
+        except Exception as e:  # noqa: BLE001
+            self._error = f"transformers / torch not available: {e}"
             if status_cb:
                 status_cb(self._error)
             return False
 
-        # Do NOT import riva at load — stay offline-safe and fast.
-        # The key is validated on the first real transcription request.
+        cuda = False
+        try:
+            cuda = bool(torch.cuda.is_available())
+        except Exception:  # noqa: BLE001
+            cuda = False
+        self._device = resolve_device(self._device_cfg, cuda)
+        dtype_name = resolve_dtype(self._dtype_cfg, self._device)
+        # getattr avoids pyright's "float16 is not exported from torch" and is
+        # robust if a future torch renames a dtype.
+        torch_dtype = getattr(torch, dtype_name, None)
+        device_arg = 0 if self._device.startswith("cuda") else -1
+
+        if status_cb:
+            status_cb(
+                f"Loading {self._model_id} on {self._device} "
+                "(first run downloads the model)…"
+            )
+        try:
+            self._pipe = _build_pipeline(
+                pipeline, self._model_id, device_arg, torch_dtype
+            )
+        except Exception as e:  # noqa: BLE001
+            self._error = friendly_load_error(e)
+            if status_cb:
+                status_cb(self._error)
+            return False
+
         self._ready = True
         if status_cb:
-            status_cb("NVIDIA Nemotron ASR ready.")
+            status_cb(f"NVIDIA Parakeet ready ({self._model_id}, {self._device}).")
         if progress_cb:
             progress_cb({
                 "phase": "loaded",
-                "status": "NVIDIA ASR backend ready",
+                "status": "NVIDIA Parakeet ready",
                 "percent": 100,
-                "detail": "Nemotron 3.5 ASR",
+                "detail": self._model_id,
             })
         return True
 
@@ -296,7 +348,37 @@ class NvidiaAsrBackend(Backend):
     def get_error(self) -> str | None:
         return self._error
 
+    def unload(self) -> None:
+        self._pipe = None
+        self._ready = False
+
     # -- transcription -------------------------------------------------------
+
+    def _run_pipe(self, audio: Any) -> tuple[Any, bool]:
+        """Run the pipeline on one window's audio array.
+
+        Returns ``(result, has_word_chunks)``. Tries word timestamps once; if
+        the model doesn't support them (many transducer models raise), caches
+        that and uses the plain-text call for the rest of the file.
+        """
+        if self._supports_word_ts is not False:
+            try:
+                res = self._pipe(
+                    {"raw": audio, "sampling_rate": TARGET_SR},
+                    return_timestamps="word",
+                    chunk_length_s=PIPELINE_CHUNK_LENGTH_S,
+                )
+                has = bool(isinstance(res, dict) and res.get("chunks"))
+                self._supports_word_ts = has
+                if has:
+                    return res, True
+            except Exception:  # noqa: BLE001 — model lacks word-timestamp path
+                self._supports_word_ts = False
+        # Build a FRESH input dict: the transformers ASR pipeline consumes /
+        # mutates the dict it is handed during preprocess, so the fallback call
+        # must not reuse one a prior (failed word-timestamp) call already
+        # touched — that previously raised "dict needs a 'raw' key".
+        return self._pipe({"raw": audio, "sampling_rate": TARGET_SR}), False
 
     def transcribe_to_segments(
         self,
@@ -316,78 +398,31 @@ class NvidiaAsrBackend(Backend):
     ) -> tuple[list[dict[str, Any]], LanguageInfo]:
         with self._lock:
             if not self.is_ready() and not self.load(log_cb):
-                raise RuntimeError(self._error or "NVIDIA ASR backend not ready")
-        if not self._api_key:
-            raise RuntimeError(
-                self._error or "No NVIDIA API key set for the NVIDIA ASR backend."
-            )
+                raise RuntimeError(self._error or "NVIDIA Parakeet backend not ready")
+        if self._pipe is None:
+            raise RuntimeError(self._error or "NVIDIA Parakeet model not loaded")
 
-        # Lazy-import nvidia-riva-client; install on demand when absent.
-        try:
-            import riva.client  # type: ignore
-        except ImportError:
-            try:
-                from .. import optional_deps
-                if log_cb:
-                    log_cb("NVIDIA ASR: installing nvidia-riva-client (one-time)...")
-                optional_deps.install("nvidia_asr", log_cb)
-                import riva.client  # type: ignore
-            except ImportError as e:
-                raise RuntimeError(
-                    "Could not import nvidia-riva-client even after an on-demand "
-                    "install attempt. Check your internet connection or install "
-                    "manually: pip install nvidia-riva-client. "
-                    f"Details: {e}"
-                ) from e
-
-        # Resolve duration for chunk planning.
         effective_duration = duration
         if effective_duration <= 0:
             try:
                 from ..transcriber import get_duration
+
                 effective_duration = float(get_duration(audio_path) or 0.0)
             except Exception:  # noqa: BLE001
                 effective_duration = 0.0
-            if log_cb and effective_duration > 0:
-                log_cb(
-                    f"NVIDIA ASR: probed duration {effective_duration:.0f}s "
-                    "for chunk planning."
-                )
 
         chunks = plan_chunks(
             effective_duration, self._chunk_seconds, chunk_when_unknown=True
         )
         total = len(chunks)
-
-        # Resolve locale once for all chunks.
-        locale = normalize_language_code(language or self._language)
-
+        duration_unknown = effective_duration <= 0
         if log_cb:
             log_cb(
-                f"NVIDIA ASR: streaming {total} chunk(s) to NVIDIA Riva "
-                f"(locale {locale}). Audio leaves this machine."
+                f"NVIDIA Parakeet: transcribing {total} window(s) locally "
+                f"({self._model_id}, {self._device})."
             )
 
-        # Build or reuse the ASRService.
-        if self._asr is None:
-            try:
-                auth = riva.client.Auth(  # type: ignore[attr-defined]
-                    use_ssl=True,
-                    uri=self._server,
-                    metadata_args=[
-                        ["function-id", self._function_id],
-                        ["authorization", "Bearer " + self._api_key],
-                    ],
-                )
-                self._asr = riva.client.ASRService(auth)  # type: ignore[attr-defined]
-            except Exception as exc:  # noqa: BLE001
-                raise RuntimeError(
-                    f"Could not initialise NVIDIA Riva ASRService: {exc}"
-                ) from exc
-
         all_segments: list[dict[str, Any]] = []
-        duration_unknown = effective_duration <= 0
-
         for idx, (chunk_start, chunk_end) in enumerate(chunks):
             if cancelled and cancelled():
                 if log_cb:
@@ -396,66 +431,33 @@ class NvidiaAsrBackend(Backend):
             while paused and paused() and not (cancelled and cancelled()):
                 time.sleep(0.2)
 
-            wav_path = _encode_chunk_wav(audio_path, chunk_start, chunk_end)
-            try:
-                # Unknown-length: stop once we slice past EOF (empty WAV).
-                if duration_unknown and idx > 0:
-                    try:
-                        wav_size = os.path.getsize(wav_path)
-                    except OSError:
-                        wav_size = 0
-                    # An empty past-EOF slice decodes to just the WAV header;
-                    # a real chunk is far larger (see _EMPTY_WAV_BYTES).
-                    if wav_size < _EMPTY_WAV_BYTES:
-                        if log_cb:
-                            log_cb(
-                                "NVIDIA ASR: reached end of file "
-                                f"after {idx} chunk(s)."
-                            )
-                        break
-
-                cfg_obj = riva.client.RecognitionConfig(  # type: ignore[attr-defined]
-                    encoding=riva.client.AudioEncoding.LINEAR_PCM,  # type: ignore[attr-defined]
-                    sample_rate_hertz=16000,
-                    audio_channel_count=1,
-                    language_code=locale,
-                    max_alternatives=1,
-                    enable_automatic_punctuation=True,
-                    enable_word_time_offsets=True,
-                )
-                streaming_cfg = riva.client.StreamingRecognitionConfig(  # type: ignore[attr-defined]
-                    config=cfg_obj,
-                    interim_results=False,
-                )
-                audio_chunks = riva.client.AudioChunkFileIterator(  # type: ignore[attr-defined]
-                    wav_path,
-                    chunk_n_frames=1600,
-                )
-                try:
-                    responses = self._asr.streaming_response_generator(
-                        audio_chunks=audio_chunks,
-                        streaming_config=streaming_cfg,
+            audio = _decode_window(audio_path, chunk_start, chunk_end)
+            # Unknown-length: a slice past EOF decodes to ~nothing -> stop.
+            if duration_unknown and idx > 0 and audio.size < _EMPTY_PCM_SAMPLES:
+                if log_cb:
+                    log_cb(
+                        f"NVIDIA Parakeet: reached end of file after {idx} window(s)."
                     )
-                    # Materialise the stream HERE so a gRPC error (bad key,
-                    # quota exhausted, server unreachable) surfaces to the
-                    # classifier below. If we instead handed the lazy generator
-                    # straight to results_to_segments, its defensive
-                    # ``list(results)`` guard would swallow that error and the
-                    # chunk would look like "0 segments" — hiding an auth /
-                    # quota failure as a silent empty transcript. The pure
-                    # parser then only ever sees a concrete list.
-                    response_list = list(responses)
-                except Exception as exc:  # noqa: BLE001
-                    # Classify gRPC / Riva errors into a clear user message.
-                    raise RuntimeError(classify_riva_error(exc)) from exc
-                seg = results_to_segments(response_list)
+                break
+            if audio.size == 0:
+                continue
 
-            finally:
-                try:
-                    os.unlink(wav_path)
-                except OSError:
-                    pass
+            win_len = float(audio.size) / TARGET_SR
+            try:
+                with liveness_tick(
+                    log_cb, f"NVIDIA Parakeet window {idx + 1}/{total}"
+                ):
+                    result, has_words = self._run_pipe(audio)
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(
+                    f"NVIDIA Parakeet transcription failed: {e}"
+                ) from e
 
+            if has_words and isinstance(result, dict):
+                seg = chunks_to_segments(result.get("chunks"))
+            else:
+                text = result.get("text") if isinstance(result, dict) else result
+                seg = text_to_segment(text, 0.0, win_len)
             seg = offset_segments(seg, chunk_start)
             all_segments.extend(seg)
 
@@ -463,7 +465,7 @@ class NvidiaAsrBackend(Backend):
                 progress_cb(min(100, int(((idx + 1) / max(total, 1)) * 100)))
             if log_cb:
                 log_cb(
-                    f"NVIDIA ASR: chunk {idx + 1}/{total} -> "
+                    f"NVIDIA Parakeet: window {idx + 1}/{total} -> "
                     f"{len(seg)} segment(s)."
                 )
 
@@ -471,7 +473,9 @@ class NvidiaAsrBackend(Backend):
             for s in all_segments:
                 s.setdefault("words", [])
 
-        detected = language or self._language or ""
+        # Parakeet returns no language-ID signal; report the forced hint when
+        # given, else leave it blank (handled gracefully downstream).
+        detected = language or ""
         return all_segments, LanguageInfo(
             language=detected, probability=1.0 if detected else 0.0
         )
@@ -480,20 +484,48 @@ class NvidiaAsrBackend(Backend):
 # ---------------------------------------------------------------- helpers
 
 
-def _encode_chunk_wav(
-    audio_path: str, start_seconds: float, end_seconds: float
-) -> str:
-    """Decode ``audio_path[start:end]`` to a temp 16 kHz mono PCM-s16le WAV.
+def _transformers_available() -> bool:
+    """True iff the transformers package can be imported. Never raises."""
+    try:
+        import importlib.util
 
-    Uses the bundled ffmpeg (same approach as the cloud_stt backend) so the
-    NVIDIA ASR backend accepts every format the other backends do. Returns
-    the temp file path; the caller deletes it.
-    ``end_seconds <= start_seconds`` means "to end of file".
+        return importlib.util.find_spec("transformers") is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _build_pipeline(
+    pipeline: Any, model_id: str, device_arg: int, torch_dtype: Any
+) -> Any:
+    """Build the ASR pipeline, tolerating the transformers dtype-kwarg rename.
+
+    transformers 5.x renamed ``torch_dtype`` -> ``dtype`` (the old name is
+    deprecated). Try the new name first, fall back to the old one so the
+    backend works across versions. ``torch_dtype`` None lets the pipeline pick.
     """
-    from ..paths import bundled_binary
+    kwargs: dict[str, Any] = {"model": model_id, "device": device_arg}
+    if torch_dtype is not None:
+        try:
+            return pipeline(
+                "automatic-speech-recognition", dtype=torch_dtype, **kwargs
+            )
+        except TypeError:
+            return pipeline(
+                "automatic-speech-recognition", torch_dtype=torch_dtype, **kwargs
+            )
+    return pipeline("automatic-speech-recognition", **kwargs)
 
-    fd, out_path = tempfile.mkstemp(prefix="nvidiaasr-", suffix=CHUNK_EXT)
-    os.close(fd)
+
+def _decode_window(audio_path: str, start_seconds: float, end_seconds: float) -> Any:
+    """Decode ``audio_path[start:end]`` to a 16 kHz mono float32 numpy array.
+
+    Uses the bundled ffmpeg, streaming raw PCM via a pipe (no temp file). An
+    ``end <= start`` window means "to end of file"; a window past EOF decodes to
+    an empty array. Returns a numpy float32 array in [-1, 1].
+    """
+    import numpy as np  # type: ignore
+
+    from ..paths import bundled_binary
 
     ffmpeg = bundled_binary("ffmpeg")
     cmd = [ffmpeg, "-nostdin", "-loglevel", "error", "-y"]
@@ -502,35 +534,34 @@ def _encode_chunk_wav(
     cmd += ["-i", audio_path]
     if end_seconds > start_seconds:
         cmd += ["-t", f"{end_seconds - start_seconds:.3f}"]
-    cmd += ["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", out_path]
+    cmd += [
+        "-ac", "1", "-ar", str(TARGET_SR),
+        "-f", "s16le", "-acodec", "pcm_s16le", "pipe:1",
+    ]
 
-    kwargs: dict[str, Any] = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "check": True,
-    }
+    kwargs: dict[str, Any] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE}
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     try:
-        subprocess.run(cmd, **kwargs)
+        proc = subprocess.run(cmd, **kwargs)
     except (FileNotFoundError, OSError) as e:
-        try:
-            os.unlink(out_path)
-        except OSError:
-            pass
         raise RuntimeError(
-            "ffmpeg is required to prepare audio for the NVIDIA ASR backend "
-            "but was not found. Use the default engine, or install ffmpeg."
+            "ffmpeg is required to prepare audio for the NVIDIA Parakeet "
+            "backend but was not found. Use the default engine, or install "
+            "ffmpeg."
         ) from e
-    except subprocess.CalledProcessError as e:
-        try:
-            os.unlink(out_path)
-        except OSError:
-            pass
-        detail = (e.stderr or b"").decode("utf-8", "replace").strip()[-400:]
+
+    pcm = proc.stdout or b""
+    if proc.returncode != 0 and not pcm:
+        # A slice that starts past EOF often returns non-zero with no output —
+        # treat that as an empty window rather than an error.
+        return np.frombuffer(b"", dtype=np.int16).astype(np.float32)
+    if proc.returncode != 0:
+        detail = (proc.stderr or b"").decode("utf-8", "replace").strip()[-400:]
         raise RuntimeError(
-            "ffmpeg could not prepare this file for the NVIDIA ASR backend "
-            "(it may be corrupt or an unsupported format): "
+            "ffmpeg could not prepare this file for the NVIDIA Parakeet "
+            f"backend (it may be corrupt or an unsupported format): "
             f"{detail or 'no error output'}"
-        ) from e
-    return out_path
+        )
+    # int16 little-endian PCM -> float32 in [-1, 1].
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0

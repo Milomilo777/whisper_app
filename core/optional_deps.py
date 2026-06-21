@@ -52,11 +52,12 @@ FEATURES: dict[str, tuple[str, list[str]]] = {
         "google.cloud.speech_v2",
         ["google-cloud-speech", "google-cloud-storage"],
     ),
-    # NVIDIA Nemotron 3.5 ASR backend (gRPC streaming via NVCF). The
-    # nvidia-riva-client package pulls grpcio + protobuf; it is NOT
-    # bundled so it installs on first use. The probe import is the top-level
-    # riva.client namespace.
-    "nvidia_asr": ("riva.client", ["nvidia-riva-client"]),
+    # Local NVIDIA Parakeet / FastConformer ASR backend via Hugging Face
+    # transformers. Pulls torch + librosa (the ParakeetFeatureExtractor needs
+    # librosa for its mel front-end). Hundreds of MB to GBs; like the other
+    # torch-based features it is NOT bundled and installs on first use. The
+    # probe import is the top-level transformers package.
+    "nvidia_asr": ("transformers", ["transformers", "torch", "librosa"]),
 }
 
 
