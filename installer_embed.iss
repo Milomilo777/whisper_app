@@ -80,6 +80,7 @@ Type: files; Name: "{app}\gui.py"
 Type: files; Name: "{app}\sitecustomize.py"
 Type: files; Name: "{app}\no_tiling.flag"
 Type: dirifempty; Name: "{app}"
+Type: files; Name: "{localappdata}\WhisperProject\config.json"
 
 [Code]
 // --------------------------------------------------------------------
