@@ -193,7 +193,6 @@ a = Analysis(
         'core.backends.base',
         'core.backends.faster_whisper_be',
         'core.backends.whisper_cpp',
-        'core.backends.parakeet',
         'core.backends.cloud_stt',
         'core.backends.google_cloud_stt',
         'core.backends.nvidia_asr',

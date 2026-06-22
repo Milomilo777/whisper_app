@@ -3,7 +3,7 @@ Transcribe-tab time range.
 
 Before the fix, ``_transcribe_via_alt_backend`` ignored ``task.clip_start`` /
 ``task.clip_end`` entirely — the backend interface has no clip parameter — so
-a clipped request on a non-default engine (whisper_cpp / parakeet) silently
+a clipped request on a non-default engine (whisper_cpp / nvidia_asr) silently
 transcribed AND wrote the WHOLE file. The fix slices ``[start, end]`` into a
 temp WAV, transcribes that, and offsets the returned segments back onto the
 original timeline (mirroring the resume path), writing no whole-file-keyed

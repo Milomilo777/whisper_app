@@ -231,7 +231,8 @@ def build_about_sections() -> list[AboutSection]:
                 "offline, nothing leaves your computer",
                 "whisper.cpp via pywhispercpp — optional, quantised, "
                 "kinder to weak CPUs",
-                "Parakeet TDT v3 via sherpa-onnx — optional, also offline",
+                "NVIDIA Parakeet TDT v3 via transformers — optional, "
+                "local, multilingual",
                 "Switch in the Advanced dialog under Backend",
             ]),
             ("Cloud transcription (optional, uploads your audio)", [

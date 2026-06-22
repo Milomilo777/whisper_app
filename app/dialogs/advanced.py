@@ -52,7 +52,6 @@ _SPONSORBLOCK_CATEGORIES = [
 _BACKEND_CHOICES: list[tuple[str, str]] = [
     ("Faster-Whisper — offline, default", "faster_whisper"),
     ("whisper.cpp — offline, low-end CPUs", "whisper_cpp"),
-    ("Parakeet — offline, NVIDIA", "parakeet"),
     ("Gemini cloud — simple API key", "cloud_stt"),
     (
         "Google Cloud Speech-to-Text — service account (60 min/mo free)",

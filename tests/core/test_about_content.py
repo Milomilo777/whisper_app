@@ -64,6 +64,7 @@ def test_whats_new_section_is_first():
         "faster-whisper",
         "whisper.cpp",
         "parakeet",
+        "transformers",
         "offline",
         # Web / LAN access.
         "web / lan access",

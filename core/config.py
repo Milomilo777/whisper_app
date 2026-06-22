@@ -124,7 +124,7 @@ DEFAULT_CONFIG = {
     # v0.7.1 — backend selection. The default is resolved dynamically: a
     # trusted build that ships a Google Cloud key defaults to cloud STT so it
     # works out of the box; a plain source checkout (no key) stays offline on
-    # faster_whisper. whisper_cpp/parakeet are opt-in; a user's saved choice
+    # faster_whisper. whisper_cpp/nvidia_asr are opt-in; a user's saved choice
     # always wins via the local-config merge layer.
     "transcribe_backend": _default_transcribe_backend(),
     # OPTIONAL cloud Speech-to-Text backend (Google Gemini API). Off
@@ -185,7 +185,7 @@ DEFAULT_CONFIG = {
     # FastConformer model; point model_id at any transformers
     # automatic-speech-recognition model (a HF repo id OR a local dir path).
     # (NVIDIA's exact nemotron-3.5-asr checkpoint ships only a NeMo .nemo file
-    # which transformers cannot load, so its parakeet sibling is the default.)
+    # which transformers cannot load, so its Parakeet sibling is the default.)
     #   nvidia_asr_model_id      : HF repo id OR local dir path of the model.
     #   nvidia_asr_device        : "auto" | "cpu" | "cuda".
     #   nvidia_asr_dtype         : "auto" | "float32" | "float16".

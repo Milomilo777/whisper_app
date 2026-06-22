@@ -25,7 +25,6 @@ from typing import Any, Callable, Mapping
 ENGINE_CHOICES: list[tuple[str, str]] = [
     ("Faster-Whisper — offline, default", "faster_whisper"),
     ("whisper.cpp — offline, low-end CPUs", "whisper_cpp"),
-    ("Parakeet — offline, NVIDIA", "parakeet"),
     ("Gemini cloud — simple API key", "cloud_stt"),
     (
         "Google Cloud Speech-to-Text — service account (60 min/mo free)",
@@ -171,16 +170,6 @@ def _whisper_cpp_status(cfg: Mapping[str, Any]) -> EngineStatus:
         return EngineStatus("whisper_cpp", False, str(e) or "unavailable")
 
 
-def _parakeet_status(cfg: Mapping[str, Any]) -> EngineStatus:
-    try:
-        from . import parakeet
-
-        reason = parakeet.availability_reason()
-        return EngineStatus("parakeet", not reason, reason)
-    except Exception as e:  # noqa: BLE001
-        return EngineStatus("parakeet", False, str(e) or "unavailable")
-
-
 def _cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
     if str(cfg.get("cloud_stt_api_key") or "").strip():
         return EngineStatus("cloud_stt", True, "")
@@ -235,7 +224,6 @@ def _google_cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
 _PROBES: dict[str, Callable[[Mapping[str, Any]], EngineStatus]] = {
     "faster_whisper": _faster_whisper_status_deep,
     "whisper_cpp": _whisper_cpp_status,
-    "parakeet": _parakeet_status,
     "cloud_stt": _cloud_stt_status,
     "google_cloud_stt": _google_cloud_stt_status,
     "nvidia_asr": _nvidia_asr_status,
@@ -248,8 +236,8 @@ def engine_status(value: Any, cfg: Mapping[str, Any], *, deep: bool = True) -> E
     ``deep=True`` runs the honest import-based probes (used by the Advanced
     dialog + tests). ``deep=False`` is the cheap path for the always-on
     Transcribe-tab status line: it does NO heavy import at startup — cloud
-    readiness keys off the credential, offline whisper.cpp/parakeet are
-    assumed present (a run surfaces any gap), faster-whisper keeps its
+    readiness keys off the credential, offline whisper.cpp is assumed
+    present (a run surfaces any gap), faster-whisper keeps its
     filesystem check.
     """
     engine = normalise_engine(value)
