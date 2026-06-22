@@ -496,6 +496,32 @@ def test_smtv_writer_returns_valid_docx_zip():
     assert payload[:4] == b"PK\x03\x04", payload[:8]
 
 
+def test_smtv_writer_stamps_modified_time_as_now():
+    """The bundled template's own "modified" date must not leak through —
+    every generated docx should report a fresh modified timestamp, not the
+    template author's original one."""
+    import datetime
+
+    from docx import Document  # type: ignore
+
+    from core.writers import smtv_docx_writer
+
+    template_modified = Document(smtv_docx_writer.template_path()).core_properties.modified
+
+    before = datetime.datetime.now(datetime.timezone.utc)
+    segs = [{"start": 0.0, "end": 1.0, "text": "hello"}]
+    payload = smtv_docx_writer.write_bytes(
+        segs, "Episode 1.mp4", language="ko", work_title="Episode 1"
+    )
+    after = datetime.datetime.now(datetime.timezone.utc)
+
+    import io as _io
+    out_modified = Document(_io.BytesIO(payload)).core_properties.modified
+    assert out_modified is not None
+    assert out_modified != template_modified
+    assert before - datetime.timedelta(seconds=5) <= out_modified <= after + datetime.timedelta(seconds=5)
+
+
 def test_smtv_writer_fills_title_header_and_marker():
     from core.writers import smtv_docx_writer
 

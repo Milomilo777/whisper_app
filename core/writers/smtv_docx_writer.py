@@ -41,6 +41,7 @@ registered under ``BINARY_WRITERS`` via :func:`write` which raises, so
 from __future__ import annotations
 
 import copy
+import datetime
 import io
 import math
 import os
@@ -390,6 +391,11 @@ def write_bytes(
             _set_cell_text(cells[2], body)
         # col4 = English Translation -> left empty for a translator.
         _set_cell_text(cells[3], "")
+
+    # The template's own "modified" timestamp would otherwise carry straight
+    # through into every generated docx, making each output look like it was
+    # last touched whenever the template was authored rather than now.
+    document.core_properties.modified = datetime.datetime.now(datetime.timezone.utc)
 
     buf = io.BytesIO()
     document.save(buf)
