@@ -2,9 +2,53 @@
 
 All notable changes to this project. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0] — 2026-06-22
+
+> Engine cleanup + safety release. Removes the dead-end sherpa-onnx Parakeet
+> engine in favour of the working transformers-based one, adds a "Prepare
+> model now" button for it, stops a handful of app-level config keys from
+> ever being persisted to disk, makes the Windows installers silently clean
+> up the previous version before upgrading, and fixes the SMTV docx output's
+> stale modified timestamp. pyright `app/ core/` 0/0/0; hermetic suite green.
 
 ### Added
+
+- **"Prepare Parakeet model now..." button** in Advanced settings (NVIDIA
+  Parakeet / FastConformer section) — installs `transformers`/`torch`/
+  `librosa` and downloads the model ahead of time, mirroring the existing
+  whisper.cpp download button, instead of the user discovering the wait mid-
+  transcription. New `nvidia_asr` extras group in `pyproject.toml`
+  (`transformers`/`torch`/`librosa`) for source checkouts that want to
+  pre-install the backend's deps the same way `backend_cpp`/`alignment` do.
+- Both Windows installers (`installer.iss`, `installer_embed.iss`) now
+  silently uninstall a previously-installed version (looked up via the
+  registry by the shared `AppId`) before laying down new files, so an
+  in-place upgrade can no longer leave orphaned files behind from a version
+  that removed/renamed something. The hub-folder deletion prompt is skipped
+  during that automatic step (`UninstallSilent` guard) so a multi-GB model
+  hub outside the install dir is never wiped without an explicit, interactive
+  Yes.
+
+### Changed
+
+- **Removed the incomplete sherpa-onnx `parakeet` engine** from the engine
+  picker. It duplicated the now fully-working `nvidia_asr` (transformers)
+  Parakeet backend but never got a model downloader, so selecting it just
+  produced a permanent "model files missing" warning with no way to fix it
+  from the UI.
+- `core.config.save_config` now strips `telemetry_opt_in`, `config_url`,
+  `stats_url`, `ffplay_downloads`, and `latest_version` before writing
+  `config.json` — these are re-derived from `DEFAULT_CONFIG` / the online
+  config fetch on every load, so persisting them only risked pinning a stale
+  value across an upgrade. Also cleans them out of any `config.json` that
+  already has them from before this rule existed.
+
+### Fixed
+
+- The SMTV transcription `.docx` output's "modified" document property no
+  longer carries straight through from the bundled template — every
+  generated docx now reports the actual transcription time instead of
+  whenever the template was last authored.
 
 - **Local NVIDIA Parakeet / FastConformer engine** (`nvidia_asr`) — a new
   **fully offline** transcription engine that runs a Hugging Face transformers

@@ -5,7 +5,56 @@ this repo. Read this file before anything else.
 
 ---
 
-## ⭐ CURRENT STATE (2026-06-21) — LOCAL NVIDIA Parakeet ASR engine (read FIRST)
+## ⭐ CURRENT STATE (2026-06-22) — v1.4.0: one Parakeet engine, leaner config, clean upgrades
+
+A colleague reported the Transcribe-tab "Parakeet — offline, NVIDIA" engine
+permanently warning about missing `encoder.onnx`/`decoder.onnx`/`joiner.onnx`/
+`tokens.txt`. Root cause: TWO Parakeet engines existed side by side —
+`core/backends/parakeet.py` (sherpa-onnx, never got a model downloader) and
+`core/backends/nvidia_asr.py` (transformers, fully working, added 2026-06-21).
+The colleague had picked the broken one.
+
+- **Removed `core/backends/parakeet.py`** (sherpa-onnx) entirely, with the
+  owner's explicit sign-off (AskUserQuestion → "حذف گزینه‌ی ناقص"): deleted the
+  module + its test, and every registration (`core/backends/__init__.py`,
+  `core/backends/availability.py` ENGINE_CHOICES/`_PROBES`,
+  `app/dialogs/advanced.py` `_BACKEND_CHOICES`, all 3 PyInstaller spec
+  hidden-import lists, stray comments/About text). `nvidia_asr` is now the
+  only Parakeet engine.
+- **Added a "Prepare Parakeet model now..." button** in Advanced settings
+  (`app/dialogs/advanced.py::_prepare_nvidia_asr_model`) — runs
+  `NvidiaAsrBackend().load()` in a background thread so the deps + model
+  download can happen ahead of time instead of mid-transcription. Mirrors the
+  existing whisper.cpp download button. New `nvidia_asr` extras group in
+  `pyproject.toml` for source checkouts.
+- **`core.config.save_config` strips 5 keys** before writing `config.json`
+  (`_NON_PERSISTED_KEYS`): `telemetry_opt_in`, `config_url`, `stats_url`,
+  `ffplay_downloads`, `latest_version` — all re-derived from `DEFAULT_CONFIG`
+  / the online config fetch on every load, so persisting them only risked
+  pinning a stale value across an upgrade. Cleans up any config.json that
+  already has them too.
+- **`installer.iss` / `installer_embed.iss`**: `InitializeSetup` now looks up
+  the previous version's uninstaller via the registry (same `AppId`) and runs
+  it silently before installing, so files removed/renamed between versions
+  don't linger after an in-place upgrade. `CurUninstallStepChanged` skips the
+  hub-folder deletion MsgBox when `UninstallSilent()` is true, so this never
+  risks silently deleting a multi-GB model hub during the automatic step.
+- **`core/writers/smtv_docx_writer.py`**: `document.core_properties.modified`
+  is now stamped to "now" before saving — it used to carry the bundled
+  template's own modified date straight through to every generated docx.
+- **Verification (REAL):** pyright `app/ core/` **0/0/0**; full hermetic
+  suite green (was already green pre-change; added regression tests for the
+  config-key strip and the docx modified-timestamp fix). `installer.iss` /
+  `installer_embed.iss` Pascal sections syntax-checked by compiling their
+  `[Code]` sections standalone with the real Inno Setup 6 ISCC compiler.
+- Version bumped to **1.4.0** everywhere (`core/__init__.py`, `pyproject.toml`,
+  both `.iss` files, the mac spec for parity even though macOS isn't being
+  built this release). `docs/CHANGELOG.md` + `docs/RELEASE_NOTES_v1.4.0.md`
+  updated. **Windows-only release** — no macOS build this time (owner scope).
+
+---
+
+## CURRENT STATE (2026-06-21) — LOCAL NVIDIA Parakeet ASR engine
 
 A new local transcription engine `nvidia_asr`, on `master` and **pushed**.
 
