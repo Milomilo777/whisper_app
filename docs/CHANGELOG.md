@@ -27,7 +27,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   that removed/renamed something. The hub-folder deletion prompt is skipped
   during that automatic step (`UninstallSilent` guard) so a multi-GB model
   hub outside the install dir is never wiped without an explicit, interactive
-  Yes.
+  Yes. `installer_embed.iss` also moved its `config.json` cleanup (added by a
+  colleague's `167ccf8`, originally an unconditional `[UninstallDelete]`
+  entry) into the same `UninstallSilent`-guarded code path — otherwise every
+  silent upgrade triggered by the new pre-install step above would have
+  wiped the user's `hub_folder`, API keys, and preferences on every release.
 
 ### Changed
 

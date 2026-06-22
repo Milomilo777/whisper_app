@@ -80,7 +80,6 @@ Type: files; Name: "{app}\gui.py"
 Type: files; Name: "{app}\sitecustomize.py"
 Type: files; Name: "{app}\no_tiling.flag"
 Type: dirifempty; Name: "{app}"
-Type: files; Name: "{localappdata}\WhisperProject\config.json"
 
 [Code]
 // --------------------------------------------------------------------
@@ -214,7 +213,7 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  HubFolder, AppFolder, Msg, MarkerPath: string;
+  HubFolder, AppFolder, Msg, MarkerPath, ConfigPath: string;
 begin
   // Remove the optional-feature marker (created post-install when the
   // user opted out of Video Tiling). [UninstallDelete] also covers it,
@@ -227,24 +226,31 @@ begin
   if CurUninstallStep <> usPostUninstall then
     Exit;
   // A silent uninstall only ever happens automatically, as the
-  // pre-install step above for an in-place upgrade — never ask to
+  // pre-install step above for an in-place upgrade — never touch the
+  // user's config.json (hub_folder, API keys, preferences) or ask to
   // delete a multi-GB model hub folder in that unattended path.
   if UninstallSilent() then
     Exit;
+  // Read hub_folder out of config.json BEFORE deleting it below.
   HubFolder := ExtractHubFolder();
-  if (HubFolder = '') or (not DirExists(HubFolder)) then
-    Exit;
   AppFolder := ExpandConstant('{app}');
-  if IsPathInside(HubFolder, AppFolder) then
-    Exit;
-  Msg := 'The Whisper model hub folder is located outside the install directory:' + #13#10 + #13#10 +
-         HubFolder + #13#10 + #13#10 +
-         'It may contain several gigabytes of downloaded Whisper models.' + #13#10 +
-         'Do you want to delete this folder as part of the uninstall?';
-  if MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES then begin
-    if not DelTree(HubFolder, True, True, True) then
-      MsgBox('Could not fully delete ' + HubFolder + '.' + #13#10 +
-             'You can remove it manually with File Explorer.',
-             mbInformation, MB_OK);
+  if (HubFolder <> '') and DirExists(HubFolder) and not IsPathInside(HubFolder, AppFolder) then begin
+    Msg := 'The Whisper model hub folder is located outside the install directory:' + #13#10 + #13#10 +
+           HubFolder + #13#10 + #13#10 +
+           'It may contain several gigabytes of downloaded Whisper models.' + #13#10 +
+           'Do you want to delete this folder as part of the uninstall?';
+    if MsgBox(Msg, mbConfirmation, MB_YESNO) = IDYES then begin
+      if not DelTree(HubFolder, True, True, True) then
+        MsgBox('Could not fully delete ' + HubFolder + '.' + #13#10 +
+               'You can remove it manually with File Explorer.',
+               mbInformation, MB_OK);
+    end;
   end;
+  // A real, interactive uninstall also clears the per-user config.json
+  // (NOT during the silent upgrade step above, which would otherwise
+  // wipe hub_folder/API keys/preferences on every single in-place
+  // upgrade — see InitializeSetup).
+  ConfigPath := ExpandConstant('{localappdata}\WhisperProject\config.json');
+  if FileExists(ConfigPath) then
+    DeleteFile(ConfigPath);
 end;

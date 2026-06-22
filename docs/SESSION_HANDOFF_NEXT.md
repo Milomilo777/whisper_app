@@ -51,6 +51,15 @@ The colleague had picked the broken one.
   both `.iss` files, the mac spec for parity even though macOS isn't being
   built this release). `docs/CHANGELOG.md` + `docs/RELEASE_NOTES_v1.4.0.md`
   updated. **Windows-only release** — no macOS build this time (owner scope).
+- **Caught at push time:** a colleague pushed `167ccf8` directly to
+  `origin/master` (delete `config.json` on uninstall, via an unconditional
+  `[UninstallDelete]` entry in `installer_embed.iss`) while this session's
+  silent-pre-install-uninstall change was in flight. Combined, every silent
+  upgrade would have wiped the user's `hub_folder`/API keys/preferences.
+  Fixed by merging, then moving that deletion into `CurUninstallStepChanged`
+  behind the same `UninstallSilent()` guard as the hub-folder prompt (reading
+  `hub_folder` out of config.json BEFORE deleting it). Rebuilt
+  Setup-Standard after the fix; this is the version actually released.
 
 ---
 
