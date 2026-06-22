@@ -83,6 +83,49 @@ Type: dirifempty; Name: "{app}"
 
 [Code]
 // --------------------------------------------------------------------
+//  Silently uninstall a previous version before installing this one.
+//
+//  AppId is stable across versions, so Inno's [Files] ignoreversion
+//  overwrite normally "upgrades in place" without the user uninstalling
+//  first. But that only OVERWRITES files still present in the new file
+//  list — a file removed between versions (a deleted module, a renamed
+//  asset) is never cleaned up and lingers forever. Running the previous
+//  version's own uninstaller first (silently, before any new files are
+//  copied) removes that whole class of leftovers while keeping the
+//  one-click "no need to uninstall first" experience intact.
+// --------------------------------------------------------------------
+
+function GetUninstallString(): String;
+var
+  UninstPath, UninstString: String;
+begin
+  UninstPath := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1';
+  UninstString := '';
+  if not RegQueryStringValue(HKLM, UninstPath, 'UninstallString', UninstString) then
+    RegQueryStringValue(HKLM32, UninstPath, 'UninstallString', UninstString);
+  Result := UninstString;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  UninstString: String;
+  ResultCode: Integer;
+begin
+  Result := True;
+  UninstString := GetUninstallString();
+  if UninstString = '' then
+    Exit;
+  UninstString := RemoveQuotes(UninstString);
+  // /SUPPRESSMSGBOXES auto-answers any Pascal MsgBox in the OLD
+  // uninstaller too; CurUninstallStepChanged below skips the hub-folder
+  // deletion prompt entirely when UninstallSilent() is true, so a model
+  // hub OUTSIDE the install dir survives this automatic step either way.
+  if not Exec(UninstString, '/SILENT /NORESTART /SUPPRESSMSGBOXES', '',
+              SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('Could not run the previous version''s uninstaller: ' + UninstString);
+end;
+
+// --------------------------------------------------------------------
 //  Hub-folder uninstall prompt — identical logic to installer.iss.
 //  See that file for full commentary; this script keeps a copy so
 //  the two installers stay self-contained (Inno has no [Include]).
@@ -181,6 +224,11 @@ begin
       DeleteFile(MarkerPath);
   end;
   if CurUninstallStep <> usPostUninstall then
+    Exit;
+  // A silent uninstall only ever happens automatically, as the
+  // pre-install step above for an in-place upgrade — never ask to
+  // delete a multi-GB model hub folder in that unattended path.
+  if UninstallSilent() then
     Exit;
   HubFolder := ExtractHubFolder();
   if (HubFolder = '') or (not DirExists(HubFolder)) then

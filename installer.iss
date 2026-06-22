@@ -66,6 +66,39 @@ Type: dirifempty; Name: "{app}"
 
 [Code]
 // --------------------------------------------------------------------
+//  Silently uninstall a previous version before installing this one —
+//  identical logic to installer_embed.iss. See that file for the full
+//  rationale; this script keeps a copy so the two installers stay
+//  self-contained (Inno has no [Include]).
+// --------------------------------------------------------------------
+
+function GetUninstallString(): String;
+var
+  UninstPath, UninstString: String;
+begin
+  UninstPath := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupSetting("AppId")}_is1';
+  UninstString := '';
+  if not RegQueryStringValue(HKLM, UninstPath, 'UninstallString', UninstString) then
+    RegQueryStringValue(HKLM32, UninstPath, 'UninstallString', UninstString);
+  Result := UninstString;
+end;
+
+function InitializeSetup(): Boolean;
+var
+  UninstString: String;
+  ResultCode: Integer;
+begin
+  Result := True;
+  UninstString := GetUninstallString();
+  if UninstString = '' then
+    Exit;
+  UninstString := RemoveQuotes(UninstString);
+  if not Exec(UninstString, '/SILENT /NORESTART /SUPPRESSMSGBOXES', '',
+              SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    Log('Could not run the previous version''s uninstaller: ' + UninstString);
+end;
+
+// --------------------------------------------------------------------
 //  Hub-folder uninstall prompt
 //
 //  The user can pick where Whisper model files live (the "hub"
@@ -139,6 +172,11 @@ var
   HubFolder, AppFolder, Msg: string;
 begin
   if CurUninstallStep <> usPostUninstall then
+    Exit;
+  // A silent uninstall only ever happens automatically, as the
+  // pre-install step above for an in-place upgrade — never ask to
+  // delete a multi-GB model hub folder in that unattended path.
+  if UninstallSilent() then
     Exit;
   HubFolder := ExtractHubFolder();
   if (HubFolder = '') or (not DirExists(HubFolder)) then

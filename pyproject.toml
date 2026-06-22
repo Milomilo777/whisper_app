@@ -64,6 +64,16 @@ alignment = [
     # pulls torch (~125 MB).
     "stable-ts>=2.17",
 ]
+nvidia_asr = [
+    # Local NVIDIA Parakeet / FastConformer ASR backend (transcribe_backend=
+    # "nvidia_asr") — opt-in because transformers + torch + librosa are
+    # heavy (GBs with the model weights) and install on first use via
+    # core/optional_deps.py for a normal app run; this group just lets a
+    # source checkout / dev environment pre-install the same three.
+    "transformers>=4.40",
+    "torch>=2.2",
+    "librosa>=0.10",
+]
 
 [project.scripts]
 whisper-project = "app:run"
