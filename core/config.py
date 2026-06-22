@@ -966,6 +966,20 @@ def _persistable_download_folder(config: dict[str, Any]) -> str:
     return current
 
 
+#: App-level keys that must never be written to the user's config.json. They
+#: are either re-derived from DEFAULT_CONFIG / the online config fetch on
+#: every load, or (telemetry_opt_in) too easy to silently pin to a stale value
+#: across an upgrade. Stripped on every save, including from a config.json
+#: that already has them from before this rule existed.
+_NON_PERSISTED_KEYS: frozenset[str] = frozenset({
+    "telemetry_opt_in",
+    "config_url",
+    "stats_url",
+    "ffplay_downloads",
+    "latest_version",
+})
+
+
 def save_config(config: dict[str, Any]) -> None:
     # Serialise concurrent saves through _SAVE_LOCK — without this,
     # two threads racing to os.replace the same destination throw
@@ -982,6 +996,8 @@ def save_config(config: dict[str, Any]) -> None:
         to_persist = dict(config)
         to_persist["model_path"] = _persistable_model_path(config)
         to_persist["download_folder"] = _persistable_download_folder(config)
+        for key in _NON_PERSISTED_KEYS:
+            to_persist.pop(key, None)
         fd, tmp_path = tempfile.mkstemp(
             prefix=".config-", suffix=".tmp", dir=directory
         )

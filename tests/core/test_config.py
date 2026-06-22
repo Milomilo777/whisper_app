@@ -382,6 +382,39 @@ def test_tray_and_telemetry_wrong_type_coerced(isolated_dirs, monkeypatch):
     assert config["telemetry_opt_in"] is True    # int 1 coerced to bool
 
 
+def test_save_config_strips_non_persisted_keys(isolated_dirs, monkeypatch):
+    # telemetry_opt_in / config_url / stats_url / ffplay_downloads /
+    # latest_version must never land in config.json — they are re-derived
+    # from DEFAULT_CONFIG or the online config fetch on every load.
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    payload = {**cfg.DEFAULT_CONFIG, "theme": "dark"}
+    cfg.save_config(payload)
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    for key in cfg._NON_PERSISTED_KEYS:
+        assert key not in on_disk
+    assert on_disk["theme"] == "dark"
+
+
+def test_save_config_removes_preexisting_non_persisted_keys(isolated_dirs, monkeypatch):
+    # A config.json written before this rule existed must be cleaned up on
+    # the very next save, not just left with stale values forever.
+    monkeypatch.setattr(cfg, "_legacy_config_path", lambda: str(isolated_dirs / "no_legacy.json"))
+    stale = {
+        **cfg.DEFAULT_CONFIG,
+        "telemetry_opt_in": True,
+        "config_url": "https://example.com/config",
+        "stats_url": "https://example.com/stats",
+        "ffplay_downloads": {"win32": "https://example.com/ffplay.exe"},
+        "latest_version": "9.9.9",
+    }
+    Path(cfg.config_path()).write_text(json.dumps(stale), encoding="utf-8")
+    config = cfg.load_config()
+    cfg.save_config(config)
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    for key in cfg._NON_PERSISTED_KEYS:
+        assert key not in on_disk
+
+
 def test_save_config_lock_serialises_concurrent_calls(isolated_dirs, monkeypatch):
     """Two threads calling save_config concurrently must not crash
     or corrupt the destination on Windows. The _SAVE_LOCK serialises
