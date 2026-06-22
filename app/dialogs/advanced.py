@@ -572,6 +572,18 @@ class AdvancedDialog(tk.Toplevel):
             text="Default: nvidia/parakeet-tdt-0.6b-v3",
             foreground="#666",
         ).grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ttk.Button(
+            nvidia, text="Prepare Parakeet model now...",
+            command=self._prepare_nvidia_asr_model,
+        ).grid(row=3, column=0, sticky="w", padx=8, pady=(0, 8))
+        ttk.Label(
+            nvidia,
+            text=(
+                "Installs transformers/torch/librosa and downloads the model "
+                "ahead of time, instead of waiting on the first transcription."
+            ),
+            foreground="#666",
+        ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 8))
         nvidia.columnconfigure(1, weight=1)
 
         # Watched folder
@@ -1130,6 +1142,37 @@ class AdvancedDialog(tk.Toplevel):
 
         from core._threads import safe_thread
         safe_thread(_worker, name="whispercpp-model-download")
+
+    def _prepare_nvidia_asr_model(self) -> None:
+        """Install deps + download the NVIDIA Parakeet model ahead of time.
+
+        Mirrors :meth:`_download_whisper_cpp_model`: this backend installs
+        transformers/torch/librosa and fetches the model from the Hugging
+        Face Hub lazily, on the first ``load()`` call. Running that here, in
+        a daemon thread, lets the user pre-fetch everything from Advanced
+        settings instead of discovering the wait mid-transcription.
+        """
+        def _worker() -> None:
+            try:
+                self.app.log_threadsafe(
+                    "Preparing NVIDIA Parakeet (installing transformers/torch/"
+                    "librosa, then downloading the model)…"
+                )
+                from core.backends.nvidia_asr import NvidiaAsrBackend
+
+                backend = NvidiaAsrBackend()
+                if backend.load(status_cb=self.app.log_threadsafe):
+                    self.app.log_threadsafe("NVIDIA Parakeet is ready.")
+                else:
+                    self.app.log_threadsafe(
+                        f"NVIDIA Parakeet preparation failed: {backend.get_error()}"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("NVIDIA Parakeet preparation failed")
+                self.app.log_threadsafe(f"NVIDIA Parakeet preparation failed: {e}")
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="nvidia-asr-model-prepare")
 
     def _test_cloud_key(self) -> None:
         """Validate the pasted Google API key on a DAEMON thread.
