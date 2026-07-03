@@ -26,13 +26,19 @@ raises ``ConvertError`` for a ``.txt`` with no recognisable cues).
 
 EMIT (output) formats: any text writer in ``core.writers.WRITERS``
 (srt / vtt / tsv / txt / json / lrc / md / elan / inqscribe /
-express_scribe). Binary writers (docx / pdf / smtv_docx) are intentionally
-NOT offered here — they need extra context (language / title) and are
-produced by the transcription pipeline. ``express_scribe`` is EXPORT-ONLY
-(whole-second ``[hh:mm:ss]`` cues are too lossy to round-trip) and is
-therefore NOT in ``PARSE_FORMATS``.
+express_scribe), plus ``smtv_docx`` as a binary target (see
+``CONVERT_TARGETS``). The other binary writers (docx / pdf) are still NOT
+offered here — they need extra context this generic converter cannot
+recover from an arbitrary transcript file. ``smtv_docx`` is filled with
+``work_title`` derived from the input file's stem and an EMPTY detected
+language (a generic transcript file carries no language metadata), so the
+template's language placeholders fall back to their neutral labels —
+matching the writer's own "no language detected" behaviour.
+``express_scribe`` is EXPORT-ONLY (whole-second ``[hh:mm:ss]`` cues are too
+lossy to round-trip) and is therefore NOT in ``PARSE_FORMATS``.
 
-Stdlib only; Tk-free. The two public seams are pure and testable:
+Stdlib only except for ``smtv_docx`` (needs python-docx, lazily imported by
+the writer itself); Tk-free. The two public seams are pure and testable:
 
     parse_to_segments(path) -> list[dict]
     convert_file(in_path, out_format, out_path=None) -> out_path
@@ -53,6 +59,7 @@ __all__ = [
     "ConvertError",
     "PARSE_FORMATS",
     "OUTPUT_FORMATS",
+    "CONVERT_TARGETS",
     "parse_to_segments",
     "convert_file",
 ]
@@ -72,6 +79,14 @@ PARSE_FORMATS: tuple[str, ...] = ("json", "srt", "vtt", "tsv", "otr", "elan", "i
 # Formats we can EMIT — the text writers in the registry (output side).
 OUTPUT_FORMATS: tuple[str, ...] = tuple(sorted(_writers.WRITERS.keys()))
 
+# The one binary target this generic converter also offers (see the module
+# docstring for why the other binary writers — docx / pdf — are not here).
+_SMTV_DOCX = "smtv_docx"
+
+# Every target ``convert_file`` accepts, text + the one binary exception.
+# This is what UI format pickers should enumerate (see app.app._ask_convert_format).
+CONVERT_TARGETS: tuple[str, ...] = OUTPUT_FORMATS + (_SMTV_DOCX,)
+
 # Registry-key -> on-disk extension overrides for the default output path
 # (mirrors core.transcriber._FMT_EXTENSIONS). Most writer names already ARE
 # the extension a downstream tool expects; a couple need an override:
@@ -79,10 +94,12 @@ OUTPUT_FORMATS: tuple[str, ...] = tuple(sorted(_writers.WRITERS.keys()))
 #   * inqscribe     -> inqscr (InqScribe's own extension; avoids colliding
 #                               with plain .txt, which has no timestamps)
 #   * express_scribe -> txt   (Express Scribe transcripts are plain .txt)
+#   * smtv_docx     -> docx   (the actual file type it produces)
 _EXT_OVERRIDES: dict[str, str] = {
     "elan": "eaf",
     "inqscribe": "inqscr",
     "express_scribe": "txt",
+    _SMTV_DOCX: "docx",
 }
 
 
@@ -464,10 +481,10 @@ def convert_file(
     failure, and lets the writer's own ``OSError`` surface on a write failure.
     """
     fmt = (out_format or "").lower().lstrip(".")
-    if fmt not in _writers.WRITERS:
+    if fmt != _SMTV_DOCX and fmt not in _writers.WRITERS:
         raise ConvertError(
-            f"Unknown / non-text output format {out_format!r}. "
-            f"Choose one of: {', '.join(OUTPUT_FORMATS)}."
+            f"Unknown output format {out_format!r}. "
+            f"Choose one of: {', '.join(CONVERT_TARGETS)}."
         )
 
     segments = parse_to_segments(in_path)
@@ -477,10 +494,25 @@ def convert_file(
         base, ext = os.path.splitext(target)
         target = f"{base}.converted{ext}"
 
-    body = _writers.get_writer(fmt)(segments, in_path)
     parent = os.path.dirname(os.path.abspath(target))
     if parent:
         os.makedirs(parent, exist_ok=True)
+
+    if fmt == _SMTV_DOCX:
+        # No language metadata survives a generic transcript file, so this
+        # is filled the same way the writer treats "no language detected"
+        # (neutral cue labels; see core.writers.smtv_docx_writer). work_title
+        # mirrors the transcription pipeline's own convention (source stem).
+        from .writers import smtv_docx_writer
+
+        payload = smtv_docx_writer.write_bytes(
+            segments, in_path, language="", work_title=Path(in_path).stem
+        )
+        with open(target, "wb") as fb:
+            fb.write(payload)
+        return target
+
+    body = _writers.get_writer(fmt)(segments, in_path)
     # newline="\n" disables universal-newline translation so the writers' own
     # '\n' line endings are written byte-for-byte (matching transcriber.py and
     # _checkpoint.py). Without it, text mode rewrites '\n' to '\r\n' on Windows,

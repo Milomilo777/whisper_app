@@ -1292,7 +1292,7 @@ class App(tk.Tk):
         from core import convert as _convert
 
         src_ext = os.path.splitext(in_path)[1].lower().lstrip(".")
-        choices = list(_convert.OUTPUT_FORMATS)
+        choices = list(_convert.CONVERT_TARGETS)
         default = "json" if src_ext == "srt" else "srt"
         if default not in choices:
             default = choices[0]
