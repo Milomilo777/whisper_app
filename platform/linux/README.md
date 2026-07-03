@@ -10,8 +10,8 @@ virtualenv next to the repo and add launchers — updating later is just a
 Clone the repo (it's private — use your GitHub access), then:
 
 ```bash
-git clone https://github.com/Milomilo777/whisper_project_direct_download_v2.git
-cd whisper_project_direct_download_v2
+git clone https://github.com/Milomilo777/whisper_app.git
+cd whisper_app
 bash platform/linux/install.sh
 ```
 

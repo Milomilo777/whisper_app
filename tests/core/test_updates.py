@@ -60,10 +60,10 @@ def test_is_newer_does_not_crash_on_odd_tags() -> None:
 # --- latest_release_api_url ------------------------------------------------
 
 def test_latest_release_api_url() -> None:
-    url = latest_release_api_url("Milomilo777", "whisper_project_direct_download_v2")
+    url = latest_release_api_url("Milomilo777", "whisper_app")
     assert url == (
         "https://api.github.com/repos/Milomilo777/"
-        "whisper_project_direct_download_v2/releases/latest"
+        "whisper_app/releases/latest"
     )
 
 
@@ -71,7 +71,7 @@ def test_default_repo_constants_feed_the_url() -> None:
     # The module constants are the single source of truth and must
     # produce the api.github.com endpoint the check actually uses.
     assert GITHUB_OWNER == "Milomilo777"
-    assert GITHUB_REPO == "whisper_project_direct_download_v2"
+    assert GITHUB_REPO == "whisper_app"
     assert latest_release_api_url(GITHUB_OWNER, GITHUB_REPO).startswith(
         "https://api.github.com/repos/Milomilo777/"
     )

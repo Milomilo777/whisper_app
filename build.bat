@@ -1,5 +1,5 @@
 @echo off
-REM build.bat - Windows production build script for whisper_project_direct_download_v2
+REM build.bat - Windows production build script for whisper_app
 REM Runs PyInstaller, then verifies the bundled binaries actually landed in dist/.
 REM
 REM Usage:

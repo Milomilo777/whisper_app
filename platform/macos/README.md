@@ -25,8 +25,8 @@ Get the repo **via Terminal** (this matters — see Gatekeeper note), then run
 the installer:
 
 ```bash
-git clone https://github.com/Milomilo777/whisper_project_direct_download_v2.git
-cd whisper_project_direct_download_v2
+git clone https://github.com/Milomilo777/whisper_app.git
+cd whisper_app
 bash platform/macos/install.command
 ```
 
@@ -73,7 +73,7 @@ cleanest first:
    install steps use `git clone`.
 2. **Strip the flag** (if you did download a zip in a browser):
    ```bash
-   xattr -dr com.apple.quarantine /path/to/whisper_project_direct_download_v2
+   xattr -dr com.apple.quarantine /path/to/whisper_app
    ```
    or just run `bash platform/macos/unblock.command`.
 3. **Open Anyway.** Try to open the launcher, dismiss the warning, then

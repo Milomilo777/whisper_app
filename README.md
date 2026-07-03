@@ -2,8 +2,8 @@
 
 > 📍 **Start at [`PROJECT_INDEX.md`](PROJECT_INDEX.md)** — a generated, tool-neutral repo map for fast, low-token onboarding by any AI agent or human.
 
-[![CI](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml/badge.svg?branch=chore%2Fcleanup-hardening)](https://github.com/Milomilo777/whisper_project_direct_download_v2/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/Milomilo777/whisper_project_direct_download_v2?label=release)](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)
+[![CI](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml/badge.svg?branch=chore%2Fcleanup-hardening)](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Milomilo777/whisper_app?label=release)](https://github.com/Milomilo777/whisper_app/releases/latest)
 
 **A Windows desktop app that transcribes audio and video files locally
 using OpenAI's Whisper model.** Drag a file in, get an `.srt` + `.json`
@@ -18,7 +18,7 @@ Two deliverables for two audiences:
 | **Standard** | `WhisperProject-v1.0.3-Setup-Standard.exe` | ~350 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
 
 Download from the latest release:
-**[github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest](https://github.com/Milomilo777/whisper_project_direct_download_v2/releases/latest)**
+**[github.com/Milomilo777/whisper_app/releases/latest](https://github.com/Milomilo777/whisper_app/releases/latest)**
 
 Step-by-step install guide: [docs/INSTALL.md](docs/INSTALL.md).
 
