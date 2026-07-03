@@ -967,9 +967,15 @@ class TranscriptionService:
             self.retire_worker(worker)
 
     def _derive_transcript_stats(self, task: Any) -> tuple[int, float]:
-        """Best-effort ``(word_count, audio_duration)`` from a produced JSON
-        sidecar. Returns ``(0, 0.0)`` when no JSON output is found or it can't
-        be parsed — never raises (stats are best-effort)."""
+        """Best-effort ``(word_count, audio_duration)`` from a produced
+        output file. Prefers a JSON sidecar (cheapest to parse), but a user
+        whose ``output_formats`` doesn't include "json" would otherwise
+        always get ``word_count=0`` even though e.g. the .srt/.docx they DID
+        write is full of real words — so this falls back to re-parsing
+        whichever other produced transcript ``core.convert`` can read back
+        into segments. Returns ``(0, 0.0)`` when nothing usable is found —
+        never raises (stats are best-effort)."""
+        from core import convert as _convert
         from core import stats as _stats
         try:
             paths = list(getattr(task, "output_paths", None) or [])
@@ -980,16 +986,32 @@ class TranscriptionService:
                 cand = os.path.splitext(task.file_path)[0] + ".json"
                 if os.path.isfile(cand):
                     json_path = cand
-            if not json_path or not os.path.isfile(json_path):
-                return 0, 0.0
-            with open(json_path, "r", encoding="utf-8") as f:
-                segments = json.load(f)
-            if not isinstance(segments, list):
-                return 0, 0.0
-            return (
-                _stats.count_words_in_segments(segments),
-                _stats.audio_duration_from_segments(segments),
-            )
+            if json_path and os.path.isfile(json_path):
+                with open(json_path, "r", encoding="utf-8") as f:
+                    segments = json.load(f)
+                if isinstance(segments, list):
+                    return (
+                        _stats.count_words_in_segments(segments),
+                        _stats.audio_duration_from_segments(segments),
+                    )
+            # No JSON sidecar (or it didn't parse as a list) — try any other
+            # produced format core.convert knows how to read back. On-disk
+            # extensions for PARSE_FORMATS, per core.convert's own mapping
+            # (elan -> .eaf, inqscribe -> .inqscr; the rest match their name).
+            parseable_exts = {"json", "srt", "vtt", "tsv", "otr", "eaf", "inqscr"}
+            for p in paths:
+                ext = os.path.splitext(str(p))[1].lower().lstrip(".")
+                if ext not in parseable_exts or not os.path.isfile(p):
+                    continue
+                try:
+                    segments = _convert.parse_to_segments(p)
+                except _convert.ConvertError:
+                    continue
+                return (
+                    _stats.count_words_in_segments(segments),
+                    _stats.audio_duration_from_segments(segments),
+                )
+            return 0, 0.0
         except Exception as e:  # noqa: BLE001
             logger.debug("could not derive transcript stats: %s", e)
             return 0, 0.0
