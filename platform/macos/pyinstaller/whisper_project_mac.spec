@@ -306,13 +306,13 @@ app = BUNDLE(
     name='Whisper Project.app',
     icon=_icon,
     bundle_identifier='com.translation-robot.whisperproject',
-    version='1.4.0',
+    version='1.5.0',
     info_plist={
         'CFBundleName': 'Whisper Project',
         'CFBundleDisplayName': 'Whisper Project',
         'CFBundleIdentifier': 'com.translation-robot.whisperproject',
-        'CFBundleVersion': '1.4.0',
-        'CFBundleShortVersionString': '1.4.0',
+        'CFBundleVersion': '1.5.0',
+        'CFBundleShortVersionString': '1.5.0',
         'CFBundlePackageType': 'APPL',
         'NSHighResolutionCapable': True,
         # The app reads media files the user drops / picks; declaring a

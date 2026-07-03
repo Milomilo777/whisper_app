@@ -2,6 +2,56 @@
 
 All notable changes to this project. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] — 2026-07-03
+
+> SMTV + usage-stats release. The SMTV docx header now shows the detected
+> language, SMTV joins the Convert-transcript targets, a real word-count
+> bug in the usage-stats payload is fixed, and the opt-in stats payload
+> gained host/hardware + app-version fields. The project (and its GitHub
+> repo) is renamed to `whisper_app`. pyright `app/ core/` 0/0/0; hermetic
+> suite green.
+
+### Added
+
+- **SMTV docx header now shows the detected language.** Row 2 / column 3
+  used to always read the literal "Foreign Language"; it is now replaced
+  with the language faster-whisper detected (e.g. "Korean"), matching the
+  title row and the "[... starts]" cue that already did this. With no
+  detected language the header keeps its original generic text.
+- **SMTV added to File → Convert transcript.** The format picker now
+  offers `smtv_docx` alongside the existing text targets. Since a generic
+  transcript file carries no language metadata, the emitted docx is filled
+  the same way the writer already treats "no language detected" (neutral
+  cue labels); the work title is taken from the source file's name.
+- **Usage-stats payload gained 9 new fields**: `program_version` (the
+  sending app's version) and, from the host machine, `platform_system`,
+  `platform_node`, `platform_release`, `platform_version`,
+  `platform_machine`, `platform_processor` (stdlib `platform`), plus
+  `cpu_count` / `mem_total` (new dependency: `psutil`). Still sent only
+  when the user has opted in to telemetry.
+  `stats/transcription_stats.php` gained matching columns, including a
+  migration path (`PRAGMA table_info` + `ALTER TABLE ADD COLUMN`) so an
+  already-deployed `transcription_stats.db` picks up the new columns
+  instead of silently dropping the values.
+
+### Fixed
+
+- **Usage-stats `word_count` was 0 whenever "json" wasn't among the
+  chosen output formats** — the payload builder itself was correct, but
+  the caller only ever tried to recover the word count from a `.json`
+  sidecar. A user who only exports e.g. `.srt`/`.docx` never had one, so
+  every stats row read `word_count: 0` regardless of how much was
+  actually transcribed. It now falls back to re-parsing whichever other
+  produced transcript `core.convert` can read back into segments.
+
+### Changed
+
+- **Project renamed** `whisper_project_direct_download_v2` →
+  `whisper_app` (GitHub repo + local checkout folder name). The
+  update-checker, `pyproject.toml` project URLs, the Homebrew formula,
+  and the clone instructions in the READMEs / install docs now point at
+  the new repo name.
+
 ## [1.4.0] — 2026-06-22
 
 > Engine cleanup + safety release. Removes the dead-end sherpa-onnx Parakeet

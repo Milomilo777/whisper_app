@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whisper-project"
-version = "1.4.0"
+version = "1.5.0"
 description = "Local Whisper desktop app — offline transcription + yt-dlp/SMTV download + oTranscribe round-trip"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,7 @@ dependencies = [
     "watchdog>=3.0",
     "pystray>=0.19",
     "Pillow>=10.0",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -79,8 +80,8 @@ nvidia_asr = [
 whisper-project = "app:run"
 
 [project.urls]
-Homepage = "https://github.com/Milomilo777/whisper_project_direct_download_v2"
-Repository = "https://github.com/Milomilo777/whisper_project_direct_download_v2"
+Homepage = "https://github.com/Milomilo777/whisper_app"
+Repository = "https://github.com/Milomilo777/whisper_app"
 Author = "https://github.com/translation-robot"
 
 [tool.setuptools.packages.find]
