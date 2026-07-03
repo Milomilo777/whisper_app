@@ -17,6 +17,10 @@
  *   - transcription_time   (seconds of AI compute)
  *   - status               (finished / error / cancelled / ...)
  *   - word_count           (total words in the transcript)
+ *   - program_version      (the sending app's version string)
+ *   - platform_system/_node/_release/_version/_machine/_processor
+ *                          (Python's ``platform`` module facts about the host)
+ *   - cpu_count / mem_total (``psutil`` CPU count / total RAM in bytes)
  *
  * GeoIP is fetched server-side from:
  *   https://smch.ir/stats/geoip/index.php?ip={ip}
@@ -55,9 +59,45 @@ $db->exec(
         audio_duration REAL,
         transcription_time REAL,
         word_count INTEGER,
-        status TEXT
+        status TEXT,
+        program_version TEXT,
+        platform_system TEXT,
+        platform_node TEXT,
+        platform_release TEXT,
+        platform_version TEXT,
+        platform_machine TEXT,
+        platform_processor TEXT,
+        cpu_count INTEGER,
+        mem_total INTEGER
     )'
 );
+
+// --- migration: add the newer columns to a DB created before they existed --
+// CREATE TABLE IF NOT EXISTS only shapes a BRAND NEW file — an already
+// -deployed transcription_stats.db from an older release keeps its original
+// columns forever unless retrofitted here. SQLite has no
+// "ADD COLUMN IF NOT EXISTS", so check PRAGMA table_info first and only add
+// what's actually missing (idempotent across every request).
+$existing_cols = array();
+foreach ($db->query('PRAGMA table_info(transcription_stats)') as $col_row) {
+    $existing_cols[$col_row['name']] = true;
+}
+$new_columns = array(
+    'program_version'    => 'TEXT',
+    'platform_system'    => 'TEXT',
+    'platform_node'      => 'TEXT',
+    'platform_release'   => 'TEXT',
+    'platform_version'   => 'TEXT',
+    'platform_machine'   => 'TEXT',
+    'platform_processor' => 'TEXT',
+    'cpu_count'          => 'INTEGER',
+    'mem_total'          => 'INTEGER',
+);
+foreach ($new_columns as $col_name => $col_type) {
+    if (!isset($existing_cols[$col_name])) {
+        $db->exec("ALTER TABLE transcription_stats ADD COLUMN $col_name $col_type");
+    }
+}
 
 // --- geoip lookup -----------------------------------------------------------
 /**
@@ -108,17 +148,30 @@ if (isset($_POST['form_submitted'])) {
     $transcription_time = isset($_POST['transcription_time']) ? (float) $_POST['transcription_time'] : 0.0;
     $word_count = isset($_POST['word_count']) ? (int) $_POST['word_count'] : 0;
     $status = isset($_POST['status']) ? (string) $_POST['status'] : '';
+    $program_version = isset($_POST['program_version']) ? (string) $_POST['program_version'] : '';
+    $platform_system = isset($_POST['platform_system']) ? (string) $_POST['platform_system'] : '';
+    $platform_node = isset($_POST['platform_node']) ? (string) $_POST['platform_node'] : '';
+    $platform_release = isset($_POST['platform_release']) ? (string) $_POST['platform_release'] : '';
+    $platform_version = isset($_POST['platform_version']) ? (string) $_POST['platform_version'] : '';
+    $platform_machine = isset($_POST['platform_machine']) ? (string) $_POST['platform_machine'] : '';
+    $platform_processor = isset($_POST['platform_processor']) ? (string) $_POST['platform_processor'] : '';
+    $cpu_count = isset($_POST['cpu_count']) ? (int) $_POST['cpu_count'] : 0;
+    $mem_total = isset($_POST['mem_total']) ? (int) $_POST['mem_total'] : 0;
     $server_time = date(DATE_RFC3339);
 
     $stmt = $db->prepare(
         'INSERT INTO transcription_stats
             (server_time, client_ip, country_name, ip_location_json,
              file_name, model, language, audio_duration, transcription_time,
-             word_count, status)
+             word_count, status, program_version, platform_system,
+             platform_node, platform_release, platform_version,
+             platform_machine, platform_processor, cpu_count, mem_total)
          VALUES
             (:server_time, :client_ip, :country_name, :ip_location_json,
              :file_name, :model, :language, :audio_duration, :transcription_time,
-             :word_count, :status)'
+             :word_count, :status, :program_version, :platform_system,
+             :platform_node, :platform_release, :platform_version,
+             :platform_machine, :platform_processor, :cpu_count, :mem_total)'
     );
     $stmt->bindValue(':server_time', $server_time);
     $stmt->bindValue(':client_ip', $client_ip);
@@ -131,6 +184,15 @@ if (isset($_POST['form_submitted'])) {
     $stmt->bindValue(':transcription_time', $transcription_time);
     $stmt->bindValue(':word_count', $word_count, PDO::PARAM_INT);
     $stmt->bindValue(':status', $status);
+    $stmt->bindValue(':program_version', $program_version);
+    $stmt->bindValue(':platform_system', $platform_system);
+    $stmt->bindValue(':platform_node', $platform_node);
+    $stmt->bindValue(':platform_release', $platform_release);
+    $stmt->bindValue(':platform_version', $platform_version);
+    $stmt->bindValue(':platform_machine', $platform_machine);
+    $stmt->bindValue(':platform_processor', $platform_processor);
+    $stmt->bindValue(':cpu_count', $cpu_count, PDO::PARAM_INT);
+    $stmt->bindValue(':mem_total', $mem_total, PDO::PARAM_INT);
     $stmt->execute();
     $recorded = true;
 }
@@ -155,5 +217,8 @@ if ($recorded) {
     echo "Whisper Project transcription stats endpoint.\n";
     echo "SQLite " . $sqlite_version . "\n";
     echo "POST form_submitted=1 with: file_name, model, language, ";
-    echo "audio_duration, transcription_time, word_count, status\n";
+    echo "audio_duration, transcription_time, word_count, status, ";
+    echo "program_version, platform_system, platform_node, platform_release, ";
+    echo "platform_version, platform_machine, platform_processor, ";
+    echo "cpu_count, mem_total\n";
 }

@@ -2,17 +2,22 @@
 
 Sends per-transcription usage to the maintainer's stats endpoint
 (``config['stats_url']``). PRIVACY: the payload includes the file name (no
-path), model, language, audio duration, AI transcription time, and status —
-and the server additionally records the client IP + geoip country from the
-request. It is therefore sent ONLY when the user has opted in
+path), model, language, audio duration, AI transcription time, status, the
+running app version, and coarse host/hardware facts (OS, machine, CPU count,
+total RAM — no serial numbers, no user names, no IPs; the client IP + geoip
+country are added server-side from the request, not by this module). It is
+therefore sent ONLY when the user has opted in
 (``config['telemetry_opt_in']``, default OFF); the caller must gate on that.
 
 Design rules (mirrors app.observability's opt-in posture):
 
-  * Tk-free, stdlib only (``urllib``), short timeout, daemon thread — never
-    blocks or crashes a transcription if stats fail. Every error is swallowed.
+  * Tk-free; local-only introspection (``platform``, ``psutil``) plus
+    stdlib ``urllib`` for the POST — no data leaves the machine besides the
+    one opt-in request. Short timeout, daemon thread — never blocks or
+    crashes a transcription if stats fail. Every error is swallowed.
   * The payload builder :func:`build_stats_payload` is a PURE, testable
-    function (no I/O); :func:`post_stats_async` does the fire-and-forget POST.
+    function (no network I/O); :func:`post_stats_async` does the
+    fire-and-forget POST.
   * No POST is attempted when ``stats_url`` is empty.
 
 The matching server is ``stats/transcription_stats.php`` in this repo.
@@ -20,12 +25,17 @@ The matching server is ``stats/transcription_stats.php`` in this repo.
 from __future__ import annotations
 
 import logging
+import platform
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+import psutil
+
+from core import __version__ as _PROGRAM_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +116,15 @@ def build_stats_payload(
         "transcription_time": f"{float(transcription_time or 0.0):.3f}",
         "status": str(status or ""),
         "word_count": str(int(word_count or 0)),
+        "program_version": str(_PROGRAM_VERSION or ""),
+        "platform_system": platform.system(),
+        "platform_node": platform.node(),
+        "platform_release": platform.release(),
+        "platform_version": platform.version(),
+        "platform_machine": platform.machine(),
+        "platform_processor": platform.processor(),
+        "cpu_count": str(psutil.cpu_count() or 0),
+        "mem_total": str(int(psutil.virtual_memory().total)),
     }
 
 

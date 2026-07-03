@@ -38,6 +38,11 @@ watchdog>=3.0
 pystray>=0.19
 Pillow>=10.0
 
+# Host/hardware facts (OS, CPU count, total RAM) for the opt-in usage-stats
+# payload (core/stats.py). Pure local introspection, no data collection by
+# itself.
+psutil>=5.9
+
 # Multi-monitor detection for the Video Tiling video-wall. This is the
 # PREFERRED detection path, but the import is LAZY/optional: core.monitors
 # falls back to a stdlib ctypes Win32 EnumDisplayMonitors enumeration (and
