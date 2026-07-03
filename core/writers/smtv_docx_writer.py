@@ -16,7 +16,8 @@ Template layout (1-based rows / columns, verified):
     ``(Foreign Language)`` with the detected language name. The dash is
     a real en-dash (U+2013) in the template.
   * Row 2: header row -- col1 row-number header, col2 "Time Code",
-    col3 "Foreign Language", col4 "English Translation".
+    col3 "Foreign Language" (replaced with the detected language name
+    when a language was detected), col4 "English Translation".
   * Row 3 onward: transcription rows. Row 3 col3 carries a
     ``[(Foreign Language) starts]`` marker that is also language-filled.
     The template provides 31 usable rows (rows 3-33); when there are
@@ -54,6 +55,9 @@ from .base import normalize_text, sanitize_for_xml, speaker_prefix
 # surrounding text survives.
 _WORK_TITLE_PLACEHOLDER = "(work title)"
 _FOREIGN_PLACEHOLDER = "(Foreign Language)"
+# The row-2 (header) col3 literal text -- NOT parenthesised like the
+# title/marker placeholders above, so it needs its own needle.
+_HEADER_FOREIGN_LABEL = "Foreign Language"
 # Neutral fill for the "(Foreign Language)" placeholder when no language was
 # detected, so the row-0 "[... starts]" cue marker is still meaningful (and is
 # never clobbered) instead of leaving the literal placeholder dangling.
@@ -358,6 +362,14 @@ def write_bytes(
         marker_cell = table.rows[_FIRST_DATA_ROW].cells[2]
         for para in marker_cell.paragraphs:
             _replace_in_paragraph(para, _FOREIGN_PLACEHOLDER, marker_label)
+
+    # --- Row 2 col3 header: "Foreign Language" -> detected language ---
+    # Only replace when a language was actually detected; with none, the
+    # generic header stays so the template still reads sensibly.
+    if lang_label and len(table.rows) > 1:
+        header_cell = table.rows[1].cells[2]
+        for para in header_cell.paragraphs:
+            _replace_in_paragraph(para, _HEADER_FOREIGN_LABEL, lang_label)
 
     # --- Transcription rows -------------------------------------------
     nonempty = [s for s in segments if normalize_text(str(s.get("text") or ""))]

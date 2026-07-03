@@ -544,10 +544,11 @@ def test_smtv_writer_fills_title_header_and_marker():
     assert "(work title)" not in title_cell.text
     assert "(Foreign Language)" not in title_cell.text
 
-    # Header row (row 2): Time Code / Foreign Language / English Translation.
+    # Header row (row 2): Time Code / <detected language> / English Translation.
+    # col3 is replaced with the detected language name when one was detected.
     header = [table.rows[1].cells[i].text for i in range(4)]
     assert header[1] == "Time Code"
-    assert header[2] == "Foreign Language"
+    assert header[2] == "Korean"
     assert header[3] == "English Translation"
 
     # First data row carries the language-filled "[<Lang> starts]" cue
@@ -663,6 +664,8 @@ def test_smtv_writer_empty_language_keeps_starts_cue():
     assert "starts]" in first_marker
     assert "(Foreign Language)" not in first_marker
     assert "first phrase" in first_marker
+    # No language detected -> the header keeps its generic label.
+    assert table.rows[1].cells[2].text == "Foreign Language"
 
 
 def test_smtv_writer_registry_adapter_raises():
