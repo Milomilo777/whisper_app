@@ -7,7 +7,7 @@ virtualenv next to the repo and add launchers — updating later is just a
 
 ## Install
 
-Clone the repo (it's private — use your GitHub access), then:
+Clone the repo, then:
 
 ```bash
 git clone https://github.com/Milomilo777/whisper_app.git
