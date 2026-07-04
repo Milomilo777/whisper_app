@@ -26,20 +26,20 @@
 | Feature | Us | Peers | Effort to close | Notes |
 |---|---|---|---|---|
 | **Speaker diarization** (who said what) | 🟢 shipped — fully offline via `core/diarization.py` (sherpa-onnx: pyannote-segmentation-3.0 + CAMPlus embedding, no HuggingFace token, no PyTorch) | MacWhisper (beta), Buzz, WhisperX, Descript, Otter | — | Was marked absent (this document's own #1 priority gap) — confirmed implemented, tested (`tests/core/test_diarization.py`), and wired into writers (`speaker` field) + the Advanced dialog. |
-| **Word-level ±50 ms alignment** | 🟡 Whisper-native timestamps (drift up to ±500 ms) | WhisperX, stable-ts, MacWhisper, Vibe | M | Pre-requisite for click-to-jump editor. `stable-ts` is the cheapest drop-in. |
-| **Live mic transcription** | 🔴 absent | Buzz (live), MacWhisper (recording), Vibe | L | Whisper-Streaming's LocalAgreement-n is the proven pattern. Unlocks dictation use case. |
-| **System-wide dictation hotkey** | 🔴 absent | Superwhisper, Wispr Flow, MacWhisper, Handy, VoiceTypr | XL | Out-of-process hotkey + active-window-aware text insertion. The fastest-growing category in 2025/2026. |
-| **Multiple Whisper sizes selectable from UI** | 🟡 hard-coded `large-v3` | Buzz, MacWhisper, Vibe (model picker dropdown) | S | We only ship `faster-whisper-large-v3`. Users wanting `tiny`/`base`/`medium` for speed must edit `config.json`. |
-| **GPU vs CPU choice exposed in UI** | 🟡 auto-detected, not surfaced | Buzz (Vulkan/CUDA dropdown), MacWhisper | S | Auto-detection is fine but power users want a forced override toggle. |
-| **Alternative backends** (whisper.cpp, MLX, NeMo Parakeet) | 🔴 absent — faster-whisper only | Buzz (4 backends), Vibe (whisper-rs), MacWhisper (Whisper + Parakeet + cloud routing) | L | Single backend means single point of failure for new optimisations and for Chinese (where SenseVoice wins). |
-| **Custom hot-words / phrase biasing** | 🟡 `initial_prompt`/`hotwords` exist in config, no UI | Deepgram, Azure, ElevenLabs, MacWhisper, CapsWriter | S | Need a per-project glossary editor in the app. |
-| **Language picker per-file** | 🟡 set in config, not per-task | Buzz, MacWhisper, Vibe (dropdown next to each task) | S | We use `language` per task internally but the UI never surfaces it. |
-| **Translation (target ≠ source)** | 🔴 absent | MacWhisper, Buzz, Descript, Canary-1B-v2 backend | M | Whisper itself supports translation-to-English via `task="translate"`. We never expose this. |
-| **Voice/track separation before transcribe** | 🔴 absent | Buzz (Demucs option), Krisp | M | "Remove background music before transcribing" is increasingly expected for podcast/film content. |
-| **PII / entity redaction** | 🔴 absent | AssemblyAI, ElevenLabs Scribe v2, Otter | M | Healthcare/legal users need "bleep card numbers" + entity timestamps. |
-| **Sound-event tags** (`[Music]`, `[Applause]`) | 🔴 absent | ElevenLabs Scribe v2, SenseVoice (AED) | M | Required for SDH-compliant subtitles. |
+| **Word-level ±50 ms alignment** | 🟢 shipped (opt-in, off by default) | WhisperX, stable-ts, MacWhisper, Vibe | — | Was marked partial; confirmed `core/alignment.py` does real stable-ts DTW refinement to ±50ms, selectable via the Advanced-dialog "Word alignment" combobox, tested (`tests/core/test_alignment.py`). |
+| **Live mic transcription** | 🟡 partial — record-then-transcribe, not streaming | Buzz (live), MacWhisper (recording), Vibe | L | `core/recorder.py` records mic (sounddevice) or system audio (pyaudiowpatch loopback) to WAV, then runs the normal transcribe pipeline. True continuous streaming (Whisper-Streaming's LocalAgreement-n) still not built. |
+| **System-wide dictation hotkey** | 🔴 absent | Superwhisper, Wispr Flow, MacWhisper, Handy, VoiceTypr | XL | Out-of-process hotkey + active-window-aware text insertion. The fastest-growing category in 2025/2026. Re-confirmed absent 2026-07-04 — no hotkey/keyboard-hook code anywhere. |
+| **Multiple Whisper sizes selectable from UI** | 🟢 shipped | Buzz, MacWhisper, Vibe (model picker dropdown) | — | Was marked hard-coded; confirmed `core/model_manager.py` `MODEL_REGISTRY` covers tiny/base/small/medium/large/distil/turbo, with a full Advanced-dialog combobox (download status, info, one-click download). |
+| **GPU vs CPU choice exposed in UI** | 🟢 shipped | Buzz (Vulkan/CUDA dropdown), MacWhisper | — | Was marked auto-only; confirmed a Hardware Wizard (`app/widgets/hardware_wizard.py`) with override + persistence (`hardware.json`) + a benchmark button. |
+| **Alternative backends** (whisper.cpp, MLX, NeMo Parakeet) | 🟢 shipped — 5 backends | Buzz (4 backends), Vibe (whisper-rs), MacWhisper (Whisper + Parakeet + cloud routing) | — | Was marked faster-whisper-only; confirmed `core/backends/{faster_whisper_be,whisper_cpp,cloud_stt,google_cloud_stt,nvidia_asr}.py` behind a common `Backend` ABC, all selectable from the Transcribe-tab engine combobox. |
+| **Custom hot-words / phrase biasing** | 🟡 single global field, no per-project glossary | Deepgram, Azure, ElevenLabs, MacWhisper, CapsWriter | S | Upgraded from "no UI" — `app/dialogs/advanced.py` has a real "Hotwords" entry wired to config — but it's one global comma-separated field, not a per-project glossary editor. |
+| **Language picker per-file** | 🟢 shipped | Buzz, MacWhisper, Vibe (dropdown next to each task) | — | Was marked config-only; confirmed a "Language:" combobox on the Transcribe tab, applied per task. |
+| **Translation (target ≠ source)** | 🔴 absent | MacWhisper, Buzz, Descript, Canary-1B-v2 backend | M | Whisper itself supports translation-to-English via `task="translate"`. We never expose this — re-confirmed 2026-07-04; `core/llm.py` has an unused LLM-based `translate()` helper with zero call sites in `app/`. |
+| **Voice/track separation before transcribe** | 🟢 shipped (opt-in, off by default) | Buzz (Demucs option), Krisp | — | Was marked absent; confirmed `core/separator.py` Demucs htdemucs pre-process with disk cache, `demucs_enabled` config toggle. |
+| **PII / entity redaction** | 🔴 absent | AssemblyAI, ElevenLabs Scribe v2, Otter | M | Healthcare/legal users need "bleep card numbers" + entity timestamps. Re-confirmed absent 2026-07-04. |
+| **Sound-event tags** (`[Music]`, `[Applause]`) | 🔴 absent | ElevenLabs Scribe v2, SenseVoice (AED) | M | Required for SDH-compliant subtitles. Re-confirmed absent 2026-07-04. |
 | **Cancel mid-transcription** | 🟢 yes | 🟢 all | — | Done. |
-| **Auto-resume after crash** | 🟡 SQLite history marks interrupted rows but does not re-queue | MacWhisper (auto-resume), Buzz | S | We have the data, just need a "resume interrupted" prompt at startup. |
+| **Auto-resume after crash** | 🟢 shipped | MacWhisper (auto-resume), Buzz | — | Was marked "marks but doesn't re-queue"; confirmed a "Resume interrupted transcriptions?" prompt at startup that re-enqueues on accept (`app/app.py`, `tests/core/test_crash_resume*.py`). |
 
 ---
 
@@ -47,16 +47,16 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **In-app transcript viewer** | 🔴 absent — user opens the SRT in Notepad / oTranscribe | Descript, MacWhisper, Buzz, Vibe | M | Our only "viewer" is the black/lime console that scrolls per-segment progress lines and discards them. |
-| **Click-word → seek audio/video** | 🔴 absent | Descript (the killer feature), MacWhisper, Buzz | M | Requires word-level alignment + an embedded media player. |
-| **Inline transcript editing** | 🔴 absent | Descript, MacWhisper, Buzz | L | Edit the transcript text and re-export to SRT/VTT/TXT without redoing the ASR. |
-| **Karaoke-style word highlight during playback** | 🔴 absent | Descript, MacWhisper, Buzz | M | Pure UI on top of word timings. |
-| **Search inside transcripts** | 🔴 absent | Otter, Descript, MacWhisper | S | Cmd+F across the active transcript and across the history database. |
-| **Speaker rename (global)** | 🔴 absent (no speakers) | Descript, MacWhisper, Otter | S | Falls out of A-speaker-diarization. |
-| **Filler-word remove** ("uh"/"um" bulk delete) | 🔴 absent | Descript, Riverside, CapCut | S | Multilingual list per language. |
-| **Find-and-replace across transcript** | 🔴 absent | Descript, MacWhisper, Buzz | S | Important for fixing recurring proper-name mistranscriptions. |
-| **Embed media player** (audio waveform / video frame) | 🔴 absent | Descript, MacWhisper, Buzz, Vibe | M | Tk has no native media widget; would need `python-vlc`, `pygame`, or HTML+webview switch. |
-| **Word-confidence colour coding** | 🔴 absent | Descript, ElevenLabs | S | We have probabilities per word in our JSON — just never shown. |
+| **In-app transcript viewer** | 🟢 shipped | Descript, MacWhisper, Buzz, Vibe | — | Was marked absent; confirmed a full `TranscriptViewer` (`app/dialogs/transcript_viewer.py`, 1524 lines) with a segment Treeview + embedded VLC panel, launched from the Last-Result card, File menu, and queue right-click. |
+| **Click-word → seek audio/video** | 🟡 segment granularity, not per-word | Descript (the killer feature), MacWhisper, Buzz | S | Was marked absent; confirmed click-to-seek shipped (`_on_segment_select` → `_seek_to`) but at segment, not literal per-word, granularity — the word label is a non-interactive display. |
+| **Inline transcript editing** | 🟡 partial | Descript, MacWhisper, Buzz | M | Was marked absent; confirmed find/replace, filler-strip, and speaker-rename all edit real data, but `_save_changes` writes back only to the source `.json` (no re-export to SRT/VTT/TXT) and there's no free-text cell edit. |
+| **Karaoke-style word highlight during playback** | 🟢 shipped | Descript, MacWhisper, Buzz | — | Was marked absent; confirmed `_update_karaoke` (bisect over segment starts, 250ms VLC-position poll). |
+| **Search inside transcripts** | 🟡 partial | Otter, Descript, MacWhisper | S | Was marked absent; confirmed in-viewer search is shipped, but the separate FTS5+semantic cross-history search engine (`core/search.py`, fully built and tested) is imported by zero files under `app/` — no UI entry point. |
+| **Speaker rename (global)** | 🟢 shipped | Descript, MacWhisper, Otter | — | Was marked absent; confirmed right-click rename (`_rename_speaker`) applies everywhere within the open transcript (there's no cross-transcript speaker identity to rename globally against). |
+| **Filler-word remove** ("uh"/"um" bulk delete) | 🟢 shipped | Descript, Riverside, CapCut | — | Was marked absent; confirmed `_FILLER_WORDS` + `_strip_fillers()` with a confirm dialog. |
+| **Find-and-replace across transcript** | 🟢 shipped | Descript, MacWhisper, Buzz | — | Was marked absent; confirmed a real `FindReplaceDialog` (find-next/replace/replace-all, case toggle, backreference-safe). |
+| **Embed media player** (audio waveform / video frame) | 🟢 shipped | Descript, MacWhisper, Buzz, Vibe | — | Was marked absent; confirmed via `python-vlc` (`_try_load_vlc`/`_init_vlc_player`) with a graceful fallback to the system player when VLC is missing. |
+| **Word-confidence colour coding** | 🟢 shipped | Descript, ElevenLabs | — | Was marked absent; confirmed `_segment_min_probability()` + tag-based colouring at 0.85/0.6 thresholds. |
 
 ---
 
@@ -70,9 +70,9 @@
 | **Markdown export** | 🟢 shipped (`core/writers/md.py`) | Descript | — | Was marked absent; confirmed implemented + tested. |
 | **SCC / EBU-STL** (broadcast caption formats) | 🔴 absent | Descript, EZTitles | M | Niche but high-value for TV/news clients. |
 | **Burn subtitles into the video** | 🔴 absent | MacWhisper, Descript, CapCut | M | `ffmpeg -vf subtitles=…` — we already ship ffmpeg. |
-| **Per-format batch export from one transcript** | 🔴 absent | MacWhisper ("export TXT + SRT + DOCX in one click") | S | Currently the config picks one set; per-export-action override would be friendlier. |
-| **Output filename templating** | 🔴 absent | MacWhisper, Buzz | S | `{filename}_{lang}_{date}.srt` style. Right now we hard-code `<base>.<ext>` next to the source. |
-| **Output directory templating** | 🔴 hard-coded (next to source) | MacWhisper, Buzz | S | "Save all outputs to a single folder" is a common request. |
+| **Per-format batch export from one transcript** | 🟡 partial | MacWhisper ("export TXT + SRT + DOCX in one click") | S | Was marked absent; confirmed `core/convert.py` + the app's Convert-transcript dialog re-export any transcript to any other single format post-hoc (no ASR re-run, 16 tests) — but the picker is single-select, not a literal one-click multi-format batch. |
+| **Output filename templating** | 🟢 shipped | MacWhisper, Buzz | — | Was marked absent; confirmed `output_filename_template` (default `"{base}.{ext}"`) supports `{base}/{ext}/{lang}/{date}/{speaker_count}` tokens, a malformed-template fallback, and a path-traversal guard, tested (9+ tests). Not yet documented in `docs/CONFIG.md` — a docs gap, not a code gap. |
+| **Output directory templating** | 🟡 partial | MacWhisper, Buzz | S | Was marked hard-coded; confirmed the same template mechanism supports a sibling subfolder (e.g. `"transcripts/{base}.{ext}"`, auto-created, tested) — but the path-traversal guard rejects any path outside the source file's own directory, so one common folder across different source directories is still impossible. |
 
 ---
 
@@ -80,13 +80,13 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **Drag-and-drop into the window** | 🔴 absent | Buzz, MacWhisper, Vibe, Descript | XS | `tkinterdnd2` is on the optional-deps list already; ~200 KB. |
-| **Batch queue of dozens of files in one go** | 🟡 we queue, but the Transcribe tab is single-file picker | MacWhisper batch exporter, Buzz, Vibe | S | Need a multi-select in the Browse dialog + drag-drop. |
-| **Watched folders** ("transcribe everything I drop into `D:\inbox\`") | 🔴 absent | MacWhisper, Buzz | M | `watchdog` library; existed on the optional-deps list. |
-| **YouTube URL ingestion on the Transcribe tab** | 🟡 only via the Download tab + auto-transcribe checkbox | MacWhisper (paste YouTube URL anywhere), Vibe | S | Detect URLs in the file-picker entry, route through the download path. |
-| **Right-click "Transcribe this" in Explorer / Finder** | 🔴 absent | MacWhisper (Services menu), VLC + plugin | M | Requires an installer post-action to register a shell extension. |
-| **CLI mode** (`WhisperProject.exe transcribe a.mp4`) | 🔴 absent — only `--worker` flag exists | Buzz (`buzz-captions transcribe …`) | S | Power users want scripting. |
-| **Per-project / per-folder settings** | 🔴 single global config | MacWhisper (per-folder rules) | M | "Folder X always uses language=fa and word_timestamps=true." |
+| **Drag-and-drop into the window** | 🟢 shipped (optional dep) | Buzz, MacWhisper, Vibe, Descript | — | Was marked absent; confirmed via `tkinterdnd2` (graceful no-op if missing), tested (`tests/core/test_dnd_paths.py`). |
+| **Batch queue of dozens of files in one go** | 🟢 shipped | MacWhisper batch exporter, Buzz, Vibe | — | Was marked single-file-picker; confirmed `browse()` uses `askopenfilenames` (plural) and enqueues each. |
+| **Watched folders** ("transcribe everything I drop into `D:\inbox\`") | 🟢 shipped (optional dep) | MacWhisper, Buzz | — | Was marked absent; confirmed `core/watcher.py` `FolderWatcher` (watchdog, lazy-import) + config toggles. |
+| **YouTube URL ingestion on the Transcribe tab** | 🟢 shipped | MacWhisper (paste YouTube URL anywhere), Vibe | — | Was marked Download-tab-only; confirmed the Transcribe tab itself detects a pasted URL, auto-fills Download + flips auto-transcribe. |
+| **Right-click "Transcribe this" in Explorer / Finder** | 🟢 shipped (optional, default-on install task) | MacWhisper (Services menu), VLC + plugin | — | Was marked absent; confirmed `HKCR\*\shell\WhisperProjectTranscribe` registered by both installers' default-on `shellext` task. |
+| **CLI mode** (`WhisperProject.exe transcribe a.mp4`) | 🟢 shipped | Buzz (`buzz-captions transcribe …`) | — | Was marked absent; confirmed real `transcribe`/`serve` subcommands (`gui.py` `_build_argparser()`), live-verified via `python gui.py --help`. |
+| **Per-project / per-folder settings** | 🟢 shipped | MacWhisper (per-folder rules) | — | Was marked single-global-config; confirmed `.whisperproject.json` overrides (`core/config.py` `load_project_overrides()`), wired into both the desktop transcriber and the HTTP server job path. |
 | **Recent files menu** | 🟢 shipped (File → Recent files, `app/app.py`) | every comparable app | — | Was marked absent; confirmed implemented. |
 
 ---
@@ -96,13 +96,13 @@
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
 | **System tray icon + minimise-to-tray** | 🟢 shipped (`app/widgets/tray.py`) | Superwhisper, Wispr Flow, Handy, VoiceTypr | — | Was marked absent; confirmed implemented + tested (`tests/core/test_tray.py`). |
-| **Windows toast notification on completion** | 🟡 system bell only (after the v0.7.0 UX refresh) | MacWhisper (NSUserNotification), Buzz | S | `win10toast`-style native toast on top of the bell would survive a minimised window. |
+| **Windows toast notification on completion** | 🟢 shipped — bell **and** native toast | MacWhisper (NSUserNotification), Buzz | — | Was marked bell-only; confirmed `tray.notify()` fires on every completed job and calls pystray's native toast whenever pystray+Pillow are present. |
 | **Internationalised UI** | 🟢 English-only **by design** | MacWhisper (multiple), Buzz | — | Scope choice: this app targets English-speaking users. Multi-language UI is explicitly out of scope. The SMTV scraper accepts non-English URLs but the UI labels stay English. |
 | **RTL layout support** | 🟢 not applicable (English-only) | Most modern Qt/Electron apps | — | Out of scope by the same scope choice above. |
 | **Dark / light theme** | 🟢 yes (sv-ttk) | 🟢 most | — | Done. |
-| **High-DPI scaling** | 🟡 implicit Tk default | MacWhisper, modern Qt apps | S | Tk needs `tk scaling` set explicitly for 150%+ Windows displays. |
-| **Resizable / dockable result panel** | 🟡 fixed in our Last Result card | Descript, Buzz | S | Power users want to make the transcript pane huge. |
-| **Window state persistence** (remember size / position) | 🔴 absent | every modern desktop app | XS | Save/restore `geometry()`. |
+| **High-DPI scaling** | 🟢 shipped | MacWhisper, modern Qt apps | — | Was marked implicit-default; confirmed an explicit `_apply_hidpi_scaling()` using `winfo_fpixels("1i")`, tested (`tests/core/test_app_hidpi.py`, 5 tests). |
+| **Resizable / dockable result panel** | 🟡 nuanced | Descript, Buzz | — | The Last Result card itself is fixed by design, but the transcript viewer it launches (`transcript_viewer.py`) is a separate resizable Toplevel with a real `ttk.PanedWindow` draggable sash. |
+| **Window state persistence** (remember size / position) | 🟢 shipped | every modern desktop app | — | Was marked absent; confirmed `window_geometry` is restored on launch and saved on exit (`app/app.py`). |
 | **Keyboard shortcuts** (Ctrl+O Browse, Ctrl+Enter Transcribe, Esc cancel, Ctrl+Q exit) | 🟢 shipped (README.md) | Buzz, MacWhisper | — | Was marked absent; confirmed implemented. |
 | **Accessibility / screen reader** | 🔴 untested | Apple-first apps inherit it | L | Tk accessibility on Windows is weak; UIA is partial. |
 
@@ -113,10 +113,10 @@
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
 | **Code-signed exe** (no SmartScreen warning) | 🔴 unsigned | MacWhisper (Developer ID), Buzz (since 2023, Sectigo) | M | Costs ~$200/year for a cert + signing pipeline. Without it, first-launch always trips SmartScreen. |
-| **Notarised macOS build** | 🔴 N/A (Windows-only) | MacWhisper, Buzz | XL | Would require porting to a cross-platform toolchain. |
-| **Auto-update from inside the app** | 🔴 absent | Buzz (Squirrel), MacWhisper (Sparkle), Vibe | M | `tufup` is the standard PyInstaller-compatible solution. |
-| **Per-machine install + per-user override** | 🟡 Inno admin/user choice exists | MacWhisper, Buzz | — | Acceptable; Method B and C do this. |
-| **Linux / Flatpak / AppImage** | 🔴 Windows-only | Buzz (.deb, AppImage), Vibe (.deb, AppImage) | L | We chose Windows-only deliberately; revisit if there's demand. |
+| **Notarised macOS build** | 🟡 not notarised, but no longer Windows-only | MacWhisper, Buzz | M | Was marked N/A/Windows-only; confirmed 3 real macOS paths exist (PyInstaller `.app`→`.dmg`, `install.command` source venv, Homebrew formula) — `macos-compileall-script-test.yml` completed successfully on a real macOS runner 2026-07-04, and `macos-app.yml` has prior successful arm64+x86_64 runs. Still explicitly unsigned/un-notarised. Effort is now M (buy an Apple Developer cert) rather than XL — the porting work is already done. |
+| **Auto-update from inside the app** | 🟡 partial — notify-only | Buzz (Squirrel), MacWhisper (Sparkle), Vibe | S | Was marked absent; confirmed `core/updates.py` + a Help-menu "Check for updates" hit the GitHub releases API and compare versions, but only ever notify (`_on_update_result` calls `webbrowser.open`) — no auto-download/install. |
+| **Per-machine install + per-user override** | 🔴 absent — admin-only | MacWhisper, Buzz | S | Verified 2026-07-04: both `installer.iss` and `installer_embed.iss` hardcode `PrivilegesRequired=admin` with no `PrivilegesRequiredOverridesAllowed`; `docs/INSTALL.md` confirms "Asks for admin rights (Yes)" with no alternative. The Portable ZIP is a separate distribution method, not a per-user installer mode. |
+| **Linux / Flatpak / AppImage** | 🟡 Linux is real, just not packaged | Buzz (.deb, AppImage), Vibe (.deb, AppImage) | L | Was marked Windows-only; confirmed `platform/linux/{install,update,uninstall}.sh` + a full Ubuntu CI matrix (Python 3.11/3.12 under xvfb-run) — a real, tested source/venv install path exists, just no `.deb`/Flatpak/AppImage binary yet. |
 | **Reproducible builds** | 🔴 not enforced | Tor Project, Reproducible Builds Project | M | A Method-A user who hash-compares the binary to ours would not get a match because of build-time inputs. |
 | **Crash reporting** | 🟡 Sentry available but commented out | Buzz uses sentry-sdk | XS | Just uncomment + flip a config; need to add a UI consent toggle. |
 | **Opt-in usage telemetry** | 🟢 shipped (`core/stats.py`, `telemetry_opt_in` config key, off by default) | Vibe (anonymous metrics, off by default), MacWhisper | — | Was marked absent; confirmed implemented (host/hardware/app-version fields added v1.5.0). |
@@ -148,12 +148,12 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **Onefile size** | 🟢 190.8 MB | Buzz Windows: ~ 220 MB, Vibe: ~ 60 MB (Tauri lighter) | — | Onefile is a reasonable size. |
-| **Cold start** | 🟢 ~ 6 s onefile, ~ 3 s onedir/embed | Buzz: ~ 4 s; MacWhisper: < 1 s native | — | Acceptable. |
-| **Memory footprint** | 🟡 ~ 2 GB once model is loaded | Buzz (model-dependent same), MacWhisper (Apple Neural Engine — much less) | — | Inherent to faster-whisper large-v3. Smaller model = lower memory. |
-| **GPU acceleration tested on each release** | 🔴 only CPU smoke runs in the test suite | Buzz (GPU smoke per release in CI) | S | Without GPU testing, a ctranslate2 / CUDA upgrade can silently break GPU users. |
+| **Installer size** | 🟢 Setup-Standard ~226 MB, Portable ~343 MB | Buzz Windows: ~ 220 MB, Vibe: ~ 60 MB (Tauri lighter) | — | Was describing the unshipped PyInstaller onefile (now ~447 MB per `BUILD.md`); corrected 2026-07-04 to the artifacts actually shipped (v1.5.0 release, sizes cross-verified local disk vs `gh release view`). Competitive with Buzz. |
+| **Cold start** | 🟢 ~ 1.9 s warm, ~ 4.7 s fresh disk cache (shipped embed launch) | Buzz: ~ 4 s; MacWhisper: < 1 s native | — | Verified 2026-07-04 with a real stopwatch measurement against `embed_build/` (`pythonw.exe gui.py`, the actual Setup-Standard launch mechanism — no PyInstaller bootloader at all, so the old "onefile"/"onedir" framing didn't match what ships). Competitive with Buzz either way. |
+| **Memory footprint** | 🟡 ~ 2 GB once model is loaded | Buzz (model-dependent same), MacWhisper (Apple Neural Engine — much less) | — | Inherent to faster-whisper large-v3. Smaller model = lower memory; the whisper.cpp q5_0 backend (~1.1 GB) is already a lower-memory alternative. |
+| **GPU acceleration tested on each release** | 🔴 only CPU smoke runs in the test suite | Buzz (GPU smoke per release in CI) | S | Without GPU testing, a ctranslate2 / CUDA upgrade can silently break GPU users. Re-confirmed 2026-07-04 — the CI matrix is Windows/Ubuntu CPU-only across all 9 workflow files. |
 | **Streaming model download with resume + checksum** | 🟢 already implemented in `core/model_manager.py` | most cloud-down apps lack this | — | Done; better than peers actually. |
-| **Quantised model support** (int4, int8, q5_0 from whisper.cpp) | 🟡 only int8 via ctranslate2 | Buzz / Vibe (whisper.cpp ggml q5_0, q4_K_M) | M | Halves model size on disk and 2-3× speed on weak CPUs. |
+| **Quantised model support** (int4, int8, q5_0 from whisper.cpp) | 🟢 shipped — q5_0 | Buzz / Vibe (whisper.cpp ggml q5_0, q4_K_M) | — | Was marked int8-only; confirmed `core/backends/whisper_cpp.py` runs ggml q5_0 (~1.1 GB) via pywhispercpp, one-click download in the Advanced dialog, 7+ tests. Only q5_0 is wired (no q4_K_M), so a smaller residual gap remains. |
 
 ---
 
@@ -171,17 +171,19 @@
 
 ## J. The honest "where do we stand" verdict
 
-We're a **solid local file transcriber** with an **unusual standout** (SMTV native scraping) and a **modern packaging story** (three install methods, audit-clean code, 164 tests). We are also **one of the only Windows-first Whisper apps that bundles the model download + ffmpeg + yt-dlp + a real UI in a single install**, which Buzz and Vibe pieces together with separate steps.
+**Rewritten 2026-07-04** — a two-agent, evidence-based re-audit of this entire document found the large majority of the original May-2026 "gaps" had already shipped since: speaker diarization, DOCX/PDF/Markdown export, the full in-app transcript viewer (VLC playback, karaoke highlight, find-and-replace, filler strip, word-confidence colour, speaker rename), all 5 ASR backends, the hardware wizard + model picker, Demucs separation, crash auto-resume, drag-and-drop, watched folders, multi-select batch queue, right-click Explorer integration, CLI mode, per-folder overrides, GitHub Actions CI, and opt-in telemetry. See every row above for the file:line evidence.
 
-The five things keeping us behind the leaders, in priority order:
+We're now a **feature-rich local file transcriber** with an **unusual standout** (SMTV native scraping), a genuinely **full-featured in-app transcript viewer**, and a **modern packaging story** (three install methods, audit-clean code, 1701 tests gated in CI on every push/PR). We are also **one of the only Windows-first Whisper apps that bundles the model download + ffmpeg + yt-dlp + a real UI in a single install**, which Buzz and Vibe piece together with separate steps.
 
-1. **Speaker diarization.** Single biggest user-visible gap. Without it, our transcripts of meetings / interviews / podcasts are noticeably less useful than even the free tier of Otter or any MacWhisper output. Effort: L. Impact: 10/10.
-2. **In-app transcript viewer with click-to-jump playback.** Even if we never build a full editor, just showing the SRT inside the app — with a play button — closes a huge confidence gap. Effort: M. Impact: 8/10.
-3. **DOCX + Markdown export.** Cheap to ship, journalists love it. Effort: S. Impact: 6/10.
-4. **System-wide dictation hotkey.** Defines the entire Superwhisper / Wispr Flow category that's growing fastest in 2025/2026. Effort: XL. Impact: 9/10.
-5. **CI on GitHub Actions** with our own tests gated on PRs. Without this, every release is "trust me, I ran the smoke locally" — fine for a one-person project, fragile for anyone else who tries to ship a hot-fix. Effort: M. Impact: 7/10 to maintainers. (Code-signing is deferred — current scope decision.)
+The five things actually keeping us behind the leaders now, in priority order:
 
-Everything else in this document is real and reasonable to address over time, but the five above are the ones that change how users describe the product.
+1. **System-wide dictation hotkey.** The one large, unambiguous absence left in the whole document. Defines the entire Superwhisper / Wispr Flow category that's growing fastest in 2025/2026. Effort: XL. Impact: 9/10.
+2. **True streaming live mic transcription.** The "Live" tab today is record-then-transcribe (mic/system-audio to WAV, then the normal pipeline), not continuous streaming. Whisper-Streaming's LocalAgreement-n is the proven pattern. Effort: L. Impact: 7/10.
+3. **Word-level click-to-jump + real inline re-export editing.** The transcript viewer already does almost everything peers do (karaoke highlight, find/replace, filler-strip, speaker rename) — the two gaps left are segment- (not word-) granularity seeking and edits that save back only to the source `.json` with no re-export to SRT/VTT/TXT. Effort: M. Impact: 7/10 — closes out what used to be our single biggest gap (section B).
+4. **Trust: code-signing (Windows) + notarisation (macOS).** Both installers/builds are unsigned, so Windows SmartScreen and macOS Gatekeeper both warn on first launch. The macOS side now has 3 working build paths (just needs a cert); Windows just needs a ~$200/yr signing cert + pipeline. Effort: M each. Impact: 6/10 (first-run friction, not a functional gap).
+5. **Translation exposure** (`task="translate"`). Whisper already supports translate-to-English internally; we never expose it in the UI. Cheap relative to its impact for non-English-source users. Effort: M. Impact: 5/10.
+
+Everything else in this document is real and reasonable to address over time (per-project hotword glossary, PII redaction, sound-event tags, a q4_K_M quantised model, a single shared output folder across source directories, GPU-per-release CI), but the five above are the ones that would most change how users describe the product today.
 
 ---
 

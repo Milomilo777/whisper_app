@@ -114,8 +114,19 @@ All 5 rows: **confirmed still accurate**, no change (yt-dlp passthrough, SMTV sc
 
 ## Not yet done (next session)
 
-1. Spot-check the 2 flagged-uncertain items: per-machine/per-user install reversal (F), and the cold-start number for the shipped embed pipeline (H).
-2. Apply all confirmed corrections above to `docs/GAPS_AGAINST_PEERS_2026.md`.
+1. ~~Spot-check the 2 flagged-uncertain items~~ — **DONE 2026-07-04 (later session):**
+   - Per-machine/per-user install (F): confirmed the reversal is correct — both
+     `installer.iss` and `installer_embed.iss` hardcode `PrivilegesRequired=admin`
+     with no `PrivilegesRequiredOverridesAllowed`; flipped row F to 🔴 absent
+     in `docs/GAPS_AGAINST_PEERS_2026.md`.
+   - Cold start (H): directly measured against the real shipped launch path
+     (`embed_build/python/pythonw.exe gui.py`, timed via a PowerShell stopwatch
+     polling for `MainWindowHandle`) — **~4.7 s on a fresh disk cache, ~1.9 s
+     warm** (two repeat runs). Updated row H with the real numbers and dropped
+     the stale "onefile"/"onedir" framing (the shipped path is neither — it's
+     the embed tree with no PyInstaller bootloader).
+2. Apply the REMAINING confirmed corrections above (rows other than F/H) to
+   `docs/GAPS_AGAINST_PEERS_2026.md` — still open.
 3. Rewrite Section J's "top 5 gaps" verdict — given how much shipped, the real remaining big gap is mostly the system-wide dictation hotkey; DOCX/MD, CI, diarization, and the in-app viewer are all done now.
 4. Fix the "164 tests" mention in Section J (actual: 1701 collected this session, full suite green, exit code 0).
 5. Grep for any other stale test-count mentions in the file.
