@@ -49,26 +49,28 @@ then re-checked the rest of the document:
   history (agentId `af9a1c4d678d280e0` if the harness can still
   resume it, otherwise re-derive by reading its report in the
   transcript or just re-running the same audit).
-- **Agent B** (sections E/F/H/I + the C filename-templating rows,
-  agentId `a81aa2ee4090b5413`) was STILL RUNNING when I had to stop.
-  Its output path (do not read directly via a shell tool — it's a
-  raw JSONL transcript that will overflow context; use the harness's
-  own agent-resume/notification mechanism):
-  `C:\Users\Owner\AppData\Local\Temp\claude\C--Users-Owner-Desktop-whisper-app\56442984-2b51-4329-b5a6-b160013f2567\tasks\a81aa2ee4090b5413.output`
-  — that whole temp directory is session-scoped and may not survive
-  into a new session; if it's gone, just re-dispatch the same audit
-  (see the exact prompt used, in this conversation's history).
+- **Agent B** (sections E/F/H/I + the C filename-templating rows)
+  ALSO reported back (after I'd already written the paragraph above
+  and stopped) — equally thorough, cross-verified live via `gh run
+  list`/`gh release view`, not just static code reading. Both agents'
+  full findings (every row, verdict, evidence, suggested wording) are
+  saved verbatim — nothing lost — at:
+  `docs/history/GAPS_AUDIT_2026-07-04_findings.md`
 
-**Next steps, in order:** get/re-derive Agent B's findings → spot-
-check 1-2 surprising claims directly → apply BOTH agents' confirmed
-corrections to `docs/GAPS_AGAINST_PEERS_2026.md` (🟢 for fully
-shipped, corrected 🟡 nuance for partial, leave confirmed-absent 🔴
-rows alone) → rewrite Section J's "top 5 gaps" verdict (it's
-currently very wrong now that diarization/DOCX-MD/CI/the whole
-viewer are done — the real remaining big gap is mostly the system-
-wide dictation hotkey) → fix the "164 tests" mention in Section J
-(actual: 1701 collected, full suite green) → grep for any other
-stale test-count mentions → commit and push.
+**Next steps, in order** (all detailed in that findings file's own
+"Not yet done" section): spot-check the 2 flagged-uncertain items
+(per-machine/per-user install claim reversal, and the cold-start
+number for the actually-shipped embed launch path) → apply both
+agents' confirmed corrections to `docs/GAPS_AGAINST_PEERS_2026.md`
+(🟢 for fully shipped, corrected 🟡 nuance for partial, leave
+confirmed-absent 🔴 rows alone — roughly 40+ rows total across both
+agents, the large majority stale) → rewrite Section J's "top 5 gaps"
+verdict (it's currently very wrong now that diarization/DOCX-MD/CI/
+the whole in-app viewer/hardware wizard/5 ASR backends/etc. are done
+— the real remaining big gap is mostly the system-wide dictation
+hotkey) → fix the "164 tests" mention in Section J (actual: 1701
+collected, full suite green) → grep for any other stale test-count
+mentions → commit and push.
 
 Also still open, mentioned but not started: `configuration.json`'s
 `stats_url` hyphen/underscore mismatch (now seeded as GitHub issue #2
