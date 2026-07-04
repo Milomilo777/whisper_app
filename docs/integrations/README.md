@@ -15,6 +15,7 @@ The pattern is the same for every integration:
 |---|---|---|---|---|
 | oTranscribe (web app for manual transcription) | **shipped** (Phase 2-oTranscribe, Session 4) | [otranscribe-research.md](otranscribe-research.md) | [otranscribe-brief.md](otranscribe-brief.md) | [otranscribe-acceptance.md](otranscribe-acceptance.md) |
 | Supreme Master TV (multi-quality download + transcript) | **shipped** (Session 11) | [smtv-research.md](smtv-research.md) | [smtv-brief.md](smtv-brief.md) | [smtv-acceptance.md](smtv-acceptance.md) |
+| machine-translate-docx (sibling translator tool — SMTV docx compatibility) | **researched, not scoped** (2026-07-04) | [smtv-translator-bridge-research.md](smtv-translator-bridge-research.md) | — | — |
 
 ## How to add a new integration
 
