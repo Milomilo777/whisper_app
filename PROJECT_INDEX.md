@@ -1,394 +1,489 @@
-# PROJECT INDEX — Whisper Project (offline audio/video to text)
+# PROJECT INDEX — Whisper Project
 
 > **Read this first.** Onboarding map for any coding agent (Claude Code, Codex, Cursor, Copilot, …) or human — written so you can understand the repo *without re-scanning it*, saving tokens and time.
 >
-> Semantic sections built **2026-06-03** by the `project-index` workflow. The Structure block at the bottom is regenerated deterministically (no AI) by `tools/index_refresh.py` — never hand-edit between the AUTO-INDEX markers.
+> Semantic sections built **2026-07-04** by the `project-index` workflow. The Structure block at the bottom is regenerated deterministically (no AI) by `tools/index_refresh.py` — never hand-edit between the AUTO-INDEX markers.
 
 ## What it is
-Windows desktop app (Tkinter) that transcribes audio/video locally with faster-whisper and downloads media via yt-dlp/Supreme Master TV — fully offline after first-run model download.
+A Windows-first (also Linux and macOS) Tkinter desktop app that transcribes audio/video fully offline via faster-whisper plus 4 other pluggable ASR backends, downloads media through yt-dlp/Supreme Master TV, and exports transcripts to 13 subtitle/document formats.
 
-A drag-and-drop Windows desktop app that runs OpenAI Whisper locally to turn audio/video files into subtitles and transcripts, with no cloud, account, or upload. Each job writes outputs next to the input in up to nine formats (srt, vtt, tsv, txt, json, lrc, md, docx, pdf) and supports VAD, word-level timestamps, speaker diarisation, auto-chapters, and hallucination detection. It also downloads from any yt-dlp-supported site (plus Supreme Master TV episode links) with optional auto-transcribe, and offers an oTranscribe round-trip, an in-app transcript viewer with VLC playback, a live queue, and a folder watcher. On first launch it downloads a ~3 GB Whisper model from a CDN mirror; everything afterward is offline. Ships as two installers (Portable EXE and Standard Setup) built from a slim embeddable-Python tree.
+Whisper Project is a drag-and-drop desktop app — a Windows Setup-Standard installer + Portable zip, a Linux source install (platform/linux/install.sh), and a macOS build (PyInstaller .app/.dmg, platform/macos/install.command, or Homebrew) — that transcribes audio/video fully offline using faster-whisper (CTranslate2) by default, with whisper.cpp, NVIDIA Parakeet, and two opt-in cloud backends (Gemini API, Google Cloud Speech-to-Text) selectable in Advanced settings. Each job can add VAD, word-level timestamps, speaker diarization, auto-chapters, and hallucination detection, then writes outputs in up to 13 formats (SRT/VTT/TSV/TXT/LRC/JSON/MD/DOCX/PDF/oTranscribe/ELAN/InqScribe/Express Scribe) — plus a separate "Convert transcript" picker that re-emits any existing transcript into those formats. It also downloads from any yt-dlp-supported site or a Supreme Master TV (SMTV) episode link with optional auto-transcribe, runs a live pausable/resumable Transcription Queue and Download queue, offers an in-app transcript viewer with VLC playback and karaoke word-highlighting, a multi-monitor "Video Tiling" live-stream video wall, and an optional stdlib-only LAN/web HTTP server for browser-based job submission on a trusted network. First launch downloads the ~3 GB Whisper model from a CDN mirror (MD5-verified, resumable); everything afterward is fully offline unless a cloud backend is deliberately chosen.
 
 ## Run it
 ```
-Run from source (dev): pip install -r requirements.txt  then  python gui.py
-Editable install with extras: pip install -e .[dev]  (optional extras: backend_cpp, alignment, crash_reporting, theme_detection)
-CLI one-shot transcription (no UI): python gui.py transcribe PATH\TO\file.mp4 --language en --formats srt json docx
-Reset / recover first-run state: python gui.py --safe-mode  (backs up %LOCALAPPDATA%\WhisperProject\config.json and re-fires the hub-folder dialog)
-Full local gate (pyright + hermetic unit tests): run_tests.bat  (equivalent to: pyright app core  &&  python -m pytest tests/ --ignore=tests/smoke -q)
-Unit tests only: python -m pytest tests/ --ignore=tests/smoke -q  (smoke/E2E under tests/smoke need the real model, a test video, and live network — skip otherwise)
-Build deliverables (Windows): build_embed_installer.bat then installer_embed.iss (Standard); Portable is a make_archive ZIP of embed_build\. See docs/BUILD.md for all pipelines.
+Dev/source run: pip install -r requirements.txt && python gui.py  (or pip install -e .[dev] for an editable install with dev extras)
+Headless one-shot transcription: python gui.py transcribe PATH\to\file.mp4 --language en --formats srt json docx [--diarization]
+Optional LAN/web server: python gui.py serve (loopback only, no firewall prompt) or python gui.py serve --lan (binds 0.0.0.0)
+Reset first-run state: python gui.py --safe-mode  (backs up %LOCALAPPDATA%\WhisperProject\config.json and re-fires the hub-folder picker)
+Full local quality gate before committing: run_tests.bat  (pyright app core, must stay 0 errors/0 warnings/0 informations, then python -m pytest tests/ --ignore=tests/smoke -q)
+Build the two shipped Windows deliverables: build_embed_installer.bat (produces embed_build\), then "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss for the Setup-Standard exe, then a shutil.make_archive zip of embed_build\ for the Portable zip — full recipe in docs/BUILD.md
+Linux install: git clone https://github.com/Milomilo777/whisper_app.git && cd whisper_app && bash platform/linux/install.sh
+macOS install: git clone https://github.com/Milomilo777/whisper_app.git && cd whisper_app && bash platform/macos/install.command
 ```
 
 ## Architecture
-Single Tkinter app process (entry point gui.py -> app.run() -> app/app.py App(tk.Tk)) owns the UI and orchestration; it is the only thread that touches widgets. Background work is bridged into the Tk main loop via queue.Queue instances polled with after(). Two concurrency patterns: (1) Transcription runs in long-lived subprocess workers spawned as `python gui.py --worker` (core/worker.py) so the ~3 GB faster-whisper model loads once and stays hot; the parent and worker speak newline-delimited JSON over stdin/stdout (actions: transcribe/shutdown; events: ready/started/progress/log/done/error/startup_error/worker_exit), with a per-worker UUID token and ~5s heartbeat to survive PID recycling and detect wedges. (2) Downloads run as short-lived yt-dlp.exe subprocesses (one per task), whose stdout is read on a daemon thread, regex-parsed for progress, and pushed onto queues. The app/ package is layered: app/services (download_service, format_service, transcription_service, integrations_service) drive background work; app/domain holds task models (TranscriptionTask, VideoDownloadTask) and language enums; app/widgets builds tabs/console/tray; app/dialogs holds Toplevels (model_download, hub_setup, transcript_viewer, advanced, statistics). The core/ package is the engine: config.py (JSON at %LOCALAPPDATA%\\WhisperProject\\config.json), model_manager.py + hub.py (resumable MD5-verified ZIP model download/extract), transcriber.py with pluggable backends (core/backends: faster_whisper, whisper_cpp, parakeet), pre/post-processing (alignment, diarization, chapters, hallucination, separator, voiceprint), pluggable output writers (core/writers: srt/vtt/tsv/txt/json/lrc/md/otr/docx/pdf), integrations (core/integrations: otranscribe, smtv), and infra (paths, history SQLite, logging_setup, watcher, recorder, _proc, _threads). NOTE: docs/ARCHITECTURE.md still describes an older single-file gui.py layout; the code has since been refactored into the app/ and core/ packages described here.
+gui.py is a thin entry point (bare = launch the Tk app via app.run(); --worker = early-branch into core.worker.main() before argparse — a spawn-contract that must never be renamed/removed; transcribe FILE = headless CLI; serve = the HTTP job server; --safe-mode = config reset). app/app.py's App(tk.Tk) runs on the one Tk main thread, the only thread allowed to touch widgets; background work is bridged in via queue.Queue instances drained by after()-scheduled poll_*/loop() methods every 100-500ms. Two concurrency patterns: (1) transcription runs in long-lived subprocess workers (python gui.py --worker, core/worker.py) so the ~3 GB faster-whisper model loads once and stays hot — parent and worker speak newline-delimited JSON over stdin/stdout (actions transcribe/shutdown; events ready/started/progress/log/done/error/startup_error/worker_exit), guarded by a per-worker UUID token and a heartbeat so PID recycling or a wedged worker is detected; (2) yt-dlp.exe downloads run as short-lived per-task subprocesses whose stdout is regex-parsed for progress on a daemon thread. app/ is layered into services (download/format/transcription/integrations), domain (task models), widgets (tabs/console/tray), and dialogs (modal Toplevels); core/ is the Tk-free engine — config.py (three-layer merged config: local JSON > online allowlisted JSON > hardcoded defaults), model_manager.py/hub.py (resumable MD5-verified ZIP model download), transcriber.py orchestrating pluggable core/backends (faster_whisper, whisper_cpp, cloud_stt/Gemini, google_cloud_stt, nvidia_asr/Parakeet), pre/post-processing (alignment, diarization, chapters, hallucination, separator, voiceprint), pluggable core/writers (13 export formats), core/integrations (smtv scraper, otranscribe round-trip), an optional stdlib-only core/server package (httpd.py + jobs.py + static/index.html) for the LAN/web mode, and infra (history SQLite, logging_setup, watcher, recorder, tiling.py/monitors.py for the multi-monitor video wall, _proc/_threads). Packaging wraps this same source tree: Windows ships an embeddable-Python tree via Inno Setup (Setup-Standard) plus a Portable zip of that same tree; macOS builds a PyInstaller .app/.dmg (also installable from source via install.command or Homebrew); Linux is a source + venv install (install.sh).
 
-**Tech stack:** Python >=3.11 (3.11/3.12/3.13), Tkinter + sv-ttk + tkinterdnd2 (drag-and-drop) for the GUI, faster-whisper (CTranslate2) as default transcription backend; optional pywhispercpp (whisper.cpp) and parakeet backends, stable-ts (word-level alignment, opt-in, pulls torch); sherpa-onnx (pyannote ONNX speaker diarisation, no HF token), yt-dlp.exe + bundled ffmpeg/ffprobe for media download and merging, python-vlc for embedded playback; python-docx + reportlab for docx/pdf output, platformdirs, requests, watchdog (folder watcher), pystray + Pillow (system tray), SQLite (history), Tooling: pytest + pytest-cov + responses, pyright (basic mode, 0/0/0 baseline on app/ core/), GitHub Actions CI, Packaging: PyInstaller (.spec files, unshipped) and Inno Setup (.iss) over an embeddable-Python tree; BSD-3-Clause license
+**Tech stack:** Python 3.11-3.13, Tkinter + sv-ttk (theme) + tkinterdnd2 (drag-and-drop) for the GUI, faster-whisper / CTranslate2 (default ASR backend), Optional ASR backends: pywhispercpp (whisper.cpp), NVIDIA Parakeet (transformers + torch + librosa), Gemini API (cloud_stt), google-cloud-speech + google-cloud-storage (google_cloud_stt), stable-ts (opt-in word-level alignment, pulls torch), sherpa-onnx (pyannote ONNX speaker diarization, no HF token needed), yt-dlp.exe + bundled ffmpeg/ffprobe (vendored binaries) for media download/merge, python-vlc (embedded transcript-viewer playback), python-docx + reportlab (DOCX/PDF writers), platformdirs, requests, watchdog (folder watcher), pystray + Pillow (system tray), psutil, screeninfo (multi-monitor detection for Video Tiling), SQLite (core/history.py), pytest + pytest-cov + responses, pyright (basic mode, 0 errors/0 warnings/0 informations gate on app/ and core/), GitHub Actions CI: Windows + Ubuntu unit-test matrix on every push/PR (ci.yml), manual-dispatch macOS .app/.dmg build + smoke test (macos-app.yml), Packaging: embeddable-Python tree + Inno Setup (Windows Setup-Standard/Portable), PyInstaller .spec files (macOS .app/.dmg; unshipped Windows onefile/onedir kept in lock-step), shell installers for Linux/macOS (install.sh/install.command) + a Homebrew formula, BSD-3-Clause license
 
 ## Key docs
 | Doc | Covers |
 |---|---|
-| `README.md` | Product overview, feature list, two-deliverable model, first-run hub-folder setup, config key summary, build-from-source quickstart |
-| `CLAUDE.md` | Durable session rules: commit-often/push-batched/slow-release cadence, single master mainline, pre-authorised git/gh ops, English-only scope, pyright 0/0/0 gate; points to SESSION_HANDOFF_NEXT.md as source of truth |
-| `docs/SESSION_HANDOFF_NEXT.md` | READ FIRST each session — current state (v1.3.7 published), latest audit results, deferred/known items, and live re-validation steps |
-| `docs/ARCHITECTURE.md` | Process/threading model, worker JSON-stdio protocol, queue table, cancellation contract — but written against the older single-file gui.py layout (now refactored into app/ + core/) |
-| `docs/CONFIG.md` | Every config.json key with defaults (hub_folder, model_path, whisper_model, transcribe_backend, post-process toggles) |
-| `docs/DECISIONS.md` | Architecture Decision Records: why subprocess workers, vendored yt-dlp, MD5 ZIP model distribution, tkinter, SRT+JSON-beside-input |
-| `docs/BUILD.md` | The three build pipelines (Portable / Compact / Standard embeddable-Python) and post-build sanity checks |
-| `docs/RELEASE_PROCESS.md` | Ship sequence: version bump locations, tagging, gh release create/edit, release pruning policy |
-| `docs/CHANGELOG.md` | Version history including the [Unreleased] deep-audit hardening batches (large file — sample, do not read in full) |
+| `README.md` | Product overview, feature list, two-deliverable model, first-run hub-folder setup, config key summary, docs index |
+| `CLAUDE.md` | Durable session rules for AI agents: commit-often/push-batched/slow-release cadence, single master mainline, pre-authorised git/gh ops, English-only scope, pyright 0/0/0 gate |
+| `docs/SESSION_HANDOFF_NEXT.md` | Read-first source of truth for current state, latest audit/work log, and what (if anything) is left to do |
+| `docs/ARCHITECTURE.md` | Process/threading model, worker JSON-stdio protocol, queue table, cancellation contract — STALE: written against an older monolithic gui.py, predates the app/+core/ package refactor |
+| `docs/CONFIG.md` | Full config.json field reference, including the three-layer merged config (local > online allowlist > hardcoded) and the model catalog |
+| `docs/BUILD.md` | All build pipelines (embeddable-Python Standard+Portable, PyInstaller onefile/onedir) and which are actually shipped |
+| `docs/SERVER.md` | Optional local-network/web HTTP server mode: routes, upload cap, token/password, security caveats |
+| `docs/CLOUD_STT.md` | Optional Gemini-API cloud transcription backend (paste an API key) |
+| `docs/CLOUD_STT_GOOGLE.md` | Optional full Google Cloud Speech-to-Text backend (service-account JSON, batch mode, speaker labels) |
+| `docs/DECISIONS.md` | Architecture Decision Records — why subprocess workers, vendored yt-dlp, MD5 ZIP model distribution, Tkinter, etc. |
+| `docs/TESTING.md` | How to run run_tests.bat, what the test files are, hermetic tests/ vs resource-heavy tests/smoke/ |
+| `docs/RELEASE_PROCESS.md` | Ship sequence: version-bump locations, tagging, gh release create/edit, release-pruning policy |
+| `docs/CHANGELOG.md` | Version history (current: 1.5.0, 2026-07-03 — project/repo renamed to whisper_app) |
+| `platform/macos/README.md` | macOS install/build notes (install.command, Homebrew, PyInstaller .app/.dmg) — its 'not yet validated on a real Mac' banner is stale; CI now builds and smoke-tests real .dmg artifacts |
+| `platform/linux/README.md` | Linux install/update/uninstall via install.sh (venv-based, desktop entry, whisper-project/whisper-transcribe launchers) |
 
 ## Onboarding tips
-- Read docs/SESSION_HANDOFF_NEXT.md FIRST every session — it is the declared source of truth for current state (currently v1.3.7), and CLAUDE.md encodes the workflow rules (commit local + often, push in batches, slow release cadence, single master mainline, never force-push/move published v1.0.3+ tags).
-- ARCHITECTURE.md is partly stale: it describes a monolithic gui.py, but the real code lives in the app/ (services/domain/widgets/dialogs) and core/ (backends/writers/integrations/engine) packages. gui.py is now just a thin entry/CLI/worker dispatcher. Trust the package layout over that doc's file map.
-- The hard quality gate is run_tests.bat = pyright app core (must be 0 errors/0 warnings/0 informations) plus the hermetic pytest suite (tests/ minus tests/smoke). Run it before any commit; the v1.3.7 baseline is 0/0/0 and must stay green.
-- Tests under tests/smoke are NOT hermetic — they need the real ~3 GB Whisper model, a local test video (e.g. E:\3029-NWN-Daily-Scroll-2m_0002.mp4), and live network for SMTV E2E. They are gated by env vars / skipped when resources are absent; do not expect them to run in CI or a clean checkout.
-- Transcription is a subprocess worker (`python gui.py --worker`, core/worker.py) that talks line-delimited JSON over stdio — the `--worker` shape is a spawn-contract used by every deliverable; do not rename/remove it. Tkinter is single-threaded: only the after()-driven poll_* methods touch widgets; all background work communicates through queue.Queue.
-- When adding a module, update BOTH whisper_project_onefile.spec and whisper_project_onedir.spec hidden-import lists so the unshipped PyInstaller pipelines don't bit-rot, even though only the embeddable-Python Standard + Portable builds are actually published. Heavy backends (whisper.cpp, stable-ts/torch) are lazy-imported, opt-in extras — absence disables the feature without crashing.
+- docs/ARCHITECTURE.md is stale (describes a single monolithic gui.py); trust the real app/ (services/domain/widgets/dialogs) + core/ (backends/writers/integrations/server) package layout described above instead.
+- platform/macos/README.md's 'groundwork, not yet validated on a real Mac' banner is also stale — the manual-dispatch macos-app.yml CI workflow now builds and smoke-launches real arm64/x86_64 .app/.dmg artifacts and they have shipped on the v1.5.0 GitHub release.
+- Read docs/SESSION_HANDOFF_NEXT.md first every session — it is the owner's declared source of truth for current state and is meant to be updated again at session end.
+- Quality gate before every commit: run_tests.bat = pyright app core (must stay 0 errors/0 warnings/0 informations) + python -m pytest tests/ --ignore=tests/smoke -q.
+- tests/smoke/ is NOT hermetic — it needs the real ~3 GB Whisper model, a real local test video, and live network (SMTV E2E); it is skipped via env vars and never expected to run in CI or a clean checkout.
+- gui.py --worker is a spawn-contract handled before argparse — never rename/remove it; every transcription path spawns <exe/python> --worker to run core/worker.py.
+- Tkinter is single-threaded: only after()-scheduled poll_*/loop() methods on app/app.py's App may touch widgets; workers, yt-dlp reader threads, the folder watcher, and daemon threads only ever post onto queue.Queue instances (worker_events/download_events/format_events, plus _main_thread_calls for background threads that need the main thread).
+- Adding a module under app/ or core/ requires updating the hidden-import lists in BOTH whisper_project_onefile.spec and whisper_project_onedir.spec so the unshipped Windows PyInstaller pipelines don't bit-rot, even though only the embeddable-Python Setup-Standard + Portable ship on Windows.
+- Optional/heavy dependencies (pywhispercpp, NVIDIA Parakeet's transformers+torch+librosa, stable-ts, google-cloud-speech, pystray, tkinterdnd2, python-vlc, darkdetect, screeninfo) are all designed to degrade silently to a no-op or disabled feature when absent — core/optional_deps.py manages on-demand install; absence should never crash the app.
+- core/llm.py (local Qwen2.5-1.5B summarize/action-items/Q&A/translate), core/chapters.py (auto-chapters), and core/search.py (full-text search) are fully implemented and wired into the pipeline per the last handoff audit, but currently have no discoverable UI entry point — check before assuming a similar feature needs to be built from scratch.
+- The project/repo was renamed to whisper_app at v1.5.0 (2026-07-03); some docs (docs/INSTALL.md) still reference the pre-rename name, older version numbers, and older asset names — cross-check version-specific claims against docs/CHANGELOG.md or the live GitHub release before trusting them.
+- English-only repository policy (per this repo's CLAUDE.md): no Persian/Arabic/RTL in app/core code, comments, or commit messages — even though the SMTV scraper itself accepts non-English content URLs.
 
 ## Subsystems
 
 ### app-gui — `app/`
-The Tkinter desktop GUI for the Whisper Project: a `tk.Tk` App that wires together transcribe/download/queue/tiling tabs, modal dialogs, and background services (yt-dlp downloads, transcription worker subprocesses, format probing, integrations). `gui.py` is the top-level entry point that dispatches to GUI / worker / CLI modes.
+Tkinter desktop GUI layer of Whisper Project. The App(tk.Tk) root in app/app.py wires together services (transcription worker lifecycle, yt-dlp downloads, format lookup, integrations), Toplevel dialogs (Advanced settings, transcript viewer, hardware wizard, model download/loading, hub setup), and widgets (5 tabs: Transcribe, Transcription Queue, Download Videos, Video Tiling, Web/LAN access) into a single-window offline transcription + video-download app.
 
 **Key files**
-- `gui.py` — Top-level entry point with three modes: bare = launch Tk app via app.run(); `--worker` = early-branch into core.worker.main() BEFORE argparse (the spawn-contract — must not rename/remove); `transcribe FILE` = headless CLI; `--safe-mode` = backs up + resets config before GUI launch.
-- `app/__init__.py` — Package public surface. Exposes `run()` (launches `App().mainloop()`) and lazily re-exports `App` via module `__getattr__` so importing the package does NOT pull in tkinter / faster-whisper until App is actually requested.
-- `app/app.py` — The ~2700-line `App(tk.Tk)` God-class (121KB). Owns the Tk root, per-instance queues, all event Queues, the four services, HistoryDB, menu/tabs/console construction, and the periodic `loop()` pump. Most `*_var`/`*_combo` attributes are forward-declared here but actually assigned later by tabs.py builders.
-- `app/observability.py` — Strictly opt-in Sentry crash reporting + anonymous launch telemetry. No-op unless config[telemetry_opt_in] AND the matching env var (SENTRY_DSN / WHISPER_TELEMETRY_URL) are set. Provides init_sentry() and send_launch_ping_async().
-- `app/services/transcription_service.py` — TranscriptionService: spawns/restarts/drains long-lived `python -m core.worker` (or `<exe> --worker`) subprocesses over JSON-stdio. Module-level pure `transcribe_command()` builds the JSON dispatched to the worker (test seam for field-crossing-process-boundary bugs).
-- `app/services/download_service.py` — DownloadService: builds yt-dlp argv, runs in a daemon thread, posts events on `app.download_events`. Pure module-level helpers `build_subtitle_command` / `build_download_command` are the unit-test seams.
-- `app/services/format_service.py` — FormatService: runs `yt-dlp --dump-single-json` in a daemon thread, posts parsed info to `app.format_events`. For Supreme Master TV (SMTV) URLs it bypasses yt-dlp and scrapes via core.integrations.smtv.
-- `app/services/integrations_service.py` — IntegrationsService: oTranscribe round-trip (export task SRT to .otr and back) via core.integrations.otranscribe; opens otranscribe.com.
-- `app/widgets/tabs.py` — Tab construction extracted from App. `build_transcribe_tab`/`build_download_tab`/`build_queue_tab`/`build_tiling_tab` attach widgets and the `*_var`/`*_combo` attributes ONTO the App instance (side-effecting, return None). Contains the self-hiding _AutoScrollbar.
-- `app/widgets/tray.py` — TrayController backed by pystray + Pillow. When config[minimise_to_tray] is on, WM_DELETE_WINDOW hides instead of exits. Silently degrades to a no-op controller if pystray/Pillow import fails.
-- `app/widgets/hardware_wizard.py` — Modal accelerator-tier autodetect wizard. Probes via core.hardware, persists choice to hardware.json which core.transcriber.detect_device reads on next model load. Optional 5s benchmark button.
-- `app/widgets/console.py` — build_console(): the black/lime read-only Text log feed at the bottom of the window, with its own Copy/Copy-all/Clear right-click menu.
-- `app/widgets/platform.py` — Cross-platform UI helpers, notably open_folder() (os.startfile on Windows, open on macOS, xdg-open on Linux).
-- `app/domain/tasks.py` — Task models for the queues. Re-exports core.task.TranscriptionTask and defines VideoDownloadTask (download job state: status/progress/section_start-end slice/history_id/saved_path/linked transcription_task).
-- `app/domain/languages.py` — SUBTITLE_LANGUAGES table: display name to comma-separated yt-dlp subtitle language codes, shared by UI and download services.
-- `app/dialogs/advanced.py` — AdvancedDialog: VAD knobs, word-timestamps, output-format checkboxes, SponsorBlock categories, auto-transcribe-after-download, telemetry opt-in; saves via core.config.save_config.
-- `app/dialogs/model_download.py` — ModelDownloadDialog: modal that drives core.model_manager.ensure_model() download with progress; raises/handles DownloadCancelled.
-- `app/dialogs/model_loading.py` — ModelLoadingDialog: simpler modal shown while a worker subprocess loads the already-downloaded model into RAM. Does NOT spawn the worker; TranscriptionService flips its `success`/destroys it via the main-thread-calls queue.
-- `app/dialogs/hub_setup.py` — First-run Model Hub Folder picker; fires whenever config[hub_folder] is unset (and on --safe-mode reset).
-- `app/dialogs/transcript_viewer.py` — TranscriptViewer modal: reads core/writers JSON transcript, optional python-vlc playback with click-to-seek + karaoke word highlight, find/replace, speaker rename, filler-word strip; `open_viewer` imported by app.py.
-- `app/dialogs/statistics.py` — Read-only summary dialog over core.history SQLite (downloads/transcriptions counts, top languages). show_statistics(app).
+- `app/app.py` — The App(tk.Tk) god-object root: owns self.queue/self.download_queue, the 500ms loop() driver, thread-safe cross-thread bridges (post_to_main/_drain_main_calls), drag-and-drop, watched-folder, tray, crash-resume, menu, and window lifecycle (on_exit). ~4650 lines; tab widgets are forward-declared here as type annotations but actually assigned by app/widgets/tabs.py builders.
+- `app/__init__.py` — Package doc + lazy run() entry point; uses module __getattr__ so `import app` alone does not pull in tkinter/faster-whisper until app.App/app.run() is actually touched.
+- `app/observability.py` — Optional Sentry crash reporting + anonymous launch ping; strictly opt-in via config telemetry_opt_in AND env vars SENTRY_DSN / WHISPER_TELEMETRY_URL — a total no-op otherwise.
+- `app/domain/tasks.py` — VideoDownloadTask model (status/progress/pause/section_start-end/history_id); re-exports TranscriptionTask from core.task.
+- `app/domain/languages.py` — SUBTITLE_LANGUAGES display-name/code table + subtitle_lang_args() for yt-dlp --sub-langs.
+- `app/services/transcription_service.py` — TranscriptionService: spawns/manages long-lived `python -m core.worker` (or `<exe> --worker`) subprocesses, dispatches queued tasks to idle workers, drains worker JSON stdout events, drives the device badge, model-loading modal, and usage stats.
+- `app/services/download_service.py` — DownloadService: builds yt-dlp argv (incl. Supreme Master TV special-case with sibling parts), runs downloads in daemon threads, posts events to app.download_events, handles subtitle burn-in, pause/resume/cancel/re-run.
+- `app/services/format_service.py` — FormatService: runs `yt-dlp --dump-single-json` (or the SMTV page scrape) on a daemon thread to populate the Download tab's audio/video format dropdowns; polls app.format_events.
+- `app/services/integrations_service.py` — oTranscribe .otr <-> .srt round-trip import/export + opening the oTranscribe website.
+- `app/dialogs/advanced.py` — AdvancedDialog: the single settings hub — VAD knobs, word-timestamps, output-format checkboxes, backend picker (faster-whisper/whisper.cpp/Gemini/Google Cloud STT/NVIDIA Parakeet), SponsorBlock categories, hardware-wizard + model-download launchers, watched-folder picker. ~1441 lines.
+- `app/dialogs/transcript_viewer.py` — TranscriptViewer: segment list + optional embedded VLC playback, find/replace, speaker rename, filler-word removal, word-confidence colouring, karaoke word highlight; FindReplaceDialog companion class. ~1523 lines.
+- `app/dialogs/model_download.py` — ModelDownloadDialog: modal progress UI driving core.model_manager.ensure_model; on ModelDestinationNotWritable/PermissionError, reopens HubSetupDialog to re-pick a writable folder and retries.
+- `app/dialogs/model_loading.py` — ModelLoadingDialog: simpler modal shown while an already-downloaded model loads into a worker subprocess's RAM (vs. model_download.py which drives the byte download).
+- `app/dialogs/hub_setup.py` — HubSetupDialog + ensure_hub_configured(): first-run 'where do models live' picker with a writability probe (creates+deletes a temp file) before persisting hub_folder.
+- `app/dialogs/statistics.py` — show_statistics(): read-only summary (finished counts, total minutes, top languages) from HistoryDB, shown via messagebox.
+- `app/widgets/tabs.py` — build_transcribe_tab / build_queue_tab / build_download_tab / build_tiling_tab / build_server_tab construct each tab onto the App instance and assign its *_var/*_combo attributes. Also hosts the pure, unit-tested button_states_for_status / download_button_states_for_status / progress_cell / marquee_cell helpers. ~1085 lines.
+- `app/widgets/hardware_wizard.py` — HardwareWizard: probes acceleration tiers (CUDA/NPU/DirectML/CPU) off-thread, lets the user override the auto-pick and run an opt-in 5s benchmark, persists to hardware.json.
+- `app/widgets/tray.py` — TrayController: pystray+Pillow system-tray icon (idle/active colour), minimise-to-tray; explicitly unsupported on macOS.
+- `app/widgets/console.py` — build_console(): the black/lime read-only log Text widget + its Copy/Copy all/Clear right-click menu.
+- `app/widgets/platform.py` — open_folder(): cross-platform 'reveal in file manager' helper (os.startfile / open / xdg-open).
 
 **Entry points**
-- gui.py main() — process entry: `--worker` early-branch, `--safe-mode`, `transcribe` subcommand, else `from app import run; run()`
-- app.run() in app/__init__.py — constructs App and calls mainloop()
-- app.App.__init__ (app/app.py:161) — builds the whole UI, services, queues, and schedules the after()-callbacks
-- app.App.loop (app/app.py:2727) — the 500ms pump: refresh() + transcription_service.dispatch_waiting() + download_service.process_queue()
-- pyproject.toml console-script `whisper-project = "app:run"`
+- gui.py (repo root) -> app.run() -> App().mainloop() — default GUI launch
+- app.run() / app.App — lazily imported via app/__init__.py's __getattr__
+- gui.py --worker -> core.worker.main() — NOT in app/, but app/services/transcription_service.py hardcodes spawning exactly this subprocess shape ('do NOT remove or rename' per gui.py's own docstring)
 
 **Commands**
 ```
-run_tests.bat — the everyday gate: `pyright app core` (must be 0 errors) then `python -m pytest tests/ --ignore=tests/smoke -q`
-pyright app core — type check (v1.0.3 baseline is 0 errors/warnings/infos; protect it before every commit)
-python gui.py — launch the desktop GUI
-python gui.py transcribe FILE [--language X] [--formats srt vtt ...] [--diarization] — headless CLI transcription
-python gui.py --worker — spawn the JSON-stdio transcription worker (used internally by the App, do not invoke manually)
-python gui.py --safe-mode — launch with user config backed up + reset to defaults (recovery)
+python gui.py
+python gui.py --safe-mode   (backs up config.json, forces first-run hub/model dialogs)
+pyright app core   (must report 0 errors before every commit, per repo CLAUDE.md)
+python -m pytest tests/ --ignore=tests/smoke -q   (hermetic unit suite; tests/app/test_transcription_service.py is the only app/-specific unit test file)
+python -m pytest tests/smoke/test_app_headless.py   (real Tk App + real worker subprocess; needs a Whisper model on disk, skips otherwise)
+run_tests.bat   (runs the two checks above and prints PASS/FAIL)
 ```
 
 **Depends on**
-- core.worker (spawned subprocess; the --worker spawn-contract)
-- core.transcriber / core.task / core.config / core.history / core.model_manager / core.hub / core.hardware
-- core.integrations.smtv (SMTV scrape), core.integrations.otranscribe (oTranscribe round-trip)
-- core.writers (output formats; transcript_viewer reads its JSON)
-- core.tiling.TilingController, core.watcher.FolderWatcher, core.paths, core.logging_setup, core._proc, core._threads, core.optional_deps
-- Third-party: tkinter, sv_ttk (theme), faster-whisper (in worker), yt-dlp + ffmpeg (subprocess binaries), pystray+Pillow (tray, optional), tkinterdnd2 (drag-drop, optional), python-vlc/libvlc (viewer, optional), darkdetect (system theme, optional), sentry-sdk (optional)
+- core/ (config, task, history, hub, logging_setup, paths, watcher, model_manager, hardware, tiling, server, updates, convert, burn_subs, _threads, _proc, _checkpoint, transcriber, worker, writers, stats, monitors, optional_deps, integrations.smtv, integrations.otranscribe) — app/ is a thin UI layer that must never duplicate core/'s business logic
+- faster-whisper (only inside the core.worker subprocess; app/ never imports it directly)
+- tkinter + ttk (stdlib) — single-threaded UI toolkit; the Tk main loop owns every widget call
+- sv_ttk (light/dark theme), darkdetect (optional, system theme detection)
+- tkinterdnd2 (optional; drag-and-drop — App grafts TkinterDnD.DnDWrapper onto its own class at runtime)
+- pystray + Pillow (optional; system tray icon)
+- python-vlc + a system/bundled libvlc (optional; embedded playback in TranscriptViewer)
+- watchdog (via core.watcher.FolderWatcher; optional watched-folder automation)
+- yt-dlp (bundled binary invoked as a subprocess by download_service.py / format_service.py — not a Python import)
+- bundled ffmpeg/ffplay binaries via core.paths.bundled_binary (hardware-wizard benchmark clip, Video Tiling)
 
 **Gotchas**
-- gui.py `--worker` is a spawn-contract: it is handled BEFORE argparse and must NOT be renamed/removed — every transcription path spawns `<self-exe> --worker`. The module docstring explicitly warns this.
-- app/app.py is a ~2700-line single class. Many App attributes (`fv`, `pb`, `tree`, every `*_var`/`*_combo`) are only forward-declared as annotations in app.py; the REAL assignment happens inside app/widgets/tabs.py build_* functions, which mutate the App instance as a side effect. Renaming a var means touching both files.
-- app/__init__.py uses lazy `__getattr__` + a TYPE_CHECKING-only import of App specifically so importing the package does not drag in tkinter/faster-whisper. Don't add a top-level `from .app import App` — it breaks the worker/CLI/headless import paths.
-- Threading model: background threads (watchdog watcher, burn-subs, hardware benchmark, tray clicks, download/format daemons) must NOT call self.after() directly — on Python 3.14 that raises RuntimeError. They push onto `_watched_path_queue` or `_main_thread_calls`, drained on the Tk main thread by `_drain_watched_paths`/`_drain_main_calls`. Services post results onto bounded Queues (`worker_events`, `download_events`, `format_events`, maxsize=2000) consumed by the main loop.
-- Pyright must report 0 errors on app/ and core/ before every commit (v1.0.3 baseline 0/0/0). run_tests.bat is the gate.
-- Adding a new module under app/ requires updating the hidden-import lists in BOTH whisper_project_onefile.spec and whisper_project_onedir.spec (per CLAUDE.md) so the unshipped PyInstaller pipelines don't bit-rot — even though the shipped build is the embed installer.
-- Optional dependencies degrade silently to no-ops: pystray/Pillow (tray), tkinterdnd2 (drag-drop), python-vlc/libvlc (transcript viewer playback), darkdetect (system theme). Missing them must never block App startup.
-- observability.py sends nothing unless BOTH config[telemetry_opt_in] is true AND the matching env var (SENTRY_DSN / WHISPER_TELEMETRY_URL) is set; packaged installers ship no DSN so they stay quiet.
-- CLI path (gui.py _cli_transcribe) must refresh `core.transcriber.config` via `_trans.config.update(cfg)` after save_config — the worker/transcriber module reads config once at import time, so without this the first CLI run silently ignored new --formats/--diarization.
-- VideoDownloadTask.section_start/section_end (yt-dlp time-slice) are deliberately distinct from start_time/end_time (running-task wall clocks for the Elapsed column) — easy to confuse. SMTV downloads ignore the slice (CDN has no server-side slicing) and just WARN.
-- English-only repository policy (CLAUDE.md): no Persian/Arabic/RTL in app/ code, comments, or commit messages, even though the SMTV scraper accepts non-English content URLs.
-- Glob `app/**/*` returned nothing in this environment (path/case quirk); use `ls`/Read on absolute paths instead. The __init__.py files in services/domain/widgets/dialogs are effectively empty (1 line).
+- Tk is single-threaded: every background thread (burn-subs worker, tray runner, hardware-wizard probe/benchmark, model-download, folder-watcher, launch-ping, download/transcription workers) MUST marshal back via App.post_to_main() (drained by _drain_main_calls every 50ms, capped at 64/tick) rather than calling self.after() off-thread — that raises RuntimeError on Python 3.14 (silently no-op on older 3.x). This pattern repeats across tray.py, hardware_wizard.py, download_service.py, transcription_service.py.
+- Drag-and-drop payloads must be parsed with app.py's own _split_dnd_paths (brace/space-aware, backslash-preserving) instead of Tk.splitlist — Tcl's list parser collapses a UNC path's leading double-backslash to one, silently breaking \\server\share drops; file:// URIs (including UNC file://server/share) go through the separate _file_uri_to_path.
+- App.refresh() (called every 500ms by loop()) fully destroys and rebuilds the queue Treeview each tick, which reassigns new iids and would otherwise wipe the user's row selection (breaking the per-task action bar). Selection is preserved via the pure, unit-tested _iids_for_tasks() which maps old task objects (by id()) onto their new iids — any rewrite of refresh() must keep this snapshot/restore step.
+- button_states_for_status() / download_button_states_for_status() in app/widgets/tabs.py are the SINGLE SOURCE OF TRUTH for which Pause/Resume/Cancel/Re-run/Remove/Open actions are valid per status. Both the right-click menu (App.menu_row / download_menu_row) and the always-visible action bar call these — never re-derive the status logic in a second place or the two will drift.
+- TranscriptionService talks to a long-lived `python -m core.worker` (or `<frozen-exe> --worker`) subprocess over JSON-lines stdin/stdout. transcribe_command() is the one place that must carry every field the worker needs (language, resume, clip_start/clip_end, output_formats); a field omitted here is invisible both to the worker AND to helper-level tests — this exact class of bug shipped before (docx silently not written).
+- HEADLESS_READY_TIMEOUT_S in transcription_service.py is deliberately 1200s on macOS vs 120s elsewhere (slow VM/CI model loads) — do not collapse this into one constant.
+- App does NOT preload/standby the Whisper model at startup (v1.0.3 change, comment explicitly warns against re-adding it) — the model loads lazily on first Transcribe click via ensure_worker_ready(), showing ModelLoadingDialog. Eager preload previously cost ~1.5GB idle RAM + a CPU spike on every launch even when transcription was never used.
+- App.on_exit() has a strict teardown order: confirm-if-active-tasks -> set self._closing=True (the ONLY gate letting loop()/_drain_main_calls/_drain_watched_paths keep re-arming their after() chains; only reset in __init__) -> save window geometry -> stop folder watcher -> stop tray -> kill_process_tree() on download subprocesses -> stop tiling -> shut down the web server -> transcription_service.stop_all() -> close history DB -> self.destroy(). Reordering can leak subprocesses or corrupt history.db's WAL.
+- _exit_from_tray flag: File->Exit / Ctrl+Q / tray 'Exit' set it True to bypass the minimise-to-tray redirect. If the user declines the 'exit with queued tasks?' confirm dialog, the handler must reset _exit_from_tray back to False, otherwise the window's X button permanently stops honouring minimise-to-tray for the rest of the session.
+- System tray (pystray) is explicitly disabled on macOS (TrayController.is_supported() returns False) because pystray's AppKit backend needs the main thread's run loop, which Tk already owns.
+- Most App tab-widget attributes (fv, pb, tree, row_map, every *_var/*_combo, etc.) are only forward-declared as class-level type annotations in app.py — the real assignment happens inside the build_*_tab functions in app/widgets/tabs.py. Don't assume app.py itself initialises them.
+- TranscriptViewer's embedded VLC playback is fully optional (_locate_vlc_dir / _try_load_vlc probe several install locations) and must degrade to an 'Open in system player' button, never crash, when python-vlc or the native libvlc DLL is missing.
+- The console Text widget (app/widgets/console.py) is toggled state='disabled' between writes; its Clear handler must flip to 'normal', delete, then restore the PREVIOUS state, or the log becomes permanently editable.
+- app/__init__.py uses TYPE_CHECKING + a module __getattr__ specifically so `import app` alone does not eagerly import tkinter/faster-whisper — only app.App / app.run() triggers it. Don't convert this back to an eager top-of-file import.
+- Every preference-toggle save_config() call (theme, chime, tiling, server prefs, recent-files dismiss list) is individually wrapped in try/except and logged rather than allowed to raise — an uncaught exception inside a Tk callback surfaces as a cryptic background-exception dialog or silently truncates the rest of the callback.
+- 'Clear list' under File > Recent files does NOT delete history.db rows (HistoryDB has no clear method and is owned by core/); it stores a recent_files_dismissed set in config.json and filters the menu, so a later transcription of a previously-dismissed path makes it reappear by design.
+- Adding a new module/import under app/ must also update the hidden-import lists in BOTH whisper_project_onefile.spec and whisper_project_onedir.spec (per repo root CLAUDE.md) even though neither PyInstaller pipeline currently ships, to avoid silent bit-rot.
+- Cross-thread event queues (worker_events, format_events, download_events, _watched_path_queue, _main_thread_calls) are all bounded at maxsize=2000 — producers get Full/drop rather than unbounded growth; this is deliberate backpressure, not a bug to 'fix' by making them unbounded.
 
 ### core — `core/`
-The headless, Tk-free engine layer of the Whisper Project: model download/lifecycle, the transcription pipeline (VAD, word timestamps, diarization, hallucination flagging, multi-format output), pluggable backends, the long-lived worker subprocess protocol, persistence (config, history, checkpoints), and feature modules (recorder, separator, LLM, search, chapters, etc.). The GUI in app/ drives everything here through core.worker.
+Tk-free transcription engine package: pluggable ASR backends, ~13 output-format writers, config/history/model-management, and optional features (diarization, alignment, LLM, search, recording, video tiling, an HTTP job server) that the Tk app (app/) and the CLI (gui.py) both drive without ever importing tkinter themselves.
 
 **Key files**
-- `core/transcriber.py` — Heart of the pipeline (~73 KB). Holds module-global MODEL/PIPELINE/_ALT_BACKEND state; public API transcribe(), resume_transcription(), load_existing_model(), detect_device(), get_model_error(). Normalizes language codes (_normalize_language strips BCP-47 to Whisper's ISO codes), wires VAD/word-timestamps/diarization/hallucination/writers, and drives periodic checkpointing.
-- `core/worker.py` — Long-lived worker subprocess. Reads JSON commands from stdin (transcribe/cancel/pause/resume/shutdown), emits JSON events on stdout (ready/started/progress/done/error/language_detected/log/startup_error). A dedicated reader thread applies control commands while the main thread is blocked in transcribe(). Protocol is FROZEN — add fields only, never rename/remove.
-- `core/config.py` — Single source of truth for DEFAULT_CONFIG and load_config()/save_config(); platformdirs path helpers (user_data_dir, user_cache_dir, user_config_dir, user_log_dir). save_config is serialized by a module-level _SAVE_LOCK + atomic os.replace to dodge Windows PermissionError races.
-- `core/model_manager.py` — Whisper model download/verify/extract. MODEL_REGISTRY (large-v3 default, turbo, distil) maps slugs to name/url/md5 mirrors on smch.ir; ensure_model() downloads+md5-verifies+unzips with MAX_DOWNLOAD_ATTEMPTS cap; raises DownloadCancelled.
-- `core/__init__.py` — Bundled __version__ (currently 1.3.7) — the canonical runtime version read by About dialog + telemetry. Must be bumped alongside pyproject.toml and both .iss files on release.
-- `core/backends/base.py` — Abstract Backend ABC + LanguageInfo dataclass. Defines the load/is_ready/transcribe_to_segments/unload/get_error contract every engine implements.
-- `core/backends/__init__.py` — get_backend(name) factory; dispatches faster_whisper (default) / whisper_cpp / parakeet, silently falling back to faster_whisper on unknown names.
-- `core/backends/faster_whisper_be.py` — Default CTranslate2 backend; thin adapter over the legacy module-global MODEL/PIPELINE state so the worker loads the model once.
-- `core/backends/whisper_cpp.py` — pywhispercpp/ggml backend (quantized, smaller, weak-CPU friendly; opt-in).
-- `core/backends/parakeet.py` — NVIDIA Parakeet TDT v3 via sherpa-onnx (RNN-T/TDT decoder, 3 .onnx files + tokens.txt under user_cache_dir()/parakeet).
-- `core/writers/__init__.py` — Format-writer registry: WRITERS (text: srt/vtt/tsv/txt/json/lrc/md) + BINARY_WRITERS (docx/pdf). Use get_writer/get_binary_writer/is_binary/supported_formats. New formats register here.
-- `core/writers/base.py` — Shared writer helpers: fmt_srt_time/fmt_vtt_time/fmt_lrc_time, normalize_text, sanitize_for_xml (strips XML-illegal control chars for docx), escape_cue_separator (literal --> in cue text), speaker_prefix.
-- `core/_checkpoint.py` — Periodic partial-transcript checkpoints under user_data_dir()/partials/<sha1(abs_src)>.json, atomic .tmp+os.replace. SCHEMA_VERSION=1 (bump only on breaking change). Imports nothing from transcriber to keep deps one-way.
-- `core/_proc.py` — Cross-platform process-tree kill (Windows taskkill /T, POSIX killpg) + new_session_kwargs() Popen flags. Best-effort, never raises. Required so ffmpeg/yt-dlp/demucs grandchildren aren't orphaned on Windows.
-- `core/_errors.py` — fmt_err(action, exc) uniform error-string formatter + with_retries() exponential-backoff retry helper.
-- `core/_threads.py` — Thread helpers used across the engine layer.
-- `core/_liveness_tick.py` — liveness_tick(log_cb, label) context manager that emits a heartbeat log line every interval so silent long C calls (sherpa/ctranslate2/demucs/llama/stable-ts) don't trip the parent's LIVENESS_TIMEOUT_S watchdog and get SIGTERM'd.
-- `core/task.py` — TranscriptionTask data holder: file_path, status, progress, language, resume flag, clip_start/clip_end, output_formats (per-task, overrides worker's stale import-time config snapshot), output_paths, history_id, source_download back-reference.
-- `core/paths.py` — resource_base()/bin_dir()/bundled_binary() — resolve bundled assets across onefile(_MEIPASS)/onedir(exe dir)/source(repo root). Persistent data goes through config.py platformdirs, NOT here.
-- `core/hardware.py` — Tk-free hardware autodetect (CUDA fp16 -> int8 -> QNN/Intel NPU -> OpenVINO -> DirectML -> CPU int8); persists choice to hardware.json. Backs the Hardware Wizard; detect_device() consumes load_hardware_choice().
-- `core/history.py` — SQLite history.db (downloads + transcriptions tables) under user_data_dir(); idempotent schema, one connection per HistoryDB.
-- `core/diarization.py` — Offline speaker diarization via sherpa-onnx (segmentation.onnx + embedding.onnx under bin/diarization/). diarize(audio_path) -> [{start,end,speaker}]. No HF token, no torch.
-- `core/hallucination.py` — annotate_segments() flags suspect segments (Bag-of-Hallucinations phrases, repetition loops, VAD disagreement) by setting seg['suspect'] and seg['suspect_reason'].
-- `core/separator.py` — Demucs vocal-separation pre-process; separate_vocals() returns vocals WAV or the input path unchanged when demucs missing/disabled. Cache under user_cache_dir()/demucs.
-- `core/optional_deps.py` — On-demand pip-install of heavy extras (stable-ts alignment, openai-whisper backend; both pull torch) into a user-writable sys.path dir. FEATURES map; serialized by _install_lock; DEFAULT_INSTALL_TIMEOUT_S cap.
-- `core/llm.py` — Local LLM panel (Qwen2.5-1.5B via llama-cpp-python): summarise/action-items/ask/translate. Download-on-first-use to user_cache_dir()/llm; lazy import; singleton LLMRunner; raises LLMUnavailable when dep absent.
-- `core/recorder.py` — Mic + WASAPI system-loopback recording (sounddevice / pyaudiowpatch) to mono 16kHz int16 WAV; daemon thread, non-blocking stop, errors via Recorder.last_error.
-- `core/search.py` — search() over saved transcripts: semantic (all-MiniLM-L6-v2 ONNX, sidecar embeddings table) with transparent FTS5 fallback; both walk history.db, return SearchHit list.
-- `core/chapters.py` — Auto-chapter detection from silences (detect_chapter_boundaries pure-Python; optional title_chapters_with_llm).
-- `core/voiceprint.py` — Cross-file speaker fingerprints in voices.db via pyannote/embedding; enrol + relabel SPEAKER_NN -> names; raises VoiceprintUnavailable without pyannote.audio.
-- `core/alignment.py` — Opt-in word-timestamp refinement via stable-ts; calls model.align() on a WhisperResult built from existing segments (NOT stable_whisper.align(), which silently aborted before).
-- `core/hub.py` — Model-hub folder resolution: model_path override -> hub_folder/<model dir> -> user_cache_dir()/models fallback.
-- `core/watcher.py` — Watched-folder auto-enqueue via lazy watchdog; gated by config watched_folder + watched_folder_enabled.
-- `core/tiling.py` — Video-wall: yt-dlp | ffplay tile filter. ffplay is NOT bundled — resolved via bundled_binary, degrades gracefully if missing.
-- `core/burn_subs.py` — burn(video, srt, out) — ffmpeg subtitles filter overlay; synchronous, run on a background thread by callers.
-- `core/integrations/smtv.py` — Supreme Master TV episode scraper (stdlib urllib, parses videoPlayerData + article-text transcript). No yt-dlp, no new deps. DOM contract documented in docs/integrations/.
-- `core/integrations/otranscribe.py` — .otr <-> srt/whisper-json converter; exactly five public names (incl. segments_to_otr for the writer-shaped dict contract), stdlib only.
-- `core/logging_setup.py` — setup_logging() — configures logging for app + worker processes.
+- `core/transcriber.py` — Heart of the pipeline (~2060 lines). Module-global MODEL/PIPELINE/_ALT_BACKEND state; public API transcribe()/resume_transcription()/load_existing_model()/get_effective_device(). Normalizes language codes, builds transcribe kwargs, pre-slices clip/time-range audio via ffmpeg, drives periodic checkpointing, dispatches diarization/alignment/hallucination/chapters, and writes all requested output formats atomically.
+- `core/worker.py` — Long-lived worker subprocess entry (main()). Reads one JSON command per stdin line, emits JSON events on stdout (ready/started/progress/done/error/language_detected/log/startup_error/heartbeat). A dedicated stdin-reader thread applies cancel/pause/resume immediately; transcribe/shutdown go through a queue to the main loop.
+- `core/task.py` — TranscriptionTask plain-data class: file_path, status/progress, cancelled/paused flags, clip_start/clip_end, output_formats, output_paths, history_id, detected_language.
+- `core/config.py` — Three-layer effective config (local config.json > online app-config > hard-coded DEFAULT_CONFIG) via merge_config_sources()/load_config()/save_config(); platformdirs path helpers (user_config_dir/user_cache_dir/user_log_dir/user_data_dir); per-folder .whisperproject.json project overrides (load_project_overrides/merge_project_overrides).
+- `core/__init__.py` — Single bundled __version__ source of truth (currently 1.5.0), read by the About dialog and telemetry.
+- `core/history.py` — SQLite history.db (downloads + transcriptions tables) with WAL mode and integrity_check-on-open self-healing (corrupt DB renamed aside and recreated).
+- `core/hardware.py` — Tier auto-probe (CUDA float16/int8_float16 -> QNN NPU -> OpenVINO -> DirectML -> CPU int8), hardware.json persistence, and detect_device_for() -- the single canonical (device, compute_type) resolver used by transcriber.py and backends/faster_whisper_be.py.
+- `core/model_manager.py` — ensure_model(): download/MD5-verify/extract the ~3 GB faster-whisper model with a mirror-then-HuggingFace-fallback strategy. MODEL_REGISTRY + catalog_models()/catalog_resolve_entry() (online-catalog-augmentable) list every selectable model variant.
+- `core/hub.py` — Model hub folder resolution: model_path (explicit override) > hub_folder + model name > default_hub_folder() (per-user cache, never Program Files).
+- `core/_checkpoint.py` — Periodic JSON checkpoint for resume-after-cancel, keyed by sha1(normcased absolute source path) under user_data_dir()/partials/. validate_checkpoint() refuses a stale partial (backend/model/config-fingerprint/source size+mtime mismatch).
+- `core/_proc.py` — kill_process_tree(): cross-platform process-TREE termination (Windows taskkill /T, POSIX os.killpg on a session the child leads) so ffmpeg/yt-dlp/demucs grandchildren are never orphaned.
+- `core/_threads.py` — safe_thread(): threading.Thread wrapper that logs (rather than silently swallows) an uncaught exception in the target.
+- `core/_errors.py` — fmt_err() / with_retries() shared error-formatting and retry-with-backoff helpers.
+- `core/_liveness_tick.py` — liveness_tick() context manager: emits a periodic log line during a long silent GIL-holding C call so the parent's worker-liveness watchdog doesn't kill the worker mid-pass.
+- `core/paths.py` — resource_base()/bundled_binary(): resolves bundled-asset paths across onefile-exe / onedir-exe / source runtime contexts.
+- `core/logging_setup.py` — setup_logging(); worker_log_filename() gives each worker process its own log file (a shared RotatingFileHandler can't roll over cross-process on Windows).
+- `core/optional_deps.py` — On-demand pip install of heavy extras (stable-ts, openai-whisper, google-cloud-speech/storage, transformers+torch+librosa) into user_cache_dir()/pylibs, staged then atomically merged with per-entry rollback; activate() appends (never prepends) to sys.path so a bundled copy always wins.
+- `core/llm.py` — Local LLM panel: Qwen2.5-1.5B-Instruct via llama-cpp-python, download-on-first-use (~1 GB), singleton LLMRunner (summarise/action_items/ask/translate).
+- `core/diarization.py` — Offline speaker diarization via sherpa-onnx (pyannote-segmentation + CAMPlus embedding ONNX models under bin/diarization/); diarize() + assign_speakers_to_segments().
+- `core/alignment.py` — Word-timestamp refinement via stable-ts (DTW over cross-attention weights); refine_word_timestamps_in_place().
+- `core/hallucination.py` — Heuristic hallucination flagging: bag-of-hallucinations phrase list, in-segment token/n-gram repetition, VAD-disagreement; annotate_segments() sets suspect/suspect_reason.
+- `core/separator.py` — Demucs htdemucs vocal-separation pre-process; mtime+size cache keyed under user_cache_dir()/demucs with a byte-budget eviction (prune_cache).
+- `core/voiceprint.py` — Cross-file speaker fingerprint DB (voices.db + pyannote/embedding); enrol_speaker()/match_vector()/relabel_segments() to turn per-file SPEAKER_NN labels into stable enrolled names.
+- `core/chapters.py` — Auto-chapter boundary detection (long-silence heuristic) plus optional LLM-generated 4-7 word chapter titles; build_chapters().
+- `core/search.py` — Search over saved transcripts: FTS5 (sqlite, always available) with an optional semantic layer (sentence-transformers embeddings) that is tried first and falls back to FTS5.
+- `core/watcher.py` — FolderWatcher: watchdog-based auto-enqueue of media files dropped into a configured watched folder.
+- `core/recorder.py` — Recorder: microphone (sounddevice) or Windows WASAPI system-audio loopback (pyaudiowpatch) capture, streaming straight to a mono 16kHz WAV (no whole-take RAM buffering).
+- `core/monitors.py` — Tk-free multi-monitor detection (screeninfo -> ctypes Win32 EnumDisplayMonitors fallback -> single 1920x1080 fallback) feeding core.tiling's per-monitor ffplay placement.
+- `core/tiling.py` — TilingController: one yt-dlp stream fanned out to an NxN-tile ffplay grid across one or more monitors, with self-healing reconnect/backoff and a yt-dlp -U self-heal after repeated failures.
+- `core/burn_subs.py` — burn(): ffmpeg subtitle burn-in; copies the SRT to a graph-safe ASCII temp path before invoking the subtitles= filter to avoid libavfilter metacharacter injection from an attacker-influenced download title.
+- `core/convert.py` — Format-to-format conversion via the universal segment-list middle representation. parse_to_segments() auto-detects json/srt/vtt/tsv/otr/eaf/inqscribe; convert_file() re-emits through core.writers (plus smtv_docx as the one binary target).
+- `core/stats.py` — Opt-in (telemetry_opt_in) anonymous usage-stats POST to config['stats_url']; build_stats_payload() is a pure/testable payload builder, post_stats_async() fires on a daemon thread.
+- `core/updates.py` — Tk-free GitHub 'update available' check (releases/latest); notify-only, never downloads/installs, silent on any failure including a private repo's 404.
+- `core/backends/base.py` — Backend ABC + LanguageInfo dataclass -- the load()/is_ready()/transcribe_to_segments()/unload()/get_error() contract every engine implements.
+- `core/backends/__init__.py` — get_backend(name) factory dispatching faster_whisper (default) / whisper_cpp / cloud_stt / google_cloud_stt / nvidia_asr; unknown names silently fall back to faster_whisper.
+- `core/backends/availability.py` — ENGINE_CHOICES registry (label <-> transcribe_backend value) shared by the Transcribe-tab picker and Advanced dialog; engine_status()/engine_statuses() cheap-vs-deep readiness probes; default_engine() picks google_cloud_stt when a trusted build ships creds/gcloud_stt.json.
+- `core/backends/faster_whisper_be.py` — Default CTranslate2 engine; thin adapter that owns its own model/pipeline state, with the same self-healing CUDA->CPU downgrade as transcriber.py.
+- `core/backends/whisper_cpp.py` — pywhispercpp/ggml quantized engine (ggml-large-v3-q5_0.bin, ~1.1 GB) for weak CPUs; download_default_model() with a truncated-download completeness check.
+- `core/backends/cloud_stt.py` — OPTIONAL Gemini-API cloud STT (paste-an-API-key, uploads audio to Google). Chunks audio to FLAC, uploads via the Files API or inlines small chunks, tracks cloud_stt_minutes_used locally (no dollar-balance API exists).
+- `core/backends/google_cloud_stt.py` — OPTIONAL real Google Cloud Speech-to-Text v2 (service-account JSON, not an API key). STANDARD mode chunks+recognizes inline (~55s/chunk); BATCH mode needs a user GCS bucket, ~75% cheaper via DYNAMIC_BATCHING, up to 24h turnaround.
+- `core/backends/nvidia_asr.py` — Local (fully offline) NVIDIA Parakeet ASR via Hugging Face transformers; transcribes window-by-window (default 30s), tries word timestamps once and falls back to per-window segments if the model rejects that path.
+- `core/writers/__init__.py` — WRITERS (text) + BINARY_WRITERS (docx/pdf/smtv_docx) registries; get_writer()/get_binary_writer()/is_binary()/supported_formats() -- new output formats register here.
+- `core/writers/base.py` — Shared writer helpers: fmt_srt_time/fmt_vtt_time/fmt_lrc_time (NaN/Inf-safe), normalize_text, sanitize_for_xml, escape_cue_separator, speaker_prefix.
+- `core/writers/srt.py` — SubRip .srt text writer (escapes literal '-->' in cue text; speaker prefix).
+- `core/writers/vtt.py` — WebVTT .vtt text writer; emits per-word karaoke <c> cues when a words list is present.
+- `core/writers/tsv.py` — start/end(ms)/text TSV writer (Audacity Labels-compatible).
+- `core/writers/txt.py` — Plain text writer: one segment per line, no timestamps (output-only, not in convert.PARSE_FORMATS).
+- `core/writers/json_writer.py` — This app's canonical JSON sidecar writer (the 'middle format' every other writer/converter/viewer reads); allow_nan=False, carries words/speaker/suspect fields through.
+- `core/writers/lrc.py` — LRC lyric-timestamp writer.
+- `core/writers/md.py` — Markdown writer (heading + bold timestamp + optional speaker per line).
+- `core/writers/otr.py` — oTranscribe .otr writer; delegates serialization to core.integrations.otranscribe.segments_to_otr().
+- `core/writers/elan.py` — ELAN .eaf XML writer (TIME_ORDER/TIME_SLOT + ALIGNABLE_ANNOTATION), stdlib ElementTree only.
+- `core/writers/inqscribe.py` — InqScribe writer: inline [hh:mm:ss.ff] centisecond timestamps.
+- `core/writers/express_scribe.py` — Express Scribe writer: [hh:mm:ss] whole-second timestamps; EXPORT-ONLY, deliberately absent from convert.PARSE_FORMATS.
+- `core/writers/docx_writer.py` — Binary Word writer via python-docx. write_bytes() is the real entry; write() deliberately raises RuntimeError so a caller that bypasses the binary path fails loudly.
+- `core/writers/pdf_writer.py` — Binary PDF writer via reportlab; same write_bytes()-is-real / write()-raises pattern as docx_writer.
+- `core/writers/smtv_docx_writer.py` — Fills the transcription team's exact bundled Word template (core/writers/templates/smtv_template.docx) byte-for-byte. Needs extra language/work_title kwargs beyond the frozen (segments, audio_path) contract, so transcriber._write_outputs and convert.convert_file special-case it by name.
+- `core/integrations/otranscribe.py` — Bidirectional .otr <-> SRT/JSON converter: fmt_otr_time, srt_to_otr, whisper_json_to_otr, otr_to_srt, segments_to_otr (5-function public API; everything else private).
+- `core/integrations/smtv.py` — Supreme Master TV episode scraper: regex-parses videoPlayerData / article-text out of an episode page over stdlib urllib -- no yt-dlp involved.
+- `core/server/__init__.py` — ServerHandle (non-blocking start/stop wrapper running serve_forever on a daemon thread), run_server() (blocking 'gui.py serve' entry), find_available_port(), reachable_urls().
+- `core/server/httpd.py` — Stdlib-only ThreadingHTTPServer + BaseHTTPRequestHandler exposing the job REST API (GET/POST /api/jobs...) and a static page; per-job advanced options are validated then written into a generated .whisperproject.json so the existing per-folder override mechanism scopes them to just that job.
+- `core/server/jobs.py` — JobManager: bounded in-memory job table + a SINGLE background worker thread processing jobs sequentially (deliberate -- keeps the ~3GB model hot and avoids concurrent access to transcriber's module-global MODEL). is_safe_url() is a minimal SSRF guard (blocks loopback/link-local/metadata, allows RFC-1918 private ranges).
 
 **Entry points**
-- core.worker — spawned as a subprocess by app/ (the GUI service layer); JSON-over-stdio is the primary integration boundary
-- core.transcriber.transcribe() / resume_transcription() — in-process transcription entry (also used directly by tests/smoke)
-- core.transcriber.load_existing_model() / detect_device() — model load + device selection
-- core.model_manager.ensure_model() — download/verify/extract the Whisper model
-- core.backends.get_backend() — backend factory selected by config['transcribe_backend']
-- core.config.load_config() / save_config() — config read/write used app-wide
+- gui.py --worker  (spawns core.worker.main() as a JSON-stdio subprocess -- the frozen protocol every deliverable relies on)
+- gui.py transcribe FILE [--language|-l CODE] [--formats|-f fmt...] [--diarization]  (one-shot CLI transcription via core.transcriber.transcribe, no UI)
+- gui.py serve [--port|-p N] [--host ADDR] [--lan] [--token TOKEN] [--max-upload-mb N]  (runs core.server.run_server -- the optional LAN HTTP job server)
+- core.transcriber.transcribe(task, progress_cb, log_cb, language_cb) / resume_transcription(...)  (the actual engine call every caller ultimately makes)
+- core.model_manager.ensure_model(config, status_cb, progress_cb, cancel_event)  (model download/verify/extract, called from both the worker and core.server)
+- core.convert.convert_file(in_path, out_format, out_path=None)  (format-conversion library entry point used by app/ and gui.py)
 
 **Commands**
 ```
-run_tests.bat (Windows) — runs the hermetic unit suite (tests/ minus tests/smoke/)
-pyright app/ core/  — MUST report 0 errors/0 warnings/0 informations before every commit (v1.0.3 baseline; protect it)
-Smoke tests under tests/smoke/ need real resources (Whisper model, a test video, live network); skipped via env vars when absent
+python gui.py --worker
+python gui.py transcribe path/to/file.mp4 --language en --formats srt json
+python gui.py serve --port 8765
+python gui.py serve --lan --token SECRET --max-upload-mb 1024
+pyright app/ core/   (must report 0 errors before every commit; core/ has zero Tkinter imports by design)
 ```
 
 **Depends on**
-- faster_whisper (CTranslate2) — hard import in transcriber.py and faster_whisper_be.py; BatchedInferencePipeline optional on older wheels
-- requests, platformdirs — used by model_manager / config
-- Bundled binaries in bin/ (ffmpeg, ffprobe, yt-dlp; ffplay NOT bundled) resolved via core.paths.bundled_binary
-- Optional/lazy: sherpa-onnx (diarization, parakeet), demucs+torch (separator), llama-cpp-python (llm), pyannote.audio (voiceprint), stable-ts (alignment), openai-whisper (whisper_backend), pywhispercpp (whisper_cpp backend), sounddevice/pyaudiowpatch (recorder), watchdog (watcher), sentence-transformers (semantic search)
-- app/ (GUI service layer) is the main consumer; core must stay Tk-free
-- bin/diarization/{segmentation,embedding}.onnx for diarization; ONNX models bundled via PyInstaller specs
+- faster-whisper / ctranslate2 (default ASR backend)
+- sherpa-onnx (diarization, bundled ONNX models under bin/diarization/)
+- stable-ts / stable_whisper (word-alignment refinement, on-demand install)
+- pywhispercpp (whisper.cpp backend, ggml model on-demand download)
+- demucs + torch (vocal separation, optional)
+- pyannote.audio (voiceprint enrollment/matching, optional)
+- sentence-transformers (semantic search layer, optional; FTS5 sqlite is the always-available fallback)
+- llama-cpp-python (local LLM panel, optional, on-demand model download)
+- google-cloud-speech / google-cloud-storage (google_cloud_stt backend, on-demand install)
+- transformers + torch + librosa (nvidia_asr backend, on-demand install)
+- watchdog (folder watcher, optional)
+- sounddevice / pyaudiowpatch (mic / WASAPI loopback recording, optional)
+- screeninfo (multi-monitor detection, optional; ctypes Win32 fallback otherwise)
+- python-docx, reportlab (docx/pdf writers)
+- requests, platformdirs, psutil (model download, path resolution, stats)
+- bundled binaries via core.paths.bundled_binary(): bin/ffmpeg, bin/ffprobe, bin/ffplay, bin/yt-dlp
+- app/ (the Tk UI imports core/ extensively; the dependency is one-way -- core/ must never import tkinter or anything under app/)
+- gui.py (the process entry point that dispatches into core.worker / core.server / core.transcriber based on argv)
 
 **Gotchas**
-- core MUST stay Tk-free — hardware.py / transcriber.py run inside the worker subprocess; importing tkinter there breaks the worker. (Explicit note in hardware.py.)
-- core.worker stdin/stdout JSON protocol is FROZEN: adding fields is safe, renaming/removing breaks the parent UI.
-- transcriber keeps module-GLOBAL state (MODEL, PIPELINE, MODEL_READY, MODEL_ERROR, _ALT_BACKEND). Many tests monkeypatch transcriber.config; the default faster_whisper path deliberately keeps using MODEL/PIPELINE globals so those tests keep working. Non-default backends route through _ALT_BACKEND.
-- Language codes: faster-whisper accepts ISO-639-1 (+ a few) only, never BCP-47 (en-US/pt-BR). _normalize_language() strips region/script suffixes; passing an unnormalized code makes transcribe() raise and silently produce NO output.
-- TranscriptionTask.output_formats / output_paths exist because the long-lived worker's import-time config snapshot goes stale — formats must be passed per-task at dispatch (this was the 'docx never written' bug).
-- Bump __version__ in core/__init__.py together with pyproject.toml and BOTH .iss files on every release; it is the canonical runtime version (pip metadata is unavailable in frozen/embed builds).
-- Adding a new core module requires updating the hidden-import lists in BOTH whisper_project_onefile.spec and whisper_project_onedir.spec (per CLAUDE.md) or the unshipped PyInstaller pipelines bit-rot.
-- config.save_config is guarded by a module-level _SAVE_LOCK + atomic os.replace specifically to survive concurrent Windows os.replace PermissionError races — don't bypass it.
-- Wrap any long silent C-level call (sherpa-onnx, ctranslate2, demucs subprocess, llama-cpp, stable-ts align) in core._liveness_tick.liveness_tick(...) or the parent's liveness watchdog SIGTERMs the worker mid-pass on slow hardware.
-- On Windows, kill workers/children via core._proc.kill_process_tree (taskkill /T) — Popen.terminate() does NOT cascade and orphans ffmpeg/yt-dlp/demucs grandchildren that keep file handles + GPU allocations.
-- _checkpoint.py intentionally imports nothing from transcriber and uses no third-party modules (one-way dep, testable without faster_whisper). SCHEMA_VERSION bumps only on a breaking on-disk change; resume refuses if model/config keys changed since the checkpoint.
-- Optional-feature modules (separator, llm, voiceprint, alignment, recorder, watcher, search, whisper_cpp/parakeet backends) are no-ops or raise *Unavailable when their heavy deps are missing — never assume they're importable/active; optional_deps installs some on first use (pulls torch, ~700 MB).
-- writers.sanitize_for_xml must be applied before the docx writer (python-docx raises ValueError on XML-illegal control chars); escape_cue_separator handles literal '-->' inside SRT/VTT cue text.
-- Repository is English-only (handover prep) — no Persian/Arabic/RTL in core code, comments, or commit messages.
-- ffplay (tiling.py) is NOT bundled in bin/; only ffmpeg/ffprobe/yt-dlp are. Feature degrades to an 'add ffplay' message.
+- The worker's JSON-stdio protocol (core/worker.py) is FROZEN: add fields, never rename or remove them. All stdout writes go through a single _emit_lock because print()'s write+flush is two operations and concurrent emits (main thread + stdin-reader thread + heartbeat thread) can otherwise interleave and corrupt a JSON line.
+- A stray cancel/pause/resume command with no in-flight task is a silent no-op (each transcribe() builds a fresh task with clean flags) -- do not add error logging there expecting it to mean something broke.
+- core/ must stay 100% Tk-free -- this is a hard architectural invariant restated in nearly every module docstring, not a style preference. It has to keep working inside worker subprocesses and the optional HTTP server.
+- Every optional feature (diarization, alignment, demucs separation, voiceprint, semantic search, LLM, whisper_cpp/cloud_stt/google_cloud_stt/nvidia_asr backends, watcher, recorder, monitors/screeninfo) follows the same is_available()/availability_reason() lazy-import pattern -- never assume a dependency is installed; heavy ones (torch-based) install on demand via core.optional_deps into user_cache_dir()/pylibs, and activate() APPENDS that dir to sys.path (never prepends) so a bundled copy always wins over a stale on-demand one.
+- Time-range/clip transcription is NEVER passed to faster-whisper as clip_timestamps (that decodes the WHOLE file and hung on multi-hour input); instead the span is pre-sliced to a temp WAV via ffmpeg (-ss before -i, -t for duration) and results are shifted back by +clip_start. Clipped runs NEVER write a resume checkpoint (the checkpoint has no clip marker, so a resume would run past clip_end).
+- The periodic checkpoint (core/_checkpoint.py) is keyed by sha1(os.path.normcase(abspath(source))) and validated against backend + model_name + a config fingerprint + the source file's size/mtime at write time -- any mismatch on resume silently falls back to a full re-transcribe rather than erroring.
+- core/transcriber.py's _runtime_overrides_scope MUST restore the module-level config dict after each file: the worker is long-lived and transcribes many files in sequence reusing that same dict, so a per-folder .whisperproject.json override for file A (e.g. diarization_enabled=true) would otherwise leak into file B if the scope didn't snapshot+restore exactly the touched keys on exit.
+- config.py's online layer (fetch_online=True default) is restricted to ONLINE_ALLOWED_KEYS (model_catalog/stats_url/latest_version/ffplay_downloads) so a compromised/MITM'd online config can never override user-private settings; _NON_PERSISTED_KEYS (telemetry_opt_in, config_url, stats_url, ffplay_downloads, latest_version) are stripped on every save_config(). model_path and download_folder have bespoke persistence logic (_persistable_model_path/_persistable_download_folder) so an in-memory-derived path never hardens into a stale on-disk override that defeats a later hub_folder change.
+- Long-running silent C calls (sherpa-onnx diarization, stable-ts align, demucs subprocess, llama-cpp inference, whisper.cpp transcribe) must be wrapped in core._liveness_tick.liveness_tick(log_cb, label) or the parent App's worker-liveness watchdog can SIGTERM the worker mid-pass on slow hardware, mistaking 'busy' for 'wedged'.
+- faster-whisper only accepts ISO-639-1(-ish) codes, never a BCP-47 region tag ('en-US') or a yt-dlp multi-value code ('zh-Hans,zh-CN') -- transcriber._normalize_language / google_cloud_stt.normalize_language_code strip these; skipping normalization at a new call site silently produces zero output.
+- docx_writer.write() and pdf_writer.write() and smtv_docx_writer.write() deliberately raise RuntimeError -- write_bytes() (with is_binary()==True routing) is the only real entry point for these three formats. _write_outputs additionally special-cases smtv_docx by name because it needs extra language/work_title kwargs the frozen 2-arg writer contract can't carry.
+- _write_outputs (transcriber.py) computes one shared filename-collision index across ALL requested formats before writing any of them, so re-running a transcription produces a consistent set (name (1).srt + name (1).json together), never mismatched indices; each format writes to a unique per-pid+thread .part file then os.replace()s atomically, and one format's write failure never discards formats that already succeeded.
+- core.server.jobs.JobManager intentionally runs a SINGLE background worker thread (not a pool): core.transcriber keeps the ~3GB model in a module-global, so concurrent transcribe() calls against it would be unsafe -- this is a deliberate serialization point, not an oversight to 'fix' with more workers.
+- core.server.jobs.is_safe_url() blocks loopback/link-local(incl. 169.254.169.254 cloud metadata)/unspecified/multicast/reserved addresses but DELIBERATELY allows RFC-1918 private ranges (10.x/172.16-31.x/192.168.x) since the server is documented for trusted-LAN use; it is a first-line guard only -- yt-dlp still follows its own redirects.
+- A trusted build that ships creds/gcloud_stt.json changes the DEFAULT transcribe_backend to google_cloud_stt (core.config._default_transcribe_backend / core.backends.availability.default_engine) -- a plain source checkout has no key and silently stays on faster_whisper; don't assume faster_whisper is always the default engine.
+- core.model_manager.ensure_model() retries up to MAX_DOWNLOAD_ATTEMPTS=3 on an MD5 mismatch before raising, and has a zip-slip guard that rejects any archive member resolving outside the target cache dir; on any mirror failure it falls back to a deterministic HuggingFace download keyed by the registry's hf_repo (not a name-guess) to avoid resolving to the wrong upstream org.
+- core.hardware / core.backends.faster_whisper_be self-heal a requested CUDA load that fails (typically missing cuDNN/cuBLAS runtime DLLs, not a corrupt model) by silently retrying on cpu/int8 and flipping a 'downgraded' flag the UI can surface -- a bare CUDA failure must never hard-crash the worker.
+- history.db opens in WAL journal mode and runs PRAGMA integrity_check on every open; a corrupt DB (or one that fails to even run the pragma) is renamed to .corrupt and recreated fresh rather than crashing launch -- history is lost, not the app.
+- The 5 ASR backends share two cross-cutting helpers from core/backends/cloud_stt.py (plan_chunks, offset_segments) that core/backends/nvidia_asr.py imports directly -- treat that pair as a mini shared module, not cloud_stt-private, before duplicating chunk-planning logic in a new backend.
+- WHISPER_WORKER_TOKEN (set by the parent at spawn time) is attached to every emitted event as _token so the parent can route events correctly even if the OS recycles a PID between worker spawns; it's optional/empty for older parents, so never assume it's present when parsing worker events.
 
 ### platform — `platform/`
-Non-Windows packaging and installation: Linux source-venv installer/updater/uninstaller, macOS source-venv installer with Gatekeeper handling, a ready-but-unpublished Homebrew tap formula, and an unbuilt PyInstaller .app/.dmg pipeline for macOS. The shipped product is Windows-only (built elsewhere); everything here is groundwork for Mac/Linux from-source use.
+Non-Windows packaging and distribution for the Whisper Project: a Linux from-source installer/updater/uninstaller, and three independently-maintained macOS delivery paths (source+venv .command installer, a PyInstaller .app/.dmg pipeline, and a staged Homebrew formula). The app itself is plain cross-platform Python (Tkinter + faster-whisper + yt-dlp + ffmpeg); this subsystem only supplies the OS-specific install/build glue, not app logic.
 
 **Key files**
-- `platform/linux/install.sh` — Linux in-place installer: builds .venv next to repo, pip-installs requirements.txt + yt-dlp, fetches a static ffmpeg/ffprobe (johnvansickle.com) into bin/ when system lacks it, and writes ~/.local/bin/whisper-project (GUI) + whisper-transcribe (headless CLI) launchers plus a .desktop entry. Idempotent; re-run to update.
-- `platform/linux/update.sh` — git pull --ff-only + pip --upgrade requirements.txt and yt-dlp inside the existing .venv. Aborts if no .venv.
-- `platform/linux/uninstall.sh` — Removes launchers, .desktop entry, and .venv. Deliberately KEEPS the repo and user data under ~/.config/WhisperProject and ~/.cache/WhisperProject.
-- `platform/linux/README.md` — Linux usage docs: install/desktop/headless-server (incl. a systemd user one-shot template), update, uninstall. Notes model cache (~3 GB) at ~/.cache/WhisperProject and config at ~/.config/WhisperProject/config.json.
-- `platform/macos/install.command` — macOS installer (.command). Rebuilds .venv FROM SCRATCH each run, de-quarantines repo via xattr, prefers python.org/Homebrew python over Apple's system python3 (Tk 8.5 trap), symlinks ffmpeg/ffprobe into bin/, and builds a real ~/Applications/Whisper Project.app bundle (ad-hoc codesigned) plus a whisper-transcribe CLI.
+- `platform/linux/install.sh` — Linux installer: creates .venv next to the repo, pip-installs requirements.txt + yt-dlp, fetches a static ffmpeg/ffprobe (johnvansickle.com) into bin/ if the system lacks one, writes ~/.local/bin/whisper-project (GUI) + whisper-transcribe (headless CLI) launchers, and a .desktop entry. Idempotent.
+- `platform/linux/update.sh` — Linux updater: git pull --ff-only, then pip --upgrade requirements.txt + yt-dlp inside the existing .venv. Requires install.sh to have run first.
+- `platform/linux/uninstall.sh` — Removes the launchers, .desktop entry, and .venv; deliberately keeps the repo checkout and user data (~/.config/WhisperProject, ~/.cache/WhisperProject).
+- `platform/linux/README.md` — Linux usage docs: install/desktop/headless-server (systemd one-shot template included), update, uninstall, model-cache location.
+- `platform/macos/install.command` — macOS installer (double-clickable). Rebuilds .venv FROM SCRATCH every run, de-quarantines the repo via xattr, prefers python.org/Homebrew Python over Apple's system python3 (Tk 8.5 trap), symlinks ffmpeg/ffprobe/ffplay into bin/, and builds a real ~/Applications/Whisper Project.app wrapper (own hand-written Info.plist, ad-hoc codesigned) plus a whisper-transcribe CLI. No Python bundled — end user needs Python+Tk installed.
 - `platform/macos/unblock.command` — Gatekeeper helper: strips com.apple.quarantine from the repo and the installed Whisper Project.app.
-- `platform/macos/README.md` — macOS usage + Gatekeeper explainer (unsigned app). Documents the Tk-8.5 blur trap, the two supported paths (this script vs Homebrew), VLC-at-/Applications/VLC.app requirement for the embedded preview, and Apple-Silicon/Rosetta caveats. Marked beta/unvalidated on a real Mac.
-- `platform/macos/homebrew/whisper-project.rb` — Personal-tap Homebrew formula. Uses virtualenv_create against python@3.12, depends on ffmpeg + python-tk@3.12, pip-installs requirements.txt + yt-dlp. url pinned to tag v1.3.6; sha256 is a literal placeholder 'PUT_SHA256_OF_THE_TARBALL_HERE'.
-- `platform/macos/homebrew/README.md` — How to publish the tap (homebrew-tap repo, refresh url+sha256 per release) and install. Requires the GitHub repo to be PUBLIC; currently private so the tap is staged, not live.
-- `platform/macos/pyinstaller/whisper_project_mac.spec` — PyInstaller spec to build dist/Whisper Project.app. Adapted from Windows whisper_project_onedir.spec; hiddenimports/datas mirror it. Bundles bin/, assets/, faster_whisper/whispercpp/stable_whisper/whisper/tiktoken data; bundle_identifier com.translation-robot.whisperproject; version 1.3.6. MUST be built on a Mac; never built/verified here.
-- `platform/macos/pyinstaller/builddmg.command` — Wraps the built Whisper Project.app into dist/Whisper Project.dmg via create-dmg. cd's up to repo root; errors out if the .app or create-dmg is missing.
-- `platform/macos/pyinstaller/README.md` — Build steps for the PyInstaller .app/.dmg path (highest-confidence Mac deliverable, mirrors maintainer's machine-translate-docx pipeline). Still unsigned; built on Mac only.
+- `platform/macos/README.md` — macOS usage + Gatekeeper explainer. Explicitly marked beta/unvalidated on a real Mac. Documents the Tk-8.5 blur trap, the two source-level install paths, VLC-at-/Applications/VLC.app requirement, Apple Silicon/Rosetta caveats.
+- `platform/macos/homebrew/whisper-project.rb` — Personal-tap Homebrew formula (not homebrew-core style): virtualenv_create against python@3.12, depends_on ffmpeg + python-tk@3.12, pip-installs requirements.txt + yt-dlp at install time. url pinned to tag v1.3.6; sha256 is still the literal placeholder string.
+- `platform/macos/homebrew/README.md` — How to publish the tap (separate public homebrew-tap repo) and refresh url/sha256 per release; install instructions for end users once published.
+- `platform/macos/pyinstaller/whisper_project_mac.spec` — PyInstaller spec that freezes gui.py into dist/Whisper Project.app (self-contained, no Python needed by end user). Third copy of the spec pattern alongside the root's whisper_project_onedir.spec/whisper_project_onefile.spec; hiddenimports/datas mirror the Windows onedir spec. Resolves all paths via a SPECPATH-derived _REPO_ROOT. BUNDLE version currently 1.5.0 (in sync with core.__version__). Never built/verified on a real Mac.
+- `platform/macos/pyinstaller/builddmg.command` — Wraps an ALREADY-BUILT dist/Whisper Project.app into dist/Whisper Project.dmg via create-dmg. Errors out if the .app or the create-dmg binary is missing. cd's to repo root first.
+- `platform/macos/pyinstaller/compileall-whisper-mac.sh` — One-shot full build: rm -rf dist, run pyinstaller against whisper_project_mac.spec, then wrap into a .dmg (inlines the same create-dmg call as builddmg.command rather than invoking it). Fixed 2026-07-04 for a duplicated pyinstaller invocation and to cd to the repo root first.
+- `platform/macos/pyinstaller/README.md` — Build steps for the .app/.dmg path (icon generation, staging Mac ffmpeg/ffprobe/ffplay/yt-dlp into bin/, pyinstaller + create-dmg commands). Framed as the highest-confidence Mac deliverable since it mirrors the maintainer's proven machine-translate-docx pipeline; still unsigned/un-notarized.
 
 **Entry points**
-- All launchers/bundles created here ultimately exec the repo-root gui.py: 'gui.py' for the GUI, 'gui.py transcribe ...' for the headless CLI.
-- platform/linux/install.sh -> ~/.local/bin/whisper-project + whisper-transcribe + whisper-project.desktop
-- platform/macos/install.command -> ~/Applications/Whisper Project.app + ~/.local/bin/whisper-transcribe
-- platform/macos/pyinstaller/whisper_project_mac.spec -> dist/Whisper Project.app (then builddmg.command -> dist/Whisper Project.dmg)
-- platform/macos/homebrew/whisper-project.rb -> brew bin/whisper-project + whisper-transcribe
+- platform/linux/install.sh
+- platform/linux/update.sh
+- platform/linux/uninstall.sh
+- platform/macos/install.command
+- platform/macos/unblock.command
+- platform/macos/pyinstaller/whisper_project_mac.spec
+- platform/macos/pyinstaller/builddmg.command
+- platform/macos/pyinstaller/compileall-whisper-mac.sh
+- platform/macos/homebrew/whisper-project.rb
 
 **Commands**
 ```
-bash platform/linux/install.sh        # Linux install (idempotent; PYTHON=... to override interpreter)
-bash platform/linux/update.sh         # Linux: git pull + refresh venv
-bash platform/linux/uninstall.sh      # Linux: remove launchers + venv, keep data
-bash platform/macos/install.command   # macOS install (PYTHON=/usr/local/bin/python3 to force python.org Tk 8.6)
-bash platform/macos/unblock.command   # macOS: strip com.apple.quarantine
-pyinstaller --noconfirm --clean platform/macos/pyinstaller/whisper_project_mac.spec   # build .app (Mac only)
-bash platform/macos/pyinstaller/builddmg.command   # wrap .app into .dmg (needs brew install create-dmg)
-brew install translation-robot/tap/whisper-project  # only after repo is public + tap published
+bash platform/linux/install.sh
+PYTHON=/usr/bin/python3.12 bash platform/linux/install.sh
+bash platform/linux/update.sh
+bash platform/linux/uninstall.sh
+bash platform/macos/install.command
+PYTHON=/usr/local/bin/python3 bash platform/macos/install.command
+bash platform/macos/unblock.command
+pyinstaller --noconfirm --clean platform/macos/pyinstaller/whisper_project_mac.spec
+bash platform/macos/pyinstaller/builddmg.command
+bash platform/macos/pyinstaller/compileall-whisper-mac.sh
+brew install translation-robot/tap/whisper-project
 ```
 
 **Depends on**
-- Repo root gui.py — the single entry point every launcher/bundle here invokes (GUI default, 'transcribe' subcommand for CLI).
-- requirements.txt (repo root) — pip-installed by every installer and by the Homebrew formula.
-- core.paths.bundled_binary() — resolves ffmpeg/ffprobe/ffplay from the repo bin/ dir; this is WHY the macOS installer symlinks system/brew ffmpeg into bin/ (a Finder-launched .app gets a minimal PATH lacking /opt/homebrew/bin and /usr/local/bin).
-- bin/ dir — must hold platform-native ffmpeg/ffprobe (and ffplay on macOS for Video Tiling); the .exe ones are wrong for Mac/Linux builds.
-- assets/whisper.png (Linux .desktop icon) and optional assets/whisper.icns (PyInstaller .app icon).
-- Windows spec whisper_project_onedir.spec — the Mac .spec is a hand-synced copy of its hiddenimports/datas; the two will drift if not updated together.
-- External: yt-dlp (pip), faster-whisper/ctranslate2 native wheels, optional stable_whisper/whisper/tiktoken/pywhispercpp/sherpa_onnx/docx/reportlab backends, python3-tk, ffmpeg, and (macOS preview) VLC at /Applications/VLC.app.
+- gui.py (repo root entry script every launcher/formula execs, including `gui.py transcribe` for the headless CLI and `gui.py serve --lan`)
+- requirements.txt (installed by both installers and the Homebrew formula)
+- core.paths (resource_base()/bundled_binary()/_ensure_executable() — how the frozen mac app and source installs locate bin/ffmpeg etc.)
+- core.__version__ (source of truth the mac spec's BUNDLE version should track)
+- assets/ (whisper.png, whisper.icns, whisper.ico — app icons)
+- core/server/static and core/writers/templates (data dirs bundled into the mac .app by whisper_project_mac.spec)
+- root PyInstaller specs: whisper_project_onedir.spec and whisper_project_onefile.spec (hiddenimports/datas must stay in lock-step with the mac spec per CLAUDE.md 'Style & scope')
+- creds/gcloud_stt.json (optional, gitignored — bundled into the mac .app under creds/ only if present locally)
+- external tools: python3-tk/tkinter, ffmpeg/ffprobe/ffplay, yt-dlp, create-dmg (brew), Homebrew itself
 
 **Gotchas**
-- Version string 1.3.6 is HARD-CODED in two macOS files (install.command Info.plist CFBundleVersion, and whisper_project_mac.spec CFBundleShortVersionString/CFBundleVersion) and the tag v1.3.6 is in whisper-project.rb url — none auto-derive from the repo version, so a release bump must update all three by hand.
-- whisper_project_mac.spec hiddenimports is a manual mirror of the Windows whisper_project_onedir.spec list (per CLAUDE.md: 'adding a new module = update both spec hidden-import lists'). The Mac spec is a THIRD copy that also needs the same edit or it silently bit-rots; it has never been built or verified on a Mac.
-- macOS installer DELETES and rebuilds the .venv on every run (rm -rf $VENV) — intentional, to avoid a stale venv built against the wrong Tk; do not 'optimize' this into reuse. Linux install.sh, by contrast, reuses/updates its venv and is idempotent.
-- macOS Tk trap: Apple's system python3 links deprecated Tk 8.5 which imports fine but renders a blurry/unstable GUI. The installer checks tkinter.TkVersion (the PATCH/major), not just importability; preserve that check. Override with PYTHON=/usr/local/bin/python3.
-- ffmpeg MUST be symlinked into repo bin/ on macOS even when it exists in Homebrew/system, because a Finder/LaunchServices-launched .app inherits only /usr/bin:/bin and won't see /opt/homebrew/bin or /usr/local/bin; core.paths.bundled_binary() then can't find it. The launcher scripts set PATH but the GUI worker still resolves via bin/.
-- Gatekeeper: this whole macOS surface ships UNSIGNED (no paid Apple cert). The strategy is to obtain the repo via git clone/curl (not quarantined). The .app is ad-hoc signed ('codesign -s -') ONLY for a stable code identity so TCC grants survive re-installs — it does NOT bypass Gatekeeper for browser-downloaded copies.
-- Homebrew sha256 in whisper-project.rb is the literal placeholder 'PUT_SHA256_OF_THE_TARBALL_HERE' and the tap is NOT published (repo is private). The formula will not install as-is.
-- Static-ffmpeg fallbacks differ by OS and arch: Linux uses johnvansickle.com (amd64/arm64); macOS uses evermeet.cx which is Intel x86_64 only (runs under Rosetta on Apple Silicon) — prefer Homebrew on M-series. macOS unzip step is deliberately made non-fatal under set -e to avoid aborting the installer on a truncated-but-HTTP-200 download.
-- Glob 'platform/**/*' returned nothing on this Windows host even though the files exist; enumerate with a direct file listing instead. There is no Windows packaging here — that lives at the repo root (build_embed_installer.bat, installer_embed.iss, whisper_project_onefile.spec, whisper_project_onedir.spec, installer.iss), not under platform/.
-- Linux uninstall.sh and the macOS docs treat ~/.config/WhisperProject and ~/.cache/WhisperProject as user data that is intentionally preserved; the ~3 GB Whisper model lives in the cache dir. Don't add code that wipes these during uninstall/update.
+- As of this session, the PyInstaller .app/.dmg path (whisper_project_mac.spec + compileall-whisper-mac.sh) HAS been built and smoke-tested on real macOS runners via the manual-dispatch macos-app.yml/macos-compileall-script-test.yml GitHub Actions workflows (arm64 + x86_64), and real .dmg artifacts now ship on the v1.5.0 GitHub release. The install.command and Homebrew formula paths remain unverified on real hardware — platform/macos/README.md's blanket 'not yet validated' framing is now only accurate for those two, not for the PyInstaller path.
+- Two macOS build methods are independently maintained and NOT interchangeable: install.command (source+venv, lightweight wrapper .app, requires the end user to have Python+Tk) vs whisper_project_mac.spec (PyInstaller freeze, self-contained .app/.dmg, no Python needed by the end user). A fix in one does not apply to the other, and each writes its own separate Info.plist.
+- whisper_project_mac.spec is 'the third spec copy': per the root CLAUDE.md, adding a new module/hidden import must be mirrored into whisper_project_onedir.spec AND whisper_project_onefile.spec at the repo root or the unshipped pipelines bit-rot silently.
+- whisper_project_mac.spec resolves every repo-relative path via `_REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir, os.pardir, os.pardir))` — a historical bug fix. PyInstaller resolves a bare relative script path (e.g. 'gui.py') against the spec file's OWN directory (platform/macos/pyinstaller/), not the CWD, which previously failed the build with 'gui.py not found'.
+- compileall-whisper-mac.sh and builddmg.command both inline the same create-dmg invocation (window size/icon position/volname) rather than one calling the other — a packaging tweak made in one must be repeated in the other or they'll drift.
+- Version numbers can drift across four places with nothing enforcing sync: core.__version__ (1.5.0, source of truth) / whisper_project_mac.spec BUNDLE+info_plist version (currently 1.5.0, in sync) / install.command's own hardcoded Info.plist CFBundleVersion (still 1.3.6 — tracked independently by design per the spec's own comment) / homebrew/whisper-project.rb url+tag (still v1.3.6, sha256 left as the literal placeholder 'PUT_SHA256_OF_THE_TARBALL_HERE').
+- Docs under platform/macos/ (README.md, homebrew/README.md, whisper-project.rb comments) still say the GitHub repo is currently PRIVATE, which blocks a real Homebrew tap and the curl-based one-liner in linux/install.sh's own comment — the repo has since been made PUBLIC, so the Homebrew tap may now be publishable for real; re-verify and update these docs before trusting the 'private, staged for later' framing.
+- Gatekeeper: the app is unsigned (no paid Apple Developer cert). Getting the repo via git clone/curl avoids the com.apple.quarantine flag entirely (why every doc pushes clone-first); a browser-downloaded zip needs unblock.command or System Settings -> Privacy & Security -> 'Open Anyway'. Never suggest `spctl --master-disable`.
+- Apple's bundled system python3 links deprecated Tcl/Tk 8.5, which imports fine but renders a blurry/unstable GUI. install.command checks the actual `tkinter.TkVersion` (not just importability) and warns/prefers python.org or Homebrew Python (Tk 8.6). The headless whisper-transcribe CLI needs no Tk and works with any python3.
+- install.command rebuilds its venv FROM SCRATCH every run (`rm -rf .venv`) so switching interpreters doesn't silently reuse a stale Tk-8.5-linked venv; Linux's install.sh is idempotent/incremental instead. Don't assume the two installers behave the same on re-run.
+- ffmpeg/ffprobe/ffplay must always be symlinked/copied into repo-root bin/, even when already on PATH via Homebrew or the system — a Finder/LaunchServices-launched .app only inherits the minimal /usr/bin:/bin PATH, not /opt/homebrew/bin or /usr/local/bin, so core.paths.bundled_binary() would otherwise fail to find them. ffplay specifically is required for the Video Tiling tab; its absence degrades to an in-app 'Download ffplay' button rather than a hard failure.
+- core.paths.bundled_binary() appends '.exe' only when os.name == 'nt'; on macOS/Linux it looks up the bare extension-less name, so bin/ on a Mac build must contain Mac ffmpeg/ffprobe/ffplay/yt-dlp, never the Windows .exe files, or the frozen app breaks silently at runtime instead of failing the build.
+- PyInstaller's COLLECT/BUNDLE doesn't reliably preserve the executable bit on bundled POSIX binaries across versions, so core.paths._ensure_executable() re-asserts chmod +x at runtime as a safety net for the frozen macOS .app's bundled ffmpeg/ffprobe/ffplay/yt-dlp.
+- The BUNDLE info_plist sets LSMinimumSystemVersion to 11.0 specifically because an unsigned app's file-access permissions get down-ranked by macOS on older/unspecified system versions — this is a deliberate Gatekeeper-adjacent pin, not an arbitrary compatibility floor.
+- There is no Windows packaging under platform/ at all — Windows build/install tooling (build_embed_installer.bat, installer_embed.iss, installer.iss, whisper_project_onefile.spec, whisper_project_onedir.spec, build.bat) lives at the repo root and belongs to the build-packaging subsystem.
+- Of the three non-Windows paths, Linux is the only one considered reasonably solid (plain venv, no Gatekeeper-equivalent friction, idempotent scripts); install.command and the Homebrew formula remain explicitly unvalidated on real hardware even though the PyInstaller .app/.dmg path is now CI-proven.
 
 ### tools-bin — `tools/, bin/`
-Build-time and dev-time support assets for the Whisper transcription app: bin/ holds the third-party native binaries (ffmpeg, ffprobe, yt-dlp) and diarization ONNX models bundled into every shipped build, while tools/ holds standalone dev scripts (a startup-time benchmark, two live end-to-end drivers, and the diarization-model downloader). Neither directory is imported by the app at runtime; the app only reads files out of bin/ at execution time.
+tools/ holds standalone maintenance and dev scripts that are not part of the shipped app (PROJECT_INDEX.md refresher, a diarization-model fetcher, three live E2E drivers, and a startup-time profiler); bin/ is the runtime location where the app expects vendored third-party binaries (ffmpeg, ffprobe, yt-dlp) and ONNX speaker-diarization models to sit, resolved through core/paths.py and consumed by core/tiling.py, app/app.py, and core/diarization.py.
 
 **Key files**
-- `bin/ffmpeg.exe` — Bundled FFmpeg (~97MB, gitignored). Located at runtime via core.paths.bundled_binary('ffmpeg'); used for audio decode/resample (e.g. core/diarization.py resamples to the rate sherpa-onnx needs).
-- `bin/ffprobe.exe` — Bundled FFprobe (~97MB, gitignored). Media probing companion to ffmpeg, resolved the same way via bundled_binary.
-- `bin/yt-dlp.exe` — Bundled yt-dlp (~18MB, gitignored). Used by app/app.py for URL/video downloads; app prefers bin/yt-dlp.exe when present, else falls back to bare 'yt-dlp' on PATH.
-- `bin/diarization/segmentation.onnx` — pyannote-segmentation-3.0 ONNX (~6MB, gitignored), exported by sherpa-onnx. Loaded by core/diarization.py via model_path().
-- `bin/diarization/segmentation.int8.onnx` — int8-quantized segmentation model (~1.5MB), extracted alongside the fp32 one by the downloader.
-- `bin/diarization/embedding.onnx` — 3D-Speaker CAMPlus EN speaker-embedding ONNX (~28MB, gitignored, English-leaning, trained on VoxCeleb).
-- `bin/diarization/segmentation.tar.bz2` — Leftover download archive of the segmentation models; gitignored. The downloader normally deletes this, so its presence indicates a partial/interrupted run.
-- `tools/download_diarization_models.bat` — Windows batch that downloads + extracts the two diarization ONNX models from k2-fsa/sherpa-onnx GitHub releases into bin/diarization/. Idempotent (skips if files exist). Must be run once before any build; NOT run by CI.
-- `tools/measure_startup.py` — Dependency-free (ctypes Win32 EnumWindows) benchmark: spawns WhisperProject.exe and times until the 'Transcription helper' window appears; runs 3x and reports median/min/max. Defaults to dist/WhisperProject.exe.
-- `tools/e2e_slim_pastbugs.py` — Live past-bug release gate: drives the REAL worker (embed_build/gui.py --worker) over its JSON stdin/stdout protocol, transcribing a real video and asserting srt/json/docx/txt all land (docx must have PK zip magic). Run with the slim embed interpreter.
-- `tools/e2e_cancel_pause.py` — Live E2E for cooperative pause/resume/cancel: spawns python -m core.worker, asserts pause stalls progress, resume completes, and cancel keeps the worker alive. Skips if test video/model absent.
+- `tools/index_refresh.py` — Zero-token, zero-network deterministic refresher for the AUTO-INDEX:STRUCTURE block in PROJECT_INDEX.md; writes .project_index.json manifest; silent no-op (exit 0) if PROJECT_INDEX.md doesn't exist at the target yet. Run by a Claude Code SessionStart hook and by the project-index skill (with --set-baseline) after semantic sections are rebuilt.
+- `tools/download_diarization_models.bat` — One-time fetcher for bin/diarization/segmentation.onnx (+ .int8.onnx) and embedding.onnx from k2-fsa/sherpa-onnx GitHub releases. Build-time step, like fetching ffmpeg; CI does not run it.
+- `tools/measure_startup.py` — Times cold start of dist/WhisperProject.exe using ctypes Win32 EnumWindows (no third-party deps); detects readiness by window title "Transcription helper", not PID. Manual dev tool, not wired into CI or BUILD.md.
+- `tools/e2e_cancel_pause.py` — Live E2E: spawns the real core.worker subprocess and drives its JSON stdin/stdout protocol through pause -> resume -> cancel, asserting a resumable checkpoint survives cancel. Needs a real video (WHISPER_SMOKE_VIDEO env var, default E:\3029-NWN-Daily-Scroll-2m_0002.mp4) and the real model; SKIPs (exit 0) if absent.
+- `tools/e2e_slim_pastbugs.py` — Live E2E that must run under the slim embed interpreter (embed_build\python\python.exe) against embed_build\gui.py; regression-guards a specific list of previously-shipped bugs (docx output, non-srt formats, hyphenated lang codes, clip ranges, apostrophe filenames) in the v1.3.4+ Setup-Standard/Portable build.
+- `tools/e2e_tiny_macos.py` — Real (unmocked) faster-whisper/CTranslate2 inference E2E using the tiny model plus a short macOS `say`-generated clip; invoked directly by .github/workflows/macos-e2e.yml.
+- `bin/ffmpeg.exe, bin/ffprobe.exe` — Vendored FFmpeg binaries (~100 MB each) used for audio/video decode, slicing, subtitle burn-in; resolved at runtime via core.paths.bundled_binary()/bin_dir(). Gitignored — not committed.
+- `bin/yt-dlp.exe` — Vendored yt-dlp binary (~18 MB) for video downloads; self-updates via `yt-dlp -U` at runtime in dev builds only (frozen builds skip self-update since the install dir is read-only). Gitignored — not committed.
+- `bin/diarization/segmentation.onnx, segmentation.int8.onnx, embedding.onnx, segmentation.tar.bz2` — pyannote-segmentation-3.0 and 3D-Speaker CAMPlus EN ONNX models consumed by core/diarization.py's _model_path(). Gitignored; normally produced by tools/download_diarization_models.bat.
 
 **Entry points**
-- tools/download_diarization_models.bat (run once before building)
-- python tools/measure_startup.py [path/to/WhisperProject.exe]
-- embed_build\python\python.exe tools/e2e_slim_pastbugs.py
-- python tools/e2e_cancel_pause.py
+- tools/index_refresh.py [target_dir] [--set-baseline]  (also auto-run by a SessionStart hook and the project-index skill)
+- tools/download_diarization_models.bat  (manual, once before any build)
+- tools/measure_startup.py [path/to/WhisperProject.exe]
+- tools/e2e_cancel_pause.py
+- tools/e2e_slim_pastbugs.py  (must use embed_build\python\python.exe)
+- tools/e2e_tiny_macos.py <clip.wav>  (invoked by .github/workflows/macos-e2e.yml)
+- core.paths.bundled_binary("ffmpeg"|"ffprobe"|"yt-dlp")  (the runtime lookup entry point into bin/)
 
 **Commands**
 ```
+python tools/index_refresh.py .
+python tools/index_refresh.py . --set-baseline
 tools\download_diarization_models.bat
 python tools/measure_startup.py
-python tools/measure_startup.py dist/WhisperProject.exe
-embed_build\python\python.exe tools\e2e_slim_pastbugs.py
 python tools/e2e_cancel_pause.py
+embed_build\python\python.exe tools\e2e_slim_pastbugs.py
+python tools/e2e_tiny_macos.py clip.wav
 ```
 
 **Depends on**
-- core/paths.py (resource_base / bin_dir / bundled_binary resolve bin/ across onefile/onedir/source contexts)
-- core/diarization.py (consumes bin/diarization/*.onnx + bin/ffmpeg.exe)
-- app/app.py (prefers bin/yt-dlp.exe)
-- core.worker / core.transcriber / core._checkpoint (driven by the e2e scripts)
-- embed_build/gui.py (worker entry point driven by e2e_slim_pastbugs.py)
-- PyInstaller specs whisper_project_onefile.spec & whisper_project_onedir.spec (bundle bin/ via datas=('bin','bin'))
-- External GitHub releases: k2-fsa/sherpa-onnx (diarization model source)
+- core/paths.py (resource_base/bin_dir/bundled_binary — the runtime resolver all bin/ consumers go through)
+- core/diarization.py (consumes bin/diarization/*.onnx)
+- core/tiling.py, app/app.py (consume bin/ffmpeg.exe, bin/ffprobe.exe, bin/yt-dlp.exe; ffplay is deliberately NOT in bin/ by default)
+- whisper_project_onefile.spec, whisper_project_onedir.spec, platform/macos/pyinstaller/whisper_project_mac.spec, build_embed_installer.bat (bundle the whole bin/ tree into shipped builds)
+- .github/workflows/macos-e2e.yml (runs tools/e2e_tiny_macos.py)
+- project-index skill / SessionStart hook (runs tools/index_refresh.py)
+- faster-whisper / CTranslate2 (external lib exercised by tools/e2e_tiny_macos.py)
+- k2-fsa/sherpa-onnx GitHub releases (upstream source for the diarization ONNX models)
 
 **Gotchas**
-- ALL of bin/ is gitignored (ffmpeg/ffprobe/yt-dlp .exe via lines 53-55; diarization *.onnx + *.tar.bz2 via 60-61). A clean checkout has an empty/partial bin/ — builds will silently ship without these unless ffmpeg/ffprobe/yt-dlp are dropped in manually and tools/download_diarization_models.bat is run first.
-- bin/ is bundled into the exe via datas=('bin','bin') in BOTH whisper_project_onefile.spec and whisper_project_onedir.spec. At runtime core/paths.bundled_binary resolves it under sys._MEIPASS (onefile) / exe dir (onedir) / repo root (source). Renaming or restructuring bin/ silently breaks ffmpeg, yt-dlp, and diarization in shipped builds.
-- bundled_binary() falls back to the bare name (PATH lookup) when bin/<name>.exe is missing — so a missing bundled ffmpeg fails late/quietly rather than at startup. diarization.py raises DiarizationUnavailable in that path.
-- The diarization downloader pulls from k2-fsa/sherpa-onnx GitHub release URLs hardcoded in the .bat; it uses Windows tar.exe + Invoke-WebRequest and is Windows-only. CI does NOT run it — it is a manual build-time prerequisite.
-- The embedding model is English-leaning (3D-Speaker CAMPlus EN, VoxCeleb); diarization quality on non-English audio is a known limitation tied to this specific bundled file.
-- Both e2e scripts and measure_startup are NOT pytest tests and live OUTSIDE tests/ — they are manual live drivers requiring real resources (a test video defaulting to E:\3029-NWN-Daily-Scroll-2m_0002.mp4 via WHISPER_SMOKE_VIDEO env var, and the model). They exit 0 / print SKIP when resources are absent, so a green run can mean 'skipped', not 'passed'.
-- e2e_slim_pastbugs.py must run under the SLIM EMBED interpreter (embed_build\python\python.exe) and targets embed_build/gui.py --worker; e2e_cancel_pause.py runs under the dev interpreter and targets python -m core.worker. They are not interchangeable.
-- measure_startup.py matches the window by exact title 'Transcription helper' (PID matching is intentionally omitted) and calls taskkill /F /IM WhisperProject.exe between runs — changing the main window title silently breaks it; leaked _MEI* temp dirs can skew the 3rd run.
-- embed_build/ and dist_onedir/ contain their own bin/ and tools/ copies (bundled Python site-packages + build artifacts) — those are NOT the source subsystem; only top-level tools/ and bin/ are authored here.
+- bin/ is almost entirely gitignored (ffmpeg.exe, ffprobe.exe, yt-dlp.exe, bin/diarization/*.onnx, *.tar.bz2 all excluded; `git ls-files bin` returns nothing). This directly contradicts docs/BUILD.md's line 53 ("checked into the repo's bin\ folder") — that doc line is stale. Treat bin/ as a locally-vendored, machine-specific directory that a fresh clone will NOT have populated.
+- Only the diarization ONNX models have an in-repo fetch script (tools/download_diarization_models.bat). There is no equivalent fetch script or recorded source URL/version for ffmpeg.exe/ffprobe.exe/yt-dlp.exe anywhere in the repo (README/BUILD.md/THIRD_PARTY_NOTICES.md all discuss licensing but not provenance) — a fresh machine must source those three binaries manually.
+- docs/BUILD.md never mentions diarization or tools/download_diarization_models.bat at all, even though core/diarization.py hard-depends on bin/diarization/*.onnx — following BUILD.md's build steps top-to-bottom silently produces a build without diarization support unless you separately know about the .bat script.
+- ffplay.exe is intentionally NOT part of bin/'s expected contents even though it's part of the FFmpeg suite — core/tiling.py explicitly documents that only ffmpeg/ffprobe/yt-dlp are bundled; ffplay must be added manually to bin/ or PATH (there's also an in-app ffplay downloader driven by config['ffplay_downloads'], separate from tools/).
+- tools/e2e_cancel_pause.py and tools/e2e_slim_pastbugs.py are live smoke drivers, not hermetic tests, and live outside tests/ on purpose — they need a real video/model/embed build and SKIP (exit 0) rather than fail when prerequisites are missing, so a clean run of these alone proves nothing.
+- tools/e2e_slim_pastbugs.py must be run with embed_build\python\python.exe (the slim embed interpreter), not the normal dev venv — it specifically regression-tests the v1.3.4+ embed build (Method C / Setup-Standard), the pipeline actually shipped per the repo-root CLAUDE.md.
+- tools/index_refresh.py is a silent no-op whenever PROJECT_INDEX.md doesn't already exist at the target — intentional so one global SessionStart hook is safe repo-wide; "nothing happened" is expected/correct outside opted-in repos.
+- tools/measure_startup.py matches the target process purely by visible window title ("Transcription helper"), never by PID, because PyInstaller builds can spawn a standby worker under a different PID than Popen returned.
+- bin/ is bundled wholesale into PyInstaller builds via a ('bin','bin') data entry (Methods A/B) or xcopy (Method C); per the repo-root CLAUDE.md only Method C (embed-tree Setup-Standard + Portable ZIP) is actually shipped today, so bin/'s footprint matters most for that pipeline even though all three specs must stay buildable.
+- bin/ is the largest thing on disk in this checkout (~215 MB: ffmpeg.exe + ffprobe.exe ~100 MB each, yt-dlp.exe ~18 MB, diarization models ~35 MB) — exactly why it's gitignored; never `git add -A` near this directory.
 
 ### build-packaging — `whisper_project_direct_download_v2/ (root-level build scripts, specs, installers)`
-Windows build and packaging pipeline that turns the Python source (gui.py + app/ + core/ + bin/) into distributable artefacts. The two SHIPPED deliverables are both embeddable-Python based: a Standard Inno Setup installer and a Portable ZIP of the embed tree; two PyInstaller (onefile + onedir) pipelines also exist but are unshipped and kept only to avoid bit-rot.
+Root-level scripts/specs that turn the app/ + core/ source tree into the two shipped Windows deliverables (Setup-Standard installer and a Portable zip), both built from a bundled-Python embed_build/ tree produced by build_embed_installer.bat; two additional PyInstaller pipelines are kept building but are not published.
 
 **Key files**
-- `build_embed_installer.bat` — PRIMARY shipped build. Downloads python-build-standalone CPython 3.11.15 (tag 20260510, install_only tarball — has tkinter, unlike python.org embeddable zip), extracts with System32 tar.exe, pip-installs requirements.txt into Lib/site-packages, PRUNES heavy optional libs (torch/torchaudio/whisper/stable_whisper/numba/llvmlite/sympy/networkx/mpmath + .libs dirs) to shrink ~1.5GB->~800MB, copies app/core/bin/gui.py, writes Run Whisper Project.bat + sitecustomize.py, then runs sanity import + ast.parse checks. Produces embed_build/.
-- `installer_embed.iss` — Inno Setup script wrapping embed_build/ into dist_installer/WhisperProject-v{MyAppVersion}-Setup-Standard.exe. Has its own #define MyAppVersion (currently 1.3.7). Shortcuts launch python\pythonw.exe gui.py. Registers Explorer shell-extension verb. Has [Code] hub-folder uninstall prompt (parses %LOCALAPPDATA%\WhisperProject\config.json).
-- `whisper_project_onefile.spec` — PyInstaller Method A (Portable single-file EXE). UNSHIPPED but maintained. EXE() with embedded binaries+datas, no COLLECT. Hardcodes name='WhisperProject-v1.0.3-Portable' (STALE version). Bundles bin/, assets/, faster_whisper VAD assets, pywhispercpp/_pywhispercpp, stable_whisper/whisper/tiktoken via collect_all + a large hiddenimports list.
-- `whisper_project_onedir.spec` — PyInstaller Method B (onedir tree for Compact installer). UNSHIPPED but maintained. EXE(exclude_binaries=True, contents_directory='.') + COLLECT, name='WhisperProject'. Flattens bin/DLLs beside the exe so core.paths.resource_base() resolves via dirname(sys.executable). Identical hiddenimports list to onefile spec.
-- `installer.iss` — Inno Setup Method B (Compact). UNSHIPPED. Wraps dist_onedir/WhisperProject/ into WhisperProject-v1.3.7-Setup-Compact.exe. Same stable AppId GUID as Standard (single Add/Remove entry). Same hub-folder uninstall [Code] block.
-- `build.bat` — STALE/likely-broken legacy verifier. References pyinstaller whisper_project.spec which DOES NOT EXIST, and verifies an onedir dist\WhisperProject\WhisperProject.exe layout that no current spec produces. Has clean/verify/smoke modes. Do not trust without fixing the spec name first.
-- `docs/BUILD.md` — Authoritative build doc for the three methods (A Portable / B Compact / C Standard) with exact commands. Version strings inside are stale (v1.0.3).
-- `docs/RELEASE_PROCESS.md` — Step-by-step release runbook: version bump, changelog, validation matrix (pyright 0/0/0 + pytest), build all deliverables, manual install/uninstall test, tag+push.
-- `platform/macos/pyinstaller/whisper_project_mac.spec` — macOS .app/.dmg PyInstaller spec (BUNDLE + builddmg.command). NEVER BUILT/VERIFIED on a Mac — starting point only. info_plist version is 1.3.6 (stale). Must run on a real Mac with Mac ffmpeg binaries in bin/.
-- `pyproject.toml` — version = "1.3.7" — one of the version sources PyInstaller specs read automatically per docs.
-- `core/__init__.py` — __version__ = "1.3.7" — the bundled runtime source-of-truth version (About dialog + telemetry). Must be bumped with pyproject.toml + both .iss every release.
+- `build_embed_installer.bat` — Method C build script: downloads a python-build-standalone CPython 3.11 install_only tarball (has tkinter, unlike python.org's embeddable zip), pip-installs requirements.txt into it, prunes heavy optional deps (torch/whisper/numba/etc, ~700MB saved), copies app/core/bin/gui.py, writes sitecustomize.py + a portable launcher .bat, runs sanity imports. Produces embed_build/, the single source tree for BOTH shipped deliverables.
+- `installer_embed.iss` — Inno Setup script for the SHIPPED Setup-Standard installer. Wraps embed_build/ into dist_installer\WhisperProject-vX.Y.Z-Setup-Standard.exe. Single version knob #define MyAppVersion. Also handles the hub-folder uninstall prompt, shell-extension registry keys, and the optional 'notiling' task (drops a no_tiling.flag marker).
+- `installer.iss` — Inno Setup script for the UNSHIPPED 'Setup-Compact' installer (Method B). Wraps dist_onedir\WhisperProject\ (produced by whisper_project_onedir.spec) into WhisperProject-vX.Y.Z-Setup-Compact.exe. Maintained but not published.
+- `whisper_project_onedir.spec` — UNSHIPPED PyInstaller onedir spec (Method B) — feeds installer.iss. Kept in lock-step with the onefile spec's hidden-imports/datas so it doesn't bit-rot.
+- `whisper_project_onefile.spec` — UNSHIPPED PyInstaller onefile spec (Method A) — single self-extracting exe, was the Portable deliverable before v1.3.2. Its EXE() still hardcodes name='WhisperProject-v1.0.3-Portable', stale vs. the current 1.5.0.
+- `build.bat` — STALE/likely-broken helper: runs `pyinstaller --noconfirm whisper_project.spec`, a file that does not exist in the repo root (only *_onedir.spec and *_onefile.spec exist). Also references an obsolete dist\config.json copy step from before the Phase-1.2 config migration to %LOCALAPPDATA%.
+- `gui.py` — Actual app entry point (283 lines). argparse CLI with `transcribe` / `serve` subcommands, a pre-argparse `--worker` branch (JSON-stdio worker spawn contract used by every build method), a pre-argparse `--safe-mode` flag, and the default bare launch into app.run() (the Tk GUI).
+- `pyproject.toml` — setuptools metadata, version = "1.5.0" (one of the '4 usual places'), pyright/pytest/coverage config, and optional-dependency extras (dev, crash_reporting, theme_detection, backend_cpp, alignment, nvidia_asr).
+- `requirements.txt` — Pinned runtime deps installed into embed_build\Lib\site-packages by build_embed_installer.bat; must stay consistent with pyproject.toml's core dependency list (docs/RELEASE_PROCESS.md's maintenance loop calls this out explicitly).
+- `configuration.json` — Master copy of the ONLINE app config (model_catalog, stats_url, latest_version, ffplay_downloads) that the maintainer manually uploads to https://smch.ir/whisper/app_config.json. NOT bundled into any build, NOT read from disk by the running app at all.
 
 **Entry points**
-- build_embed_installer.bat (build the shipped Standard embed tree)
-- ISCC.exe installer_embed.iss (compile the shipped Standard installer)
-- shutil.make_archive / Compress-Archive of embed_build/ (the shipped Portable ZIP — done MANUALLY, no committed script)
-- pyinstaller --noconfirm --clean whisper_project_onefile.spec (unshipped Portable EXE)
-- pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec then ISCC.exe installer.iss (unshipped Compact)
+- gui.py (bare argv) -> app.run() launches the Tk desktop GUI
+- gui.py transcribe FILE [--language] [--formats] [--diarization] -> one-shot CLI transcription, exits
+- gui.py serve [--port] [--host] [--lan] [--token] [--max-upload-mb] -> runs core.server's local/LAN HTTP job server
+- gui.py --worker -> JSON-stdio worker subprocess (core.worker.main); handled before argparse, spawn-contract every deliverable relies on, must not be renamed/removed
+- gui.py --safe-mode -> backs up + resets %LOCALAPPDATA%\WhisperProject\config.json before any other mode runs
 
 **Commands**
 ```
 build_embed_installer.bat
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
-"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
-pyinstaller --noconfirm --clean whisper_project_onefile.spec
-pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
+python -c "import shutil; shutil.make_archive(r'dist_installer\WhisperProject-vX.Y.Z-Portable', 'zip', r'embed_build')"
+python -m pyright app core
 python -m pytest tests\ --ignore=tests\smoke
-run_tests.bat (pyright 0/0/0 app/+core/ plus hermetic suite — the release gate)
+gh release upload vX.Y.Z dist_installer\WhisperProject-vX.Y.Z-Setup-Standard.exe dist_installer\WhisperProject-vX.Y.Z-Portable.zip --clobber
+pyinstaller --noconfirm --clean whisper_project_onefile.spec  (unshipped Method A)
+pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec  (unshipped Method B, input to installer.iss)
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss  (unshipped Method B installer)
 ```
 
 **Depends on**
-- python-build-standalone (astral-sh GitHub release) for the embeddable CPython 3.11.15 runtime
-- Inno Setup 6 (ISCC.exe at %LOCALAPPDATA%\Programs\Inno Setup 6\) for both .iss installers
-- PyInstaller (for the two unshipped spec pipelines)
-- %SystemRoot%\System32\tar.exe (Windows bsdtar — NOT Git's tar) to extract the Python tarball
-- requirements.txt (runtime deps pip-installed into the embed tree)
-- bin/ffmpeg.exe, bin/ffprobe.exe, bin/yt-dlp.exe (bundled into every artefact)
-- app/, core/, gui.py source tree (gui.py is the frozen entry point and the --worker subprocess)
-- core/paths.py::resource_base() (runtime resolves bundled bin/ via _MEIPASS in onefile, dirname(sys.executable) in onedir/embed)
-- core/optional_deps.py (pip-installs the pruned torch/stable-ts/whisper deps on first use at runtime)
+- app/ (Tkinter UI package, imported by gui.py's default launch)
+- core/ (transcription/download/config/worker engine; core.worker, core.server, core.config, core.transcriber all invoked directly from gui.py)
+- bin/ (bundled ffmpeg.exe, ffprobe.exe, yt-dlp.exe — copied/bundled by every pipeline)
+- assets/ (whisper.ico, whisper.png — packaged by both .iss installers)
+- creds/gcloud_stt.json (gitignored, optional — bundled into embed_build/creds/ when present)
+- PyInstaller (Methods A/B)
+- Inno Setup 6 / ISCC.exe (Methods B/C — winget install JRSoftware.InnoSetup)
+- python-build-standalone (astral-sh GitHub releases — CPython 3.11.15 install_only tarball, Method C)
+- Windows-native tar.exe/bsdtar (Method C extraction; Git's tar breaks on the C:\ path)
+- requirements.txt runtime deps (faster-whisper, google-cloud-speech, sherpa-onnx, python-docx, reportlab, etc.)
 
 **Gotchas**
-- VERSION TRAP: version lives in FOUR places that must be bumped together — pyproject.toml, core/__init__.py __version__, installer.iss AppVersion+OutputBaseFilename, installer_embed.iss #define MyAppVersion. Current real version is 1.3.7, but whisper_project_onefile.spec hardcodes 'WhisperProject-v1.0.3-Portable', mac spec says 1.3.6, and BUILD.md/RELEASE_PROCESS.md still show v1.0.3/v0.7.1. Don't trust embedded version strings — check pyproject.toml/core.__init__.
-- build.bat IS STALE/BROKEN: it runs `pyinstaller whisper_project.spec` but that file does NOT exist (real names are whisper_project_onefile.spec and whisper_project_onedir.spec), and it verifies an onedir dist\WhisperProject\ layout. It is not part of the current shipped pipeline; fix the spec name + dist path before relying on it.
-- SHIPPED set is Standard installer + Portable ZIP, BOTH from the embed tree (build_embed_installer.bat). The Portable ZIP is a MANUAL shutil.make_archive / Compress-Archive of embed_build\ — there is NO committed script for it. The PyInstaller onefile/onedir + Compact installer are UNSHIPPED (kept only so specs don't bit-rot).
-- Adding any new app/ or core/ module REQUIRES updating the hiddenimports lists in BOTH whisper_project_onefile.spec AND whisper_project_onedir.spec (and ideally the mac spec) or the unshipped frozen builds break with a runtime ImportError. The embed build doesn't need this (it ships the real source tree).
-- The prune step in build_embed_installer.bat MUST NOT remove docx or reportlab — they back the docx/pdf writers and were re-introduced after a 'docx-never-written' bug. The sanity import line explicitly imports docx+reportlab so a future prune mistake fails the build loudly. Pruned libs (torch/whisper/stable-ts/numba etc.) are installed on-demand at runtime via core/optional_deps.py.
-- Must use the python-build-standalone 'install_only' tarball, NOT python.org's embeddable zip — the embeddable zip strips tkinter/Tcl-Tk which the Tk UI needs. The .bat verifies `import tkinter` right after extraction.
-- Tarball extraction must use %SystemRoot%\System32\tar.exe; Git's tar misreads the C:\ path as a remote host ('Cannot connect to C:') and fails.
-- sitecustomize.py written into python\Lib\ is what teaches the embedded interpreter to prepend the bundle's Lib\site-packages to sys.path — without it the embed build can't find its deps.
-- Both .iss files share the SAME AppId GUID {734B46B9-5E70-4C4E-8833-0A7506A64376} on purpose (single upgradable Add/Remove Programs entry). Both carry a duplicated [Code] hub-folder uninstall block (Inno has no [Include]); parity is checked by tests/core/test_inno_uninstall_parser.py — keep them in sync.
-- Build outputs are gitignored: dist/, dist_onedir/, dist_installer/, embed_build/, build/, build_logs/. Commit ONLY specs, .bat scripts, and .iss files. embed_build/python/ (the extracted CPython runtime, thousands of .pyd/.h/.dll) appearing under the tree is a generated artefact — never read it in full or edit it.
-- config.json is intentionally NOT shipped next to the exe — load_config() creates it on first launch at %LOCALAPPDATA%\WhisperProject\config.json; the installers parse that path for the hub-folder uninstall prompt.
-- Release policy (CLAUDE.md, 2026-05-26): keep ONLY the latest GitHub release (plus the separate basic-v0.1.0 edition) and prune older ones on each release; git tags + local dist_installer/ artefacts are the backup. Do not move/delete published tags v1.0.3+ without explicit ask.
+- Only TWO deliverables ship: Setup-Standard (installer_embed.iss over embed_build/) and Portable (a zip of that SAME embed_build/ tree, via shutil.make_archive). Portable stopped being a PyInstaller onefile exe at v1.3.2.
+- whisper_project_onefile.spec (Method A) and whisper_project_onedir.spec + installer.iss (Method B/'Compact') are UNSHIPPED but deliberately kept building. CLAUDE.md requires updating both specs' hidden-imports/datas lists whenever a new app/core module is added, purely so they don't bit-rot, even though nothing consumes their output.
+- whisper_project_onefile.spec's EXE() hardcodes name='WhisperProject-v1.0.3-Portable' — stale vs. the current 1.5.0. Unlike installer_embed.iss's parameterized #define MyAppVersion, this literal isn't part of the version-bump checklist and isn't auto-updated.
+- build.bat is stale/likely broken: it invokes `pyinstaller ... whisper_project.spec`, a file that does not exist at repo root (verified — only whisper_project_onedir.spec and whisper_project_onefile.spec are present). Its dist\config.json-copy logic is also obsolete after the Phase-1.2 config migration to %LOCALAPPDATA%.
+- Version must be bumped in the '4 usual places' (per docs/SESSION_HANDOFF_NEXT.md): pyproject.toml (version=), core/__init__.py (__version__=), installer.iss (AppVersion= / OutputBaseFilename=), installer_embed.iss (#define MyAppVersion). configuration.json's own 'latest_version' field is a SEPARATE, informational value for the online-config layer — it is NOT one of the 4 and bumping it alone does nothing for the shipped version.
+- configuration.json (repo root) vs core/config.py's DEFAULT_CONFIG is a duplication trap: configuration.json is only the master copy manually uploaded to config_url (https://smch.ir/whisper/app_config.json); it is never bundled and never read from disk by the running app. DEFAULT_CONFIG in core/config.py has its own near-empty baseline (model_catalog={}). The real effective config is a 3-way merge (core.config.merge_config_sources: local config.json > fetched-and-cached online config > DEFAULT_CONFIG) — editing configuration.json in the repo has zero runtime effect until someone re-uploads it to the URL.
+- docs/RELEASE_PROCESS.md Step 5 still describes building 'three deliverables' (Portable exe + onedir/Compact + Standard) as if all three ship — that section is stale. The doc's own preamble says 'if anything here disagrees with CLAUDE.md, CLAUDE.md wins,' and CLAUDE.md + docs/BUILD.md are authoritative that only Setup-Standard + Portable(zip) ship; prefer docs/BUILD.md's 'Rebuild without bumping the version' recipe for routine same-version respins.
+- build_embed_installer.bat prunes heavy optional packages (torch, torchaudio, whisper, stable_whisper, numba, llvmlite, sympy, networkx, mpmath, functorch, torchgen + their .libs siblings) from embed_build/Lib/site-packages after pip install, keeping the shipped bundle ~800MB instead of ~1.5GB; these install on demand at runtime via core.optional_deps only if the user enables stable-ts alignment or an opt-in backend.
+- Method C needs the Windows-native tar.exe (bsdtar) at %SystemRoot%\System32\tar.exe — Git's bundled tar.exe misinterprets the 'C:' destination as a remote-host argument and fails.
+- Release cadence is intentionally slow (CLAUDE.md 'Release cadence: slow down'): default to a same-version rebuild (docs/BUILD.md recipe) rather than bumping the version for routine fixes; docs/SESSION_HANDOFF_NEXT.md shows many same-version rebuild cycles already at v1.5.0.
 
 ### tests-docs — `tests/, docs/, plus root project-config files (pyproject.toml, requirements.txt, README.md, CLAUDE.md, THIRD_PARTY_NOTICES.md, run_tests.bat)`
-The test suite (hermetic unit tests + real-resource smoke/e2e tests) and the project's documentation/config metadata for the Whisper Project — a Windows-first local Whisper transcription desktop app with yt-dlp/SMTV download and oTranscribe round-trip.
+The pytest-based verification suite (hermetic unit/integration tests plus a real-resource smoke suite) that gates every commit via run_tests.bat, and the docs/ knowledge base (build/release/config/architecture reference, session handoff, and evidence-based competitive/gap analysis) plus root metadata files that define how the project is built, tested, and licensed.
 
 **Key files**
-- `pyproject.toml` — Single source of build + tooling config: pytest (testpaths=["tests"], addopts="-q", minversion 8.0), coverage (source=core,app; omit tests), pyright (include core,app; exclude tests; pythonVersion 3.11; typeCheckingMode basic). Declares project v1.3.7, runtime deps, and optional-dependency extras: dev/crash_reporting/theme_detection/backend_cpp/alignment. Packages found = app*,core* only (tests/build/dist/docs excluded).
-- `run_tests.bat` — THE everyday green-gate. Runs (1) `pyright app core` (must be 0 errors) then (2) `python -m pytest tests/ --ignore=tests/smoke -q`; prints PASS/FAIL and exits non-zero on any failure. This is the exact hermetic-suite command future sessions should run.
-- `tests/core/` — ~70 hermetic unit test files (test_config, test_download_command, test_history_db, test_writers, test_transcriber_helpers, test_worker_protocol, test_smtv_stream, etc.). No model/network/GUI. Import core/app directly (e.g. `from core import config`). This is the suite run_tests.bat runs.
-- `tests/smoke/` — Real-resource integration suite (test_app_headless.py, test_exe_real_e2e.py, test_smtv_smoke.py, test_smtv_download_e2e.py). Excluded from the everyday gate; catches PyInstaller packaging bugs by spawning the compiled exe `--worker`. Each test self-skips when prerequisites are absent.
-- `tests/smoke/conftest.py` — Only conftest in the repo. Session-scoped fixtures (test_video, model_dir, exe_path, gui_script, repo_root) that pytest.skip when resources are missing. Defines defaults + env-var overrides for smoke runs.
-- `tests/integrations/` — Hermetic integration-unit tests: test_smtv.py (URL recognition/page parsing for core.integrations.smtv), test_otranscribe.py. Plus tests/integrations/fixtures/ (sample SRT/JSON + canned SMTV HTML pages).
-- `tests/fixtures/` — Committed test assets: sample.wav, audio/silent_1s.wav + tone_440hz_2s.wav, smtv_clip/ (real 91s mp3 + expected json/srt/chapters), and generate_sample_wav.py (regenerator, source-of-truth for the WAV).
-- `docs/TESTING.md` — Quick guide: run_tests.bat as the gate, one-time setup (pip install -r requirements.txt + pyright/pytest), what test files cover, how to run smoke tests with WHISPER_SMOKE_* env vars, how to run the app (`python gui.py`).
-- `docs/README.md` — Documentation index / reading order: bucketizes ~40 docs into Start-here (INSTALL/BUILD/ARCHITECTURE/CONFIG), Reference, Per-feature, Release notes, Development state.
-- `docs/SESSION_HANDOFF_NEXT.md` — Per CLAUDE.md, the source-of-truth for what work is left; read on session start, update on session end. The 1-line restart prompt references it.
-- `CLAUDE.md` — Durable repo-wide instructions: commit-often/push-in-batches/release-slowly cadence; single mainline `master`; English-only; tests live under tests/ (hermetic = tests/ minus tests/smoke/); pyright must be 0 errors on app/+core/.
-- `requirements.txt` — Runtime deps only (faster-whisper, requests, sv-ttk, tkinterdnd2, python-vlc, platformdirs, python-docx, reportlab, sherpa-onnx, watchdog, pystray, Pillow, pywhispercpp, stable-ts). Dev/test deps live in pyproject extras, NOT here.
-- `THIRD_PARTY_NOTICES.md` — License summary for bundled third-party software (CPython, FFmpeg LGPL/GPL, yt-dlp, faster-whisper, ctranslate2, torch, etc.). Project's own code is BSD-3-Clause.
-- `docs/integrations/` — Per-integration research+brief+acceptance docs (oTranscribe, SMTV). README.md defines the research->brief->ship->acceptance pattern for adding new integrations.
-- `docs/CHANGELOG.md` — Version history (~60KB). SKIM only — large generated-style file.
+- `run_tests.bat` — Root everyday gate: runs `pyright app core` then `pytest tests/ --ignore=tests/smoke -q`, prints PASS/FAIL summary, non-zero exit on failure
+- `pyproject.toml` — Project metadata, runtime deps, optional-dependency groups (dev/crash_reporting/theme_detection/backend_cpp/alignment/nvidia_asr), and [tool.pytest.ini_options]/[tool.coverage]/[tool.pyright] config
+- `requirements.txt` — Pinned runtime dependencies for source installs; notes which libs are bundled vs. installed on demand via core/optional_deps.py
+- `CLAUDE.md` — Durable auto-loaded Claude Code session rules: commit/push cadence, permitted vs forbidden git/gh operations, English-only repo policy, pyright gate, points to the handoff file
+- `README.md` — User-facing project overview; top banner points readers to PROJECT_INDEX.md for fast onboarding
+- `THIRD_PARTY_NOTICES.md` — Summary of bundled third-party runtime/binary/package licenses (FFmpeg, yt-dlp, faster-whisper, PyTorch, etc.)
+- `tests/core/conftest.py` — Autouse fixtures: snapshot/restore core.transcriber module globals (MODEL/PIPELINE/etc.) around every test, and pin transcribe_backend to faster_whisper so a bundled cloud key doesn't change test behavior
+- `tests/smoke/conftest.py` — Session-scoped skip-guard fixtures (test_video, model_dir, exe_path, gui_script) — each pytest.skip()s when its real-resource prerequisite is absent
+- `tests/app/test_transcription_service.py` — NEW (2026-07-04) 11-test file covering app/services/transcription_service.py's _derive_transcript_stats and _post_usage_stats; closes GitHub issue #3 and reproduces the shipped word_count=0 bug
+- `tests/core/test_config.py` — Config load/save, model_path/download_folder persistence, and the three-layer online/local/hard-coded merge rules; also guards configuration.json's stats_url against drifting from core.config.DEFAULT_CONFIG
+- `tests/integrations/test_smtv.py` — Hermetic, fixture-driven tests for core/integrations/smtv.py (URL recognition, page parsing, transcript extraction); the live-network variant is separated into tests/smoke/test_smtv_smoke.py
+- `tests/integrations/test_otranscribe.py` — Hermetic tests for the oTranscribe (.otr) integration round-trip
+- `tests/smoke/test_exe_real_e2e.py` — Spawns the compiled WhisperProject.exe --worker against a real video; the only test category that catches PyInstaller packaging bugs (missing data files/hidden imports)
+- `tests/fixtures/audio/*.wav` — Tiny committed WAV fixtures (silent_1s.wav, tone_440hz_2s.wav) so decode/VAD/transcribe tests never touch the network
+- `docs/SESSION_HANDOFF_NEXT.md` — Single-source-of-truth handoff log; must be read first each session and updated at session end; newest entries appended at the top
+- `docs/GAPS_AGAINST_PEERS_2026.md` — Feature-by-feature product gap analysis vs. peer desktop apps (MacWhisper, Buzz, Vibe, etc.); re-audited against current code 2026-07-04
+- `docs/COMPETITIVE_ANALYSIS_2026.md` — Ecosystem/ASR-model survey (open-source landscape, cloud APIs, CJK specifics); companion to GAPS_AGAINST_PEERS, re-audited 2026-07-04 for our-own-capability claims only
+- `docs/BUILD.md` — Build recipe: embed tree -> Setup-Standard installer + Portable zip (shipped), plus the unshipped PyInstaller onefile/onedir pipelines kept in lock-step
+- `docs/RELEASE_PROCESS.md` — Full release sequence plus the shorter 'same-version rebuild' recipe used for source-only re-ships; defers to CLAUDE.md on any conflict
+- `docs/CONFIG.md` — Full config-key reference and the three-level merged-configuration design (local config.json > online config_url > hard-coded DEFAULT_CONFIG)
+- `docs/CHANGELOG.md` — Keep-a-Changelog-style version history, current head [1.5.0]
+- `docs/TESTING.md` — Short how-to: run_tests.bat usage, hermetic vs. smoke distinction, one-time setup, running the app from source
+- `docs/README.md` — Documentation folder index / reading order across five buckets (start-here, reference, per-feature, release notes, development state)
+- `docs/history/README.md` — Index of ~23 archived phase-acceptance plans, audits, and superseded planning docs, preserved for traceability
+- `docs/integrations/README.md` — Documents the research -> brief -> acceptance pattern used for each third-party integration (oTranscribe, SMTV)
+- `docs/roadmap/README.md` — Index of future-release feature-research docs; entries move out once a release ships
+- `docs/release-notes/RELEASE_NOTES_v*.md` — 19 per-version release-notes files, v0.7.0 through v1.5.0, produced by the 2026-07-04 docs reorg out of the flat docs/ root
 
 **Entry points**
-- run_tests.bat — the everyday gate (pyright app core, then pytest tests/ --ignore=tests/smoke -q)
-- tests/core/ — hermetic unit suite (default pytest target via testpaths)
-- tests/smoke/ — real-resource suite, run manually only
-- docs/README.md — documentation reading-order index
-- docs/TESTING.md — how to run tests and the app
+- run_tests.bat (double-click or CLI) -- the everyday pyright+pytest gate
+- docs/SESSION_HANDOFF_NEXT.md -- read first at the start of any session
+- docs/README.md -- documentation folder reading-order index
+- docs/TESTING.md -- quick guide to running tests and the app from source
 
 **Commands**
 ```
@@ -396,46 +491,39 @@ run_tests.bat
 pyright app core
 python -m pytest tests/ --ignore=tests/smoke -q
 python -m pytest tests/smoke/ -v -s
-python -m pytest tests/smoke/test_exe_real_e2e.py
 pip install -r requirements.txt
 pip install pyright pytest
-python gui.py
-python tests/fixtures/generate_sample_wav.py
 ```
 
 **Depends on**
-- core/ and app/ packages — every unit test imports these directly (e.g. `from core import config`, `from core.integrations import smtv`); pyproject restricts packaging to app*/core* only
-- pyright + pytest>=8.0 (dev tools, from pyproject [project.optional-dependencies].dev)
-- faster-whisper / tkinter / numpy / PIL — optional at test time, gated via pytest.importorskip so absence skips rather than fails
-- The compiled exe under dist/ or an embeddable-Python gui.py — required by tests/smoke/test_exe_real_e2e.py
-- gui.py (repo-root app entry) — smoke headless/e2e tests reference it
+- app/ subsystem (tests/app exercises app.services.transcription_service)
+- core/ subsystem (tests/core is the bulk of the suite, ~150 test_*.py files exercising core.*)
+- faster-whisper, pytest, pytest-cov, responses, pyright (external libs from pyproject.toml dev extras)
+- GitHub Actions CI (ci.yml runs the hermetic suite; codecov/codecov-action uploads coverage.xml)
+- Build subsystem (docs/BUILD.md, docs/RELEASE_PROCESS.md reference build_embed_installer.bat, installer_embed.iss, PyInstaller specs)
 
 **Gotchas**
-- Hermetic suite is DEFINED as `tests/ minus tests/smoke/`. Never let a network/model/GUI dependency creep into tests/core/ or tests/integrations/ — those must stay runnable offline with no model. Use pytest.importorskip / skipif (os.name, WHISPER_OFFLINE_TESTS) like the existing tests do.
-- There is NO conftest.py at tests/ root or tests/core/ — the ONLY conftest is tests/smoke/conftest.py. Unit tests import core/app because pytest adds the repo root (rootdir) to sys.path via the tests/ package layout (tests/__init__.py, tests/core/__init__.py exist). tests/integrations/test_otranscribe.py and tests/smoke/test_app_headless.py additionally do explicit sys.path.insert(0, REPO_ROOT). Don't delete the __init__.py files or rename tests/ — imports will break.
-- pyright MUST report 0 errors on app/ AND core/ before every commit (the v1.0.3 baseline of 0/0/0 is protected per CLAUDE.md). tests/ is excluded from pyright, so test-file type errors won't fail run_tests.bat's pyright step but WILL fail nothing — they're simply unchecked.
-- Smoke env-var contract (tests/smoke/conftest.py): WHISPER_SMOKE_VIDEO (default E:\3029-NWN-Daily-Scroll-2m_0002.mp4), WHISPER_SMOKE_MODEL (default %LOCALAPPDATA%\WhisperProject\Cache\models\models--Systran--faster-whisper-large-v3, must contain model.bin), WHISPER_SMOKE_EXE (default dist/WhisperProject.exe), WHISPER_SMOKE_GUI (set this AND WHISPER_SMOKE_EXE=pythonw.exe for the embeddable 'Method C' build). Missing prereqs => pytest.skip, not failure.
-- Live-network smoke tests (test_smtv_smoke.py, test_smtv_download_e2e.py) honor WHISPER_OFFLINE_TESTS=1 to force-skip, and override URLs via WHISPER_SMTV_TEST_URL / WHISPER_SMTV_DOWNLOAD_TEST_URL.
-- test_exe_real_e2e.py drives the worker over a JSON stdin/stdout protocol (events: ready, startup_error, language_detected, progress, done, error; actions: transcribe, shutdown). It asserts progress reaches >=90% and that SRT/JSON land next to the input. This is the ONLY layer that catches PyInstaller missing-data-file bugs (the Session-8 silero_vad_v6.onnx incident documented in tests/smoke/README.md).
-- Dev/test dependencies are NOT in requirements.txt (which is runtime-only) — they live in pyproject.toml [project.optional-dependencies].dev. Installing only requirements.txt won't give you pyright/pytest/pytest-cov/responses.
-- docs/ is mostly historical/process narrative (SESSION_LOG.md ~86KB, ROADMAP.md ~40KB, many RELEASE_NOTES_v*.md, AUDIT*/PHASE* files under history/). For current state read docs/SESSION_HANDOFF_NEXT.md; for orientation read docs/README.md. Do not treat old AUDIT/PHASE/ROADMAP docs as current truth.
-- English-only repository rule (CLAUDE.md): no Persian/Arabic/RTL in docs, comments, or commit messages — even though the SMTV scraper handles non-English content URLs.
-- Adding a new core/app module requires updating BOTH whisper_project_onefile.spec and whisper_project_onedir.spec hidden-import lists (per CLAUDE.md) so the unshipped PyInstaller pipelines don't bit-rot — not a tests/docs file, but a release-gate the test suite cannot catch (only smoke e2e can).
-- pyproject project.version (1.3.7) is a separate source of truth from git tags and docs/RELEASE_NOTES_*; keep them in sync at release time.
+- Hermetic suite = tests/ minus tests/smoke/; run_tests.bat's pytest invocation is literally `pytest tests/ --ignore=tests/smoke`. A bare `pytest` from repo root also targets tests/smoke (via pyproject's testpaths=["tests"]) but each smoke test self-skips via pytest.skip() when its real-resource prerequisite (3GB Whisper model, a real test video, a compiled exe, live network) is absent.
+- pyright app/ core/ must report exactly 0 errors / 0 warnings / 0 informations before every commit (the v1.0.3 baseline, protected); tests/ itself is excluded from pyproject.toml's [tool.pyright] include list.
+- docs/SESSION_HANDOFF_NEXT.md must be read first every session and updated at session end -- it is a large, append-only running log (1200+ lines) with newest entries at the top.
+- tests/core/conftest.py's autouse _isolate_transcriber_globals fixture exists because monkeypatch cannot undo `global`-statement mutations in core.transcriber; without it, tests leak MODEL/PIPELINE/backend state across files in an order-dependent way.
+- tests/core/conftest.py's autouse _default_offline_backend fixture pins transcribe_backend to faster_whisper for every test, because a dev machine shipping creds/gcloud_stt.json would otherwise silently resolve the default backend to google_cloud_stt and break tests mocking the offline MODEL.
+- tests/app/ is brand new as of 2026-07-04 -- currently only test_transcription_service.py, added specifically to cover the seam that shipped a real word_count=0 bug (GitHub issue #3, closed).
+- docs/history/ and docs/release-notes/ are the result of a 2026-07-04 reorg that moved archived planning docs and all RELEASE_NOTES_vX.Y.Z.md files out of the flat docs/ root into subfolders, each with its own README/index.
+- Two pre-existing test-order-dependent flakes are documented as NOT regressions: tests/core/test_resume_from_cancellation.py fails in isolation but passes under full-suite ordering, and tests/core/test_v08_real_file_e2e.py needs a real hot worker+model.
+- CLAUDE.md enforces an English-only repo (no Persian/Arabic/RTL in docs, code comments, or commit messages) because the branch is being prepared for handover to a separate maintainer -- this is a repo-specific rule distinct from any assistant-side language preference.
+- requirements.txt bundles google-cloud-speech/google-cloud-storage unconditionally (it's the default engine when a bundled key ships), while other backends (pywhispercpp, stable-ts, screeninfo, nvidia_asr's transformers/torch/librosa) are optional-only and install on demand via core/optional_deps.py.
+- docs/GAPS_AGAINST_PEERS_2026.md and docs/COMPETITIVE_ANALYSIS_2026.md were both re-audited 2026-07-04 with file:line evidence after a large fraction of their 'missing feature' claims turned out to already be shipped -- trust the 2026-07-04 corrections over the original May-2026 prose in either doc.
 
 ---
 
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 407
-- **Structure refreshed:** 2026-07-04T15:15:32
-- **Semantic sections last built:** 2026-06-03T15:55:57
-- **Drift since semantic build:** +173 added · ~82 changed · -34 removed
-
-> ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
->
-> Notable: `.claude/briefs/A.json`, `.claude/briefs/B.json`, `.claude/briefs/C.json`, `.claude/briefs/D.json`, `.claude/briefs/E.json`, `.claude/briefs/F.json`, `.claude/briefs/G.json`, `.claude/briefs/G2.json`
+- **Source files tracked:** 408
+- **Structure refreshed:** 2026-07-04T15:30:21
+- **Semantic sections last built:** 2026-07-04T15:30:21
+- **Drift since semantic build:** +0 added · ~0 changed · -0 removed
 
 | Top-level | Source files |
 |---|---|
@@ -444,13 +532,13 @@ python tests/fixtures/generate_sample_wav.py
 | `core` | 64 |
 | `app` | 24 |
 | `.claude` | 20 |
-| `(root)` | 16 |
+| `(root)` | 17 |
 | `.github` | 13 |
 | `platform` | 10 |
 | `tools` | 6 |
 | `assets` | 1 |
 | `creds` | 1 |
 
-**By type:** `.py`×263  `.md`×92  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×263  `.md`×92  `.json`×18  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
