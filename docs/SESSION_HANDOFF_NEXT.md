@@ -5,6 +5,78 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ STOPPING MID-TASK (2026-07-04, later same day) — Pro-plan 5h cap reached
+
+Owner said we hit the 5-hour usage cap boundary and asked me to stop.
+Everything below is genuinely safe (git status is clean, nothing
+uncommitted) — this is a "pick up where I left off" note, not damage
+control.
+
+**Done and pushed this session, after the "otr writer" entry below:**
+repo tidiness (docs/ reorganized into docs/history/ +
+docs/release-notes/, README.md destaled), GitHub discoverability
+(description + 14 topics, Discussions enabled), CONTRIBUTING.md +
+4 seeded `good first issue` starter issues (#2-#5 on GitHub).
+
+**IN PROGRESS, NOT YET APPLIED — pick this up first:**
+A multi-pass audit of `docs/GAPS_AGAINST_PEERS_2026.md` found it is
+*extremely* stale (most "we don't have X" claims are wrong). Batch 1
+(10 rows: diarization, DOCX/PDF/MD export, recent-files, tray,
+keyboard shortcuts, CI, telemetry, + the community-health section)
+is already fixed and pushed. Two independent background subagents
+then re-checked the rest of the document:
+
+- **Agent A** (sections A/B/D) already reported back — thorough,
+  well-evidenced (file:line citations), one claim spot-checked
+  directly (`python gui.py --help` confirmed the `transcribe`/`serve`
+  CLI subcommands). Verdict: 22 of 30 rows in its scope are stale —
+  alignment, model picker, hardware wizard, all 5 ASR backends,
+  Demucs separation, crash auto-resume, the FULL in-app transcript
+  viewer (VLC playback, karaoke highlight, find-and-replace, filler
+  strip, word-confidence colour, speaker rename), drag-and-drop,
+  multi-select, watched folders, YouTube-on-Transcribe-tab, right-
+  click Explorer integration, CLI mode, and per-folder
+  `.whisperproject.json` overrides are ALL actually shipped and were
+  wrongly marked absent/partial. 4 rows are shipped-but-genuinely-
+  partial (live mic is record-then-transcribe not true streaming;
+  hotwords is one global field not a glossary; click-to-seek is
+  segment-level not word-level; a full FTS5/semantic cross-history
+  search engine exists in `core/search.py` but has ZERO UI entry
+  point). 4 rows are confirmed still genuinely absent (system-wide
+  dictation hotkey, translation task, PII redaction, sound-event
+  tags). None of this is applied to the file yet — the full findings
+  are in that agent's completion message in this conversation's
+  history (agentId `af9a1c4d678d280e0` if the harness can still
+  resume it, otherwise re-derive by reading its report in the
+  transcript or just re-running the same audit).
+- **Agent B** (sections E/F/H/I + the C filename-templating rows,
+  agentId `a81aa2ee4090b5413`) was STILL RUNNING when I had to stop.
+  Its output path (do not read directly via a shell tool — it's a
+  raw JSONL transcript that will overflow context; use the harness's
+  own agent-resume/notification mechanism):
+  `C:\Users\Owner\AppData\Local\Temp\claude\C--Users-Owner-Desktop-whisper-app\56442984-2b51-4329-b5a6-b160013f2567\tasks\a81aa2ee4090b5413.output`
+  — that whole temp directory is session-scoped and may not survive
+  into a new session; if it's gone, just re-dispatch the same audit
+  (see the exact prompt used, in this conversation's history).
+
+**Next steps, in order:** get/re-derive Agent B's findings → spot-
+check 1-2 surprising claims directly → apply BOTH agents' confirmed
+corrections to `docs/GAPS_AGAINST_PEERS_2026.md` (🟢 for fully
+shipped, corrected 🟡 nuance for partial, leave confirmed-absent 🔴
+rows alone) → rewrite Section J's "top 5 gaps" verdict (it's
+currently very wrong now that diarization/DOCX-MD/CI/the whole
+viewer are done — the real remaining big gap is mostly the system-
+wide dictation hotkey) → fix the "164 tests" mention in Section J
+(actual: 1701 collected, full suite green) → grep for any other
+stale test-count mentions → commit and push.
+
+Also still open, mentioned but not started: `configuration.json`'s
+`stats_url` hyphen/underscore mismatch (now seeded as GitHub issue #2
+for a contributor, but nobody's picked it up — fair game to just fix
+directly too).
+
+---
+
 ## ⭐ CURRENT STATE (2026-07-04) — still v1.5.0 (no version bump): otr writer + Convert-picker UX pass
 
 - **`core/writers/otr.py`** (new) registers `otr` in `core.writers.WRITERS`,
