@@ -250,6 +250,17 @@ Quality bar enforced on every commit:
 
 ---
 
+## Contributing
+
+Issues, PRs, and [Discussions](https://github.com/Milomilo777/whisper_app/discussions)
+are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup,
+quality bar, and PR conventions, and look for issues labeled
+[`good first issue`](https://github.com/Milomilo777/whisper_app/labels/good%20first%20issue)
+if you're new here. This project follows the
+[Contributor Covenant](.github/CODE_OF_CONDUCT.md).
+
+---
+
 ## Author
 
 Written by **translation-robot** — <https://github.com/translation-robot>.
