@@ -1283,19 +1283,37 @@ class App(tk.Tk):
             except Exception as e:  # noqa: BLE001
                 self.log(f"Could not open output folder: {e}")
 
+    # Shown first in the Convert-transcript format picker, ahead of the
+    # rest of core.convert.CONVERT_TARGETS (alphabetical) — these four are
+    # what almost every user actually wants; burying them alphabetically
+    # among internal-registry names like "elan" / "smtv_docx" made the
+    # common case require scrolling/hunting (UX pass, 2026-07-04).
+    _COMMON_CONVERT_FORMATS = ("srt", "vtt", "txt", "json")
+
     def _ask_convert_format(self, in_path: str) -> str | None:
         """Small themed modal: pick the target format. Returns it or None.
 
         Defaults to ``srt`` unless the source already is ``.srt`` (then
         ``json``), so the common one-click case never re-emits the same format.
+
+        The combobox shows "name (.ext)" rather than the bare registry key
+        (e.g. "elan (.eaf)", "smtv_docx (.docx)") since the on-disk extension
+        often differs from the internal name and users otherwise have no way
+        to tell what file they're about to get.
         """
         from core import convert as _convert
 
         src_ext = os.path.splitext(in_path)[1].lower().lstrip(".")
-        choices = list(_convert.CONVERT_TARGETS)
+        all_targets = list(_convert.CONVERT_TARGETS)
+        ordered = [f for f in self._COMMON_CONVERT_FORMATS if f in all_targets]
+        ordered += sorted(f for f in all_targets if f not in ordered)
+        labels = {f: f"{f} (.{_convert.output_extension_for(f)})" for f in ordered}
+        label_to_fmt = {v: k for k, v in labels.items()}
+        choices = [labels[f] for f in ordered]
+
         default = "json" if src_ext == "srt" else "srt"
-        if default not in choices:
-            default = choices[0]
+        if default not in ordered:
+            default = ordered[0]
 
         dlg = tk.Toplevel(self)
         dlg.title("Convert transcript")
@@ -1310,14 +1328,14 @@ class App(tk.Tk):
             foreground="#888",
         ).pack(anchor="w", pady=(0, 8))
         ttk.Label(body, text="Convert to format:").pack(anchor="w")
-        fmt_var = tk.StringVar(value=default)
+        fmt_var = tk.StringVar(value=labels[default])
         ttk.Combobox(
             body, textvariable=fmt_var, state="readonly",
-            values=choices, width=16,
+            values=choices, width=22,
         ).pack(anchor="w", pady=(4, 12))
 
         def _ok() -> None:
-            result["fmt"] = fmt_var.get()
+            result["fmt"] = label_to_fmt.get(fmt_var.get(), fmt_var.get())
             dlg.destroy()
 
         def _cancel() -> None:

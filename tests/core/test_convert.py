@@ -116,6 +116,23 @@ def test_otr_is_a_convert_target():
     assert "otr" in convert.CONVERT_TARGETS
 
 
+def test_output_extension_for_matches_default_out_path():
+    """The UI format picker (app.app._ask_convert_format) shows this next to
+    each format name so users can tell what file they'll actually get; it
+    must agree with what convert_file() really writes."""
+    for fmt in convert.CONVERT_TARGETS:
+        ext = convert.output_extension_for(fmt)
+        assert convert._default_out_path("x", fmt) == f"x.{ext}"
+    # The exceptions where the registry key differs from the extension.
+    assert convert.output_extension_for("elan") == "eaf"
+    assert convert.output_extension_for("inqscribe") == "inqscr"
+    assert convert.output_extension_for("express_scribe") == "txt"
+    assert convert.output_extension_for("smtv_docx") == "docx"
+    # Most formats: the key already IS the extension.
+    assert convert.output_extension_for("srt") == "srt"
+    assert convert.output_extension_for("OTR") == "otr"  # case-insensitive
+
+
 @pytest.mark.parametrize("ext,content", [
     ("srt", SRT_SAMPLE), ("vtt", VTT_SAMPLE),
     ("tsv", TSV_SAMPLE), ("json", JSON_SAMPLE),

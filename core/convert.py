@@ -60,6 +60,7 @@ __all__ = [
     "PARSE_FORMATS",
     "OUTPUT_FORMATS",
     "CONVERT_TARGETS",
+    "output_extension_for",
     "parse_to_segments",
     "convert_file",
 ]
@@ -101,6 +102,19 @@ _EXT_OVERRIDES: dict[str, str] = {
     "express_scribe": "txt",
     _SMTV_DOCX: "docx",
 }
+
+
+def output_extension_for(fmt: str) -> str:
+    """The on-disk extension (no dot) *fmt* actually produces.
+
+    For most ``CONVERT_TARGETS`` entries the registry key already IS the
+    extension; the handful of exceptions live in ``_EXT_OVERRIDES``. UI
+    format pickers use this to show the real file extension next to each
+    format name (see app.app._ask_convert_format) instead of the bare
+    internal registry key, which is opaque for entries like ``elan`` or
+    ``smtv_docx``.
+    """
+    return _EXT_OVERRIDES.get(fmt.lower(), fmt.lower())
 
 
 # --- timestamp parsing ------------------------------------------------------
