@@ -1,6 +1,14 @@
+set -euo pipefail
+cd "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../../.." && pwd)"
+
+if ! command -v create-dmg >/dev/null 2>&1; then
+  echo "error: create-dmg not found. Install it: brew install create-dmg" >&2
+  exit 1
+fi
+
 rm -rf dist
 
-pyinstaller --noconfirm --clean pyinstaller --noconfirm --clean platform/macos/pyinstaller/whisper_project_mac.spec
+pyinstaller --noconfirm --clean platform/macos/pyinstaller/whisper_project_mac.spec
 
 rm -rf dist/dmg/
 mkdir dist/dmg
