@@ -428,10 +428,10 @@ python tests/fixtures/generate_sample_wav.py
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 403
-- **Structure refreshed:** 2026-07-04T10:43:53
+- **Source files tracked:** 407
+- **Structure refreshed:** 2026-07-04T15:15:32
 - **Semantic sections last built:** 2026-06-03T15:55:57
-- **Drift since semantic build:** +146 added · ~76 changed · -11 removed
+- **Drift since semantic build:** +173 added · ~82 changed · -34 removed
 
 > ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
 >
@@ -439,18 +439,18 @@ python tests/fixtures/generate_sample_wav.py
 
 | Top-level | Source files |
 |---|---|
-| `tests` | 171 |
-| `docs` | 78 |
+| `tests` | 173 |
+| `docs` | 79 |
 | `core` | 64 |
 | `app` | 24 |
 | `.claude` | 20 |
-| `(root)` | 15 |
+| `(root)` | 16 |
 | `.github` | 13 |
 | `platform` | 10 |
 | `tools` | 6 |
 | `assets` | 1 |
 | `creds` | 1 |
 
-**By type:** `.py`×261  `.md`×90  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×263  `.md`×92  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
