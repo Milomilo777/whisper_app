@@ -27,15 +27,9 @@ picker — both pull from the same `core.writers.supported_formats()`
 registry, so no separate wiring was needed once the writer itself was
 registered.
 
-**Rebuilt and re-uploaded to the v1.5.0 release: Windows only**
-(`Setup-Standard.exe` + `Portable.zip`, both timestamped 2026-07-04
-07:52 UTC on the GitHub release). **macOS was NOT rebuilt with this
-fix** — the two `.dmg` assets on the release still predate it (built
-06:27 UTC, before this fix landed). Since the fix is pure `core/`
-Python with no platform-specific code, macOS needs the exact same fix;
-re-run `docs/BUILD.md`'s "Step 4b" macOS recipe
-(`gh workflow run macos-app.yml --ref master` -> download -> re-upload)
-before considering this fully shipped everywhere.
+Rebuilt and re-uploaded to the v1.5.0 release on all 4 platforms:
+Windows `Setup-Standard.exe` + `Portable.zip` (07:52 UTC) and macOS
+`arm64`/`x86_64` `.dmg` (08:12 UTC) — all built after this fix landed.
 
 Also this session: researched (not built) a compatibility bridge
 between our SMTV docx writer and the sibling `machine-translate-docx`
