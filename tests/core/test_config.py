@@ -610,3 +610,13 @@ def test_load_config_merges_online_allowlisted_key(isolated_dirs, monkeypatch):
     assert config["stats_url"] == "https://online/stats"  # from online
     assert config["hub_folder"] == "D:/local/hub"          # local wins; online ignored
     cfg.refresh_online_config()  # leave the memo clean for other tests
+
+
+def test_repo_configuration_json_agrees_with_default_stats_url():
+    """configuration.json is the master copy published to config_url as the
+    online app_config. A stats_url that disagrees with DEFAULT_CONFIG here
+    would silently 404 the opt-in telemetry POST for anyone who fetches the
+    online config successfully (see GitHub issue #2)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    published = json.loads((repo_root / "configuration.json").read_text(encoding="utf-8"))
+    assert published["stats_url"] == cfg.DEFAULT_CONFIG["stats_url"]
