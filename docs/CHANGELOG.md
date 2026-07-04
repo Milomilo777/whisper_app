@@ -57,6 +57,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   every stats row read `word_count: 0` regardless of how much was
   actually transcribed. It now falls back to re-parsing whichever other
   produced transcript `core.convert` can read back into segments.
+- **SMTV docx filename was not actually fixed** — a colleague reported the
+  "Convert transcript" / transcription SMTV output "sometimes" landing under
+  an unexpected `(1)`/`(2)`-suffixed name. Root cause: `_write_outputs`
+  computed one shared re-run-safety index across ALL requested formats,
+  including `smtv_docx` — so a pre-existing `.srt`/`.json` from an earlier
+  run pushed the SMTV file to a numbered suffix on its very first write,
+  even though no SMTV file had been written for that source before.
+  `smtv_docx` is now excluded from the shared index and always resolves to
+  its documented fixed, recognisable filename (overwriting in place on
+  re-run, which is the intended "one canonical team file" behaviour).
 - **`stats_url` hyphen/underscore mismatch** — the published
   `configuration.json` (the online-config master copy) pointed at
   `transcription-stats.php` (404) while `core/config.py`'s

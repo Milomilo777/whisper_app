@@ -807,14 +807,23 @@ def _write_outputs(
                 template, base=base, ext=ext, lang=lang, speaker_count=speaker_count,
             )
         planned.append((fmt_name, rendered))
+    # smtv_docx is excluded from the shared index: it is a fixed,
+    # recognisable filename (see _smtv_output_path), not part of the
+    # re-run-safety numbering the other formats share. Including it here
+    # was a real bug -- an unrelated pre-existing .srt/.json from an
+    # earlier run bumped the shared index, so a transcription's SMTV
+    # file could get an unexpected " (1)" suffix on its very first write,
+    # even though no smtv_docx file had ever been written for this
+    # source before. The team relies on the exact fixed name to find it.
+    indexed_planned = [(f, p) for f, p in planned if f != "smtv_docx"]
     index = 0
     while index < 10000 and any(
-        os.path.exists(_indexed_path(p, index)) for _, p in planned
+        os.path.exists(_indexed_path(p, index)) for _, p in indexed_planned
     ):
         index += 1
 
     for fmt_name, rendered in planned:
-        path = _indexed_path(rendered, index)
+        path = rendered if fmt_name == "smtv_docx" else _indexed_path(rendered, index)
         # Honour template-supplied subdirectories. Defensive: only
         # makedirs when the dirname is non-empty and differs from the
         # source folder we're already writing into.

@@ -59,3 +59,42 @@ def test_write_outputs_shares_one_index_across_formats(tmp_path, monkeypatch):
                  t._write_outputs(base, [], "audio.wav", formats=["srt", "json"]))
     assert out == ["clip (1).json", "clip (1).srt"]
     assert (tmp_path / "clip.srt").read_text(encoding="utf-8") == "pre-existing"
+
+
+def test_smtv_docx_filename_stays_fixed_even_when_other_formats_are_indexed(tmp_path, monkeypatch):
+    """Real bug: smtv_docx used to share the srt/json collision index, so a
+    pre-existing .srt/.json from an earlier run pushed the SMTV team's file
+    to an unexpected " (1)" suffix on its very first write -- even though no
+    smtv_docx had ever been written for that source before. The SMTV
+    filename must stay exactly fixed (docs: "a fixed, recognisable name")
+    regardless of what index the other formats land on."""
+    from core.writers import smtv_docx_writer
+
+    monkeypatch.setattr(t, "supported_formats", lambda: {"srt", "json", "smtv_docx"})
+    monkeypatch.setattr(t, "is_binary", lambda f: f == "smtv_docx")
+    monkeypatch.setattr(t, "get_writer", lambda f: (lambda seg, audio: f"{f}-data"))
+    monkeypatch.setattr(smtv_docx_writer, "write_bytes", lambda *a, **kw: b"docx-bytes")
+    monkeypatch.setitem(t.config, "output_formats", ["srt", "json", "smtv_docx"])
+    monkeypatch.setitem(t.config, "output_filename_template", "{base}.{ext}")
+
+    base = str(tmp_path / "MyEpisode")
+    # Run 1: only srt/json requested -- no smtv_docx file exists yet anywhere.
+    t._write_outputs(base, [], "audio.wav", formats=["srt", "json"], lang="ko")
+
+    # Run 2: now smtv_docx is requested too. srt/json already exist from run 1
+    # and correctly jump to index 1 -- but this is the smtv file's FIRST write.
+    out2 = t._write_outputs(
+        base, [], "audio.wav", formats=["srt", "json", "smtv_docx"], lang="ko",
+    )
+    smtv_name = next(os.path.basename(p) for p in out2 if p.endswith(".docx"))
+    assert "(1)" not in smtv_name and "(2)" not in smtv_name
+    assert any("(1)" in os.path.basename(p) for p in out2 if p.endswith((".srt", ".json")))
+
+    # Run 3: re-run again -- srt/json move to index 2, smtv_docx overwrites
+    # the SAME fixed path in place (canonical, latest-wins for the team file).
+    out3 = t._write_outputs(
+        base, [], "audio.wav", formats=["srt", "json", "smtv_docx"], lang="ko",
+    )
+    smtv_name_3 = next(os.path.basename(p) for p in out3 if p.endswith(".docx"))
+    assert smtv_name_3 == smtv_name
+    assert any("(2)" in os.path.basename(p) for p in out3 if p.endswith((".srt", ".json")))
