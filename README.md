@@ -4,6 +4,7 @@
 
 [![CI](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml/badge.svg)](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Milomilo777/whisper_app?label=release)](https://github.com/Milomilo777/whisper_app/releases/latest)
+[![codecov](https://codecov.io/gh/Milomilo777/whisper_app/graph/badge.svg)](https://codecov.io/gh/Milomilo777/whisper_app)
 
 **A Windows desktop app that transcribes audio and video files locally
 using OpenAI's Whisper model.** Drag a file in, get back `.srt`,

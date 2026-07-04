@@ -88,3 +88,15 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: ignore
+
+      # Public-repo tokenless upload (no CODECOV_TOKEN secret needed). The
+      # very first successful upload is also what activates the repo on
+      # codecov.io -- until that happens the README badge reads "unknown".
+      # continue-on-error so a codecov-side hiccup never fails CI itself.
+      - name: Upload coverage to Codecov
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        continue-on-error: true
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
