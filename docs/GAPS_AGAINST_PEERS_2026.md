@@ -25,7 +25,7 @@
 
 | Feature | Us | Peers | Effort to close | Notes |
 |---|---|---|---|---|
-| **Speaker diarization** (who said what) | 🔴 absent | MacWhisper (beta), Buzz, WhisperX, Descript, Otter | L | The single most-asked feature in transcript tools today. `pyannote.audio` 3.x is the standard local stack. |
+| **Speaker diarization** (who said what) | 🟢 shipped — fully offline via `core/diarization.py` (sherpa-onnx: pyannote-segmentation-3.0 + CAMPlus embedding, no HuggingFace token, no PyTorch) | MacWhisper (beta), Buzz, WhisperX, Descript, Otter | — | Was marked absent (this document's own #1 priority gap) — confirmed implemented, tested (`tests/core/test_diarization.py`), and wired into writers (`speaker` field) + the Advanced dialog. |
 | **Word-level ±50 ms alignment** | 🟡 Whisper-native timestamps (drift up to ±500 ms) | WhisperX, stable-ts, MacWhisper, Vibe | M | Pre-requisite for click-to-jump editor. `stable-ts` is the cheapest drop-in. |
 | **Live mic transcription** | 🔴 absent | Buzz (live), MacWhisper (recording), Vibe | L | Whisper-Streaming's LocalAgreement-n is the proven pattern. Unlocks dictation use case. |
 | **System-wide dictation hotkey** | 🔴 absent | Superwhisper, Wispr Flow, MacWhisper, Handy, VoiceTypr | XL | Out-of-process hotkey + active-window-aware text insertion. The fastest-growing category in 2025/2026. |
@@ -64,10 +64,10 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **SRT / VTT / TSV / TXT / LRC / JSON** | 🟢 6 formats | Buzz 3, MacWhisper 5, Vibe 4 | — | **We're ahead here.** |
-| **DOCX export** | 🔴 absent | MacWhisper (DOCX), Buzz (DOCX), Otter | S | `python-docx` adds ~1 MB to the bundle. Important for journalists / interview workflows. |
-| **PDF export** | 🔴 absent | MacWhisper, Descript | S | `reportlab` or `weasyprint`; same audience as DOCX. |
-| **Markdown export** | 🔴 absent | Descript | XS | One writer module, trivial. |
+| **SRT / VTT / TSV / TXT / LRC / JSON / MD / DOCX / PDF / oTranscribe / ELAN / InqScribe / Express Scribe** | 🟢 13 formats (`core/writers/`) | Buzz 3, MacWhisper 5, Vibe 4 | — | **We're well ahead here** — updated 2026-07-04; DOCX/PDF/MD shipped since (at least) v1.0.3, oTranscribe EMIT added same day as this correction. |
+| **DOCX export** | 🟢 shipped (`core/writers/docx_writer.py`) | MacWhisper (DOCX), Buzz (DOCX), Otter | — | Was marked absent; confirmed implemented + tested (`tests/core/test_writers.py`). |
+| **PDF export** | 🟢 shipped (`core/writers/pdf_writer.py`, `reportlab`) | MacWhisper, Descript | — | Was marked absent; confirmed implemented + tested. |
+| **Markdown export** | 🟢 shipped (`core/writers/md.py`) | Descript | — | Was marked absent; confirmed implemented + tested. |
 | **SCC / EBU-STL** (broadcast caption formats) | 🔴 absent | Descript, EZTitles | M | Niche but high-value for TV/news clients. |
 | **Burn subtitles into the video** | 🔴 absent | MacWhisper, Descript, CapCut | M | `ffmpeg -vf subtitles=…` — we already ship ffmpeg. |
 | **Per-format batch export from one transcript** | 🔴 absent | MacWhisper ("export TXT + SRT + DOCX in one click") | S | Currently the config picks one set; per-export-action override would be friendlier. |
@@ -87,7 +87,7 @@
 | **Right-click "Transcribe this" in Explorer / Finder** | 🔴 absent | MacWhisper (Services menu), VLC + plugin | M | Requires an installer post-action to register a shell extension. |
 | **CLI mode** (`WhisperProject.exe transcribe a.mp4`) | 🔴 absent — only `--worker` flag exists | Buzz (`buzz-captions transcribe …`) | S | Power users want scripting. |
 | **Per-project / per-folder settings** | 🔴 single global config | MacWhisper (per-folder rules) | M | "Folder X always uses language=fa and word_timestamps=true." |
-| **Recent files menu** | 🔴 absent | every comparable app | XS | We already have a SQLite history; surface its last N rows in the File menu. |
+| **Recent files menu** | 🟢 shipped (File → Recent files, `app/app.py`) | every comparable app | — | Was marked absent; confirmed implemented. |
 
 ---
 
@@ -95,7 +95,7 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **System tray icon + minimise-to-tray** | 🔴 absent | Superwhisper, Wispr Flow, Handy, VoiceTypr | S | Especially valuable once we add live-dictation. |
+| **System tray icon + minimise-to-tray** | 🟢 shipped (`app/widgets/tray.py`) | Superwhisper, Wispr Flow, Handy, VoiceTypr | — | Was marked absent; confirmed implemented + tested (`tests/core/test_tray.py`). |
 | **Windows toast notification on completion** | 🟡 system bell only (after the v0.7.0 UX refresh) | MacWhisper (NSUserNotification), Buzz | S | `win10toast`-style native toast on top of the bell would survive a minimised window. |
 | **Internationalised UI** | 🟢 English-only **by design** | MacWhisper (multiple), Buzz | — | Scope choice: this app targets English-speaking users. Multi-language UI is explicitly out of scope. The SMTV scraper accepts non-English URLs but the UI labels stay English. |
 | **RTL layout support** | 🟢 not applicable (English-only) | Most modern Qt/Electron apps | — | Out of scope by the same scope choice above. |
@@ -103,7 +103,7 @@
 | **High-DPI scaling** | 🟡 implicit Tk default | MacWhisper, modern Qt apps | S | Tk needs `tk scaling` set explicitly for 150%+ Windows displays. |
 | **Resizable / dockable result panel** | 🟡 fixed in our Last Result card | Descript, Buzz | S | Power users want to make the transcript pane huge. |
 | **Window state persistence** (remember size / position) | 🔴 absent | every modern desktop app | XS | Save/restore `geometry()`. |
-| **Keyboard shortcuts** (Ctrl+O Browse, Ctrl+Enter Transcribe, Esc cancel) | 🔴 absent | Buzz, MacWhisper | XS | Tk bindings, low cost. |
+| **Keyboard shortcuts** (Ctrl+O Browse, Ctrl+Enter Transcribe, Esc cancel, Ctrl+Q exit) | 🟢 shipped (README.md) | Buzz, MacWhisper | — | Was marked absent; confirmed implemented. |
 | **Accessibility / screen reader** | 🔴 untested | Apple-first apps inherit it | L | Tk accessibility on Windows is weak; UIA is partial. |
 
 ---
@@ -119,8 +119,8 @@
 | **Linux / Flatpak / AppImage** | 🔴 Windows-only | Buzz (.deb, AppImage), Vibe (.deb, AppImage) | L | We chose Windows-only deliberately; revisit if there's demand. |
 | **Reproducible builds** | 🔴 not enforced | Tor Project, Reproducible Builds Project | M | A Method-A user who hash-compares the binary to ours would not get a match because of build-time inputs. |
 | **Crash reporting** | 🟡 Sentry available but commented out | Buzz uses sentry-sdk | XS | Just uncomment + flip a config; need to add a UI consent toggle. |
-| **Opt-in usage telemetry** | 🔴 absent | Vibe (anonymous metrics, off by default), MacWhisper | S | One POST per launch with `{os, version, anonymised_id}`. |
-| **GitHub Actions CI** | 🔴 no CI workflows in `.github/` | Buzz (matrix Win/Mac/Linux), Vibe | M | Our 164 unit tests + smoke suite never run against PR diffs from contributors. |
+| **Opt-in usage telemetry** | 🟢 shipped (`core/stats.py`, `telemetry_opt_in` config key, off by default) | Vibe (anonymous metrics, off by default), MacWhisper | — | Was marked absent; confirmed implemented (host/hardware/app-version fields added v1.5.0). |
+| **GitHub Actions CI** | 🟢 shipped — `.github/workflows/ci.yml` (Windows + Ubuntu, Python 3.11/3.12) gates every push/PR, plus 7 macOS workflows | Buzz (matrix Win/Mac/Linux), Vibe | — | Was marked absent; confirmed implemented and green. |
 | **Release-notes RSS / API integration** | 🔴 manual `gh release create` | Modern desktop tooling | S | A `latest.json` we can publish so future auto-update can pick it up. |
 
 ---
@@ -129,12 +129,12 @@
 
 | Feature | Us | Peers | Effort | Notes |
 |---|---|---|---|---|
-| **Contributor docs** (`CONTRIBUTING.md`) | 🔴 absent | Buzz (full), Vibe (full) | XS | New contributors don't know which tests to run or how to build. |
-| **`CODE_OF_CONDUCT.md`** | 🔴 absent | Buzz, Vibe (CC) | XS | Single-page boilerplate; signals a healthy project. |
-| **Issue templates** | 🔴 absent (raw "open an issue") | Buzz, Vibe | XS | Bug / feature / question templates reduce triage burden. |
-| **PR template** | 🔴 absent | Buzz, Vibe | XS | Reminder for "did you run tests, did you update docs". |
-| **Discussions enabled** | 🟡 (status unknown — not used) | Buzz (active), Vibe (active) | XS | Better than Issues for "how do I…" questions. |
-| **A test suite that runs in CI** | 🟡 164 tests pass locally but no CI gate | Buzz (GH Actions), Vibe (CI matrix) | M | Local-only tests can drift unnoticed between releases. |
+| **Contributor docs** (`CONTRIBUTING.md`) | 🟢 shipped (2026-07-04) | Buzz (full), Vibe (full) | — | Was marked absent; added. |
+| **`CODE_OF_CONDUCT.md`** | 🟢 shipped (`.github/CODE_OF_CONDUCT.md`) | Buzz, Vibe (CC) | — | Was marked absent; confirmed already present. |
+| **Issue templates** | 🟢 shipped (`.github/ISSUE_TEMPLATE/bug_report.yml`, `feature_request.yml`) | Buzz, Vibe | — | Was marked absent; confirmed already present. |
+| **PR template** | 🟢 shipped (`.github/pull_request_template.md`) | Buzz, Vibe | — | Was marked absent; confirmed already present. |
+| **Discussions enabled** | 🟢 enabled (2026-07-04) | Buzz (active), Vibe (active) | — | Was "status unknown"; now on. |
+| **A test suite that runs in CI** | 🟢 1700+ tests, gated on every push/PR (Windows + Ubuntu) | Buzz (GH Actions), Vibe (CI matrix) | — | Was "no CI gate"; confirmed CI-gated (see GitHub Actions row above). |
 | **Coverage report published** | 🔴 absent (we generate `.coverage` but never publish) | Buzz | XS | Codecov / Coveralls badge in the README. |
 | **Versioned API / SDK docs** | 🔴 absent (no public Python API beyond running the app) | MacWhisper (HTTP API in Pro), Buzz (CLI) | M | Anyone wanting to embed our transcription as a library has to copy from `core/`. |
 | **Sample data / demo media** in the repo | 🔴 absent (smoke tests need a private E: drive video) | Buzz (small sample), Vibe | XS | A 10 s public-domain clip checked into `tests/fixtures/` would let outside contributors run the smoke suite. |
