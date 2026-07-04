@@ -30,6 +30,26 @@ Atomic-commit hygiene:
   subject ≤ 70 chars, blank line, body explaining the *why*.
 - Don't squash commits across logical groups.
 
+## Changelog entries — keep them short (2026-07-04, owner request)
+
+`docs/CHANGELOG.md` bullets must stay skimmable: 1–3 sentences —
+what broke/changed + the fix, not a root-cause narrative. The full
+investigation (repro steps, why it happened, alternatives considered)
+belongs in the commit message and/or `docs/SESSION_HANDOFF_NEXT.md`,
+never in the changelog itself.
+
+## Release assets must track every bug fix (2026-07-04, owner request)
+
+Any bug fix that touches shipped code is not actually "done" until the
+affected release assets are rebuilt and re-uploaded — a fix sitting
+only in source control doesn't help a user running the installed app.
+Default: rebuild + `gh release upload vX.Y.Z ... --clobber` the
+Windows Setup-Standard + Portable at minimum (see `docs/BUILD.md`
+"Rebuild without bumping the version"); also rebuild macOS
+(`docs/BUILD.md` "Step 4b") whenever the fix touches non-Windows-
+specific code (i.e. almost always, since `core/` and `app/` are
+cross-platform).
+
 When a build is about to start (PyInstaller / Inno Setup):
 
 - Make sure every modified file is either committed or
