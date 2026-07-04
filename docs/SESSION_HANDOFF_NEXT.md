@@ -5,77 +5,76 @@ this repo. Read this file before anything else.
 
 ---
 
-## ⭐ STOPPING MID-TASK (2026-07-04, later same day) — Pro-plan 5h cap reached
+## ⭐ EVERYTHING RESOLVED (2026-07-04, later same day, continued after the 5h-cap stop) — nothing pending
 
-Owner said we hit the 5-hour usage cap boundary and asked me to stop.
-Everything below is genuinely safe (git status is clean, nothing
-uncommitted) — this is a "pick up where I left off" note, not damage
-control.
+The prior "STOPPING MID-TASK" note (below, kept for history — see the
+git history of this file if you need the exact prose) listed 3 loose
+ends. All 3 are now done, committed, and pushed to `master`:
 
-**Done and pushed this session, after the "otr writer" entry below:**
-repo tidiness (docs/ reorganized into docs/history/ +
-docs/release-notes/, README.md destaled), GitHub discoverability
-(description + 14 topics, Discussions enabled), CONTRIBUTING.md +
-4 seeded `good first issue` starter issues (#2-#5 on GitHub).
+- **`docs/GAPS_AGAINST_PEERS_2026.md` re-audit fully applied.** Both
+  subagents' findings (`docs/history/GAPS_AUDIT_2026-07-04_findings.md`)
+  are now reflected in the doc: the 2 flagged-uncertain rows were
+  spot-checked directly (per-machine/per-user install — confirmed both
+  `.iss` files hardcode `PrivilegesRequired=admin`, no per-user mode
+  exists; cold start — measured for real against `embed_build/`:
+  ~1.9 s warm, ~4.7 s cold disk cache), then every remaining row across
+  sections A/B/C/D/E/F/H got its correction applied, Section J's "top 5
+  gaps" was rewritten (the real remaining gaps are now: system-wide
+  dictation hotkey, true streaming live mic, word-level click-to-jump +
+  re-export editing, code-signing/notarisation, translation exposure),
+  and the stale "164 tests" became 1701.
+- **`stats_url` hyphen/underscore mismatch fixed** (closed GitHub #2).
+  Confirmed live via a direct HTTP check which filename is real (the
+  underscore one, 200; the hyphen one, 404). Fixed `configuration.json`
+  to match `core/config.py`'s `DEFAULT_CONFIG`, added a regression test
+  (`tests/core/test_config.py::test_repo_configuration_json_agrees_with_default_stats_url`).
+- **3 stale untracked QA screenshots deleted** (`online_startup.png` +
+  2 others, leftover from v1.3.8-era testing, unreferenced anywhere).
 
-**IN PROGRESS, NOT YET APPLIED — pick this up first:**
-A multi-pass audit of `docs/GAPS_AGAINST_PEERS_2026.md` found it is
-*extremely* stale (most "we don't have X" claims are wrong). Batch 1
-(10 rows: diarization, DOCX/PDF/MD export, recent-files, tray,
-keyboard shortcuts, CI, telemetry, + the community-health section)
-is already fixed and pushed. Two independent background subagents
-then re-checked the rest of the document:
+**Also done this session, beyond the original 3 items** (owner asked to
+finish everything, including rebuilding both platforms if stale):
 
-- **Agent A** (sections A/B/D) already reported back — thorough,
-  well-evidenced (file:line citations), one claim spot-checked
-  directly (`python gui.py --help` confirmed the `transcribe`/`serve`
-  CLI subcommands). Verdict: 22 of 30 rows in its scope are stale —
-  alignment, model picker, hardware wizard, all 5 ASR backends,
-  Demucs separation, crash auto-resume, the FULL in-app transcript
-  viewer (VLC playback, karaoke highlight, find-and-replace, filler
-  strip, word-confidence colour, speaker rename), drag-and-drop,
-  multi-select, watched folders, YouTube-on-Transcribe-tab, right-
-  click Explorer integration, CLI mode, and per-folder
-  `.whisperproject.json` overrides are ALL actually shipped and were
-  wrongly marked absent/partial. 4 rows are shipped-but-genuinely-
-  partial (live mic is record-then-transcribe not true streaming;
-  hotwords is one global field not a glossary; click-to-seek is
-  segment-level not word-level; a full FTS5/semantic cross-history
-  search engine exists in `core/search.py` but has ZERO UI entry
-  point). 4 rows are confirmed still genuinely absent (system-wide
-  dictation hotkey, translation task, PII redaction, sound-event
-  tags). None of this is applied to the file yet — the full findings
-  are in that agent's completion message in this conversation's
-  history (agentId `af9a1c4d678d280e0` if the harness can still
-  resume it, otherwise re-derive by reading its report in the
-  transcript or just re-running the same audit).
-- **Agent B** (sections E/F/H/I + the C filename-templating rows)
-  ALSO reported back (after I'd already written the paragraph above
-  and stopped) — equally thorough, cross-verified live via `gh run
-  list`/`gh release view`, not just static code reading. Both agents'
-  full findings (every row, verdict, evidence, suggested wording) are
-  saved verbatim — nothing lost — at:
-  `docs/history/GAPS_AUDIT_2026-07-04_findings.md`
+- **Windows installers verified already up to date** — no rebuild
+  needed. Local `dist_installer/` hashes matched the live `v1.5.0`
+  GitHub release assets exactly, and the local build timestamp
+  (10:54 local) postdates every code commit that session (otr writer,
+  Convert-picker UX, macOS script fix) and predates only doc-only
+  commits. The "rebuild + update release assets in place" instruction
+  from the entry below this one had, in fact, already been completed
+  before the 5h-cap stop.
+- **macOS build produced for the first time since v1.3.9.** The last
+  full `macos-app.yml` run (2026-06-16) had failed, and no macOS
+  artifact existed for v1.4.0 or v1.5.0. Dispatched it fresh
+  (`gh workflow run macos-app.yml --ref master`, run id
+  `28697230557`) — both matrix legs (arm64, x86_64) succeeded this
+  time. Downloaded the two `.dmg`s and uploaded them to the existing
+  `v1.5.0` release (`gh release upload v1.5.0 ... --clobber`), same
+  version, no new tag. `v1.5.0` now ships 4 assets: Setup-Standard.exe,
+  Portable.zip, macOS-arm64.dmg, macOS-x86_64.dmg. Recipe documented in
+  `docs/BUILD.md` ("Step 4b") + `docs/RELEASE_PROCESS.md` so it doesn't
+  need re-deriving next time.
+- **Verification (REAL):** pyright `app/ core/` 0/0/0 (re-confirmed);
+  full hermetic suite green (re-confirmed twice — once via the new
+  `test_repo_configuration_json_agrees_with_default_stats_url` test
+  specifically, once via a full `pytest tests/ --ignore=tests/smoke`
+  run). `docs/CHANGELOG.md` `[1.5.0]` updated with the stats_url fix,
+  the otr-writer/Convert-picker entries, and the new macOS assets.
 
-**Next steps, in order** (all detailed in that findings file's own
-"Not yet done" section): spot-check the 2 flagged-uncertain items
-(per-machine/per-user install claim reversal, and the cold-start
-number for the actually-shipped embed launch path) → apply both
-agents' confirmed corrections to `docs/GAPS_AGAINST_PEERS_2026.md`
-(🟢 for fully shipped, corrected 🟡 nuance for partial, leave
-confirmed-absent 🔴 rows alone — roughly 40+ rows total across both
-agents, the large majority stale) → rewrite Section J's "top 5 gaps"
-verdict (it's currently very wrong now that diarization/DOCX-MD/CI/
-the whole in-app viewer/hardware wizard/5 ASR backends/etc. are done
-— the real remaining big gap is mostly the system-wide dictation
-hotkey) → fix the "164 tests" mention in Section J (actual: 1701
-collected, full suite green) → grep for any other stale test-count
-mentions → commit and push.
+**Known, deliberately NOT touched (pre-existing, out of this session's
+scope):** `docs/MANUAL_STEPS.md` and `docs/architecture-diagrams.md`
+are both artifacts from the ~v0.5.0 era (3-tab app, 137 tests) and
+read as very stale against the current v1.5.0 reality. Discovered
+while grepping for stale test counts; a full rewrite is a separate,
+larger undertaking than this session's scope (finishing last session's
+specific leftover items) — flagging for a future session rather than
+scope-creeping into it now. Also NOT touched, on purpose: GitHub issues
+#3-#5, seeded intentionally as `good first issue` bait for outside
+contributors, not leftover work.
 
-Also still open, mentioned but not started: `configuration.json`'s
-`stats_url` hyphen/underscore mismatch (now seeded as GitHub issue #2
-for a contributor, but nobody's picked it up — fair game to just fix
-directly too).
+**Repo state right now:** `git status` clean, `master` pushed, no
+version bump (still 1.5.0 everywhere), `v1.5.0` GitHub release has all
+4 platform assets current with `HEAD`. Nothing pending for the next
+session to pick up — it can start fresh on whatever's next.
 
 ---
 
