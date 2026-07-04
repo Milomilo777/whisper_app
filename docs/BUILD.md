@@ -223,6 +223,29 @@ asset is unaffected (their file doesn't change under them), but
 edit vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md` if the release
 notes body should also mention what changed in this refresh.
 
+**Step 4b — macOS, from a Windows machine (can't build a `.dmg` locally):**
+there is no local macOS build step here; dispatch the CI workflow and
+pull its artifacts instead.
+
+```cmd
+gh workflow run macos-app.yml --ref master
+:: poll or watch until both matrix legs (arm64, x86_64) finish:
+gh run list --workflow=macos-app.yml -L 1
+gh run watch <run-id> --exit-status
+
+gh run download <run-id> --dir some_temp_dir
+:: each matrix leg's artifact folder holds "Whisper Project-<arch>.dmg";
+:: copy/rename them to match the release naming convention, then:
+gh release upload vX.Y.Z ^
+    dist_installer\WhisperProject-vX.Y.Z-macOS-arm64.dmg ^
+    dist_installer\WhisperProject-vX.Y.Z-macOS-x86_64.dmg ^
+    --clobber
+```
+
+`macos-app.yml` is `workflow_dispatch`-only (see the file's own header
+comment) so it never fires by accident on a normal push. The repo is
+public, so this no longer burns paid private-repo macOS minutes.
+
 ## Sanity check after any build
 
 ```cmd

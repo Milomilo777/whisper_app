@@ -57,6 +57,13 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   every stats row read `word_count: 0` regardless of how much was
   actually transcribed. It now falls back to re-parsing whichever other
   produced transcript `core.convert` can read back into segments.
+- **`stats_url` hyphen/underscore mismatch** — the published
+  `configuration.json` (the online-config master copy) pointed at
+  `transcription-stats.php` (404) while `core/config.py`'s
+  `DEFAULT_CONFIG` pointed at the real `transcription_stats.php` (200).
+  Anyone whose effective config resolved the online copy would have had
+  opt-in telemetry silently go nowhere. Fixed to agree; added a
+  regression test so the two can't drift apart unnoticed again.
 
 ### Changed
 
@@ -65,6 +72,18 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   update-checker, `pyproject.toml` project URLs, the Homebrew formula,
   and the clone instructions in the READMEs / install docs now point at
   the new repo name.
+- **`.otr` (oTranscribe) added to File → Convert transcript** — it was
+  already importable there but never offered as an output; a new
+  `core.writers.otr` closes the gap (also shows up as a transcription
+  output checkbox in Advanced settings, same registry).
+- **Convert-format picker** now shows `name (.ext)` for every target and
+  lists the four common formats (srt/vtt/txt/json) first, instead of
+  bare alphabetically-sorted internal registry keys.
+- **macOS builds added to this release** — `WhisperProject-v1.5.0-macOS-
+  arm64.dmg` / `-x86_64.dmg`, built via `macos-app.yml` on real Apple
+  Silicon + Intel runners (the underlying `compileall-whisper-mac.sh`
+  duplicate-invocation bug is fixed). Same version, no separate macOS
+  release notes — Windows and macOS ship the same v1.5.0 feature set.
 
 ## [1.4.0] — 2026-06-22
 

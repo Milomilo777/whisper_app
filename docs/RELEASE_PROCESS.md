@@ -27,6 +27,11 @@ without bumping the version". Short version:
    exact commands).
 4. `gh release upload vX.Y.Z <the two files> --clobber` — updates the
    EXISTING release's assets in place, no new tag.
+4b. macOS (optional, if the source changes affect it too): dispatch
+    `macos-app.yml` (`gh workflow run macos-app.yml --ref master`),
+    watch both matrix legs finish, `gh run download` the two `.dmg`s,
+    then `gh release upload` them alongside the Windows assets. Full
+    commands: `docs/BUILD.md` → "Step 4b".
 5. Update `docs/CHANGELOG.md` (add bullets under the existing version
    heading, don't create a new one) and `docs/SESSION_HANDOFF_NEXT.md`.
 
