@@ -5,6 +5,54 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ REPO-WIDE SWEEP (2026-07-04, same day, after the "everything resolved" entry below) — nothing pending
+
+Owner asked, broadly, whether anything was left to do in the whole
+repo (not just the handoff list) and to just fix it directly. Did a
+fresh sweep: `git status` (clean), CI health (`gh run list` — all
+green), open issues (only the 3 deliberately-seeded good-first-issues
+existed beyond what's below), and a `TODO|FIXME|XXX|HACK` grep across
+`app/`/`core/` (nothing). Two of the three were genuine gaps, not just
+contributor bait, so fixed them directly:
+
+- **Issue #3** (no test file for `app/services/transcription_service.py`)
+  — added `tests/app/test_transcription_service.py` (11 tests) covering
+  `_derive_transcript_stats` across every fallback path, including the
+  actual SRT-only scenario that shipped the word_count=0 bug, and
+  `_post_usage_stats`'s payload shape + a real no-op proof when
+  telemetry is off. Proved the key test isn't tautological by
+  simulating the pre-fix code path (forced the fallback parse to fail)
+  and confirming it reproduces the exact shipped bug. Closed by commit
+  message (`cc5e710`).
+- **Issue #5** (`docs/COMPETITIVE_ANALYSIS_2026.md` re-verification) —
+  same evidence method as the `GAPS_AGAINST_PEERS_2026.md` fix, scoped
+  to just the document's claims about OUR OWN capabilities (Section 1's
+  15-row table + the Section 3 backend recommendation; external-tool
+  descriptions untouched). Result: 5/15 fully shipped since May
+  (forced alignment, diarization, the pluggable-backend seam — realized
+  almost exactly as the doc sketched, down to the file layout), 6
+  partial, 4 still absent. Best find: `core/llm.py` (local Qwen2.5-1.5B
+  summarize/action-items/Q&A/translate) and `core/chapters.py`
+  (auto-chapter detection) are BOTH fully built and wired into the
+  transcription pipeline, but neither has any UI a user could find —
+  same "built the engine, forgot the doorway" shape as `core/search.py`
+  from the earlier GAPS audit. Closed by commit message (`2f52b4a`).
+- **Issue #4** (coverage badge) — only partially closeable from here.
+  Added the missing half of the CI wiring (a tokenless
+  `codecov/codecov-action@v5` upload step — `coverage.xml` was already
+  being generated, just never published) and the README badge
+  (`78fb8a1`). Left OPEN and un-closed on purpose: the badge will read
+  "unknown" until the repo is actually activated on codecov.io, which
+  probably needs the owner to sign in there once with their GitHub
+  account — an external-account action that shouldn't be taken on
+  someone's behalf without them being present for it.
+
+Verification: pyright `app/ core/` 0/0/0; full hermetic suite green
+(re-run after adding the new test file). All 3 commits pushed to
+`master`. `git status` clean.
+
+---
+
 ## ⭐ EVERYTHING RESOLVED (2026-07-04, later same day, continued after the 5h-cap stop) — nothing pending
 
 The prior "STOPPING MID-TASK" note (below, kept for history — see the
