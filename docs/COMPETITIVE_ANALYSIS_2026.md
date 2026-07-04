@@ -1,6 +1,11 @@
 # Competitive Analysis 2026 — Speech-to-Text Landscape
 
-**Status:** research snapshot, May 2026
+**Status:** research snapshot, May 2026. **Re-audited 2026-07-04** (see
+"Section 1 status update" below) — this is the ecosystem/external-tools
+survey, so only claims about **our own** capabilities needed
+re-checking; the external-tool descriptions (sections A/B) and Chinese-
+language research (section 2) are unaffected by anything we've shipped
+and are left as-is.
 **Audience:** maintainers of the `whisper_project_direct_download_v2` desktop app
 **Scope:** EN + Mandarin/CJK + FR + DE. Persian/Arabic explicitly out of scope.
 **Baseline:** `faster-whisper` (CTranslate2) + `yt-dlp` + Tkinter/Sun Valley, Session 5 feature set.
@@ -66,25 +71,43 @@
 
 ## 1. Top 15 features to consider, ranked by impact for EN/CJK/FR/DE
 
-| # | Feature | Inspiration | Why it matters | Effort |
-|---|---------|-------------|----------------|--------|
-| 1 | **Chinese punctuation post-processor** (CT-Transformer/`ct-punc` or fine-tuned model) | FunASR, CapsWriter | Whisper under-punctuates Mandarin badly; without this, Chinese SRTs are unreadable walls of text. The single highest-leverage CJK fix. | M |
-| 2 | **WhisperX-style forced alignment** for ±50 ms word timestamps | WhisperX | Current word timestamps drift; this is the prerequisite for click-to-jump editor and accurate karaoke-style highlighting. | M |
-| 3 | **Speaker diarization** (`pyannote.audio` 3.x) with global rename | WhisperX, MacWhisper 12, Descript | "Who said what" is the #1 user-visible gap. Global rename lets one edit propagate. | L |
-| 4 | **Initial-prompt presets per language** (esp. zh-Hans/zh-Hant separators, FR quotation conventions, DE compound-hint) | Whisper community lore | Fixes simplified-vs-traditional drift and underpunctuation without retraining. Trivial to ship, large UX win. | XS |
-| 5 | **Pluggable backend abstraction** (faster-whisper today, add SenseVoice / Parakeet later) | NVIDIA NeMo, FunASR | We will be stuck on one model otherwise. Build the seam now before features couple too tight. | M |
-| 6 | **SenseVoice-Small as second backend** for Mandarin/Cantonese/JP/KO | FunAudioLLM | 15x faster than whisper-large, claimed 50% relative WER win on zh. Single biggest CJK accuracy lever. | L |
-| 7 | **Click-word → audio jump** in subtitle editor | Descript | The single feature that changes "transcript viewer" into "transcript editor." Requires #2. | M |
-| 8 | **Filler-word detection + bulk remove** (uh/um/啊/嗯/呃/euh/ähm) | Descript, Riverside, CapCut | Multilingual filler list per lang; one-click "remove all ums in this segment / file." | S |
-| 9 | **Custom hot-words / phrase biasing** | Deepgram, Azure, ElevenLabs, CapsWriter | Per-project glossary boosts proper-noun recall. Whisper supports via `initial_prompt`; we can wrap a UI on top. | S |
-| 10 | **CJK-aware line splitting** (max ~16 chars/line ZH, 9-12 CPS budget) | Netflix ZH style guide | Current 42-char default is wrong for ZH. Needs a width-aware splitter that counts Han glyphs as 2 cells. | S |
-| 11 | **Optional LLM post-processor** (summary, action items, chapter detection) | AssemblyAI LeMUR, Apple Intelligence, MacWhisper | Bring-your-own-key panel for local Ollama or cloud Claude/GPT. Decouples our ASR work from downstream NLP. | M |
-| 12 | **Streaming / live-mic mode** with LocalAgreement-n | Whisper-Streaming, WhisperLive | Unlocks dictation use case. ~3.3s latency is acceptable. | L |
-| 13 | **Hot-key dictation overlay** | CapsWriter, MacWhisper, Wispr Flow | Hold-to-talk system tray app that drops text into focused window. Big productivity lever for power users. | L |
-| 14 | **Sound-event tagging** (music/laughter/applause as `[Music]`-style cues) | ElevenLabs Scribe v2 | Required for SDH (subtitles for the deaf and hard-of-hearing). SenseVoice already emits AED tags we can lean on. | M |
-| 15 | **PII / entity timestamps + redaction** | ElevenLabs Scribe v2, AssemblyAI | "Bleep out card numbers" feature; small but punches above its weight for healthcare/legal users. | M |
+| # | Feature | Inspiration | Why it matters | Effort | Status (2026-07-04) |
+|---|---------|-------------|----------------|--------|----------------------|
+| 1 | **Chinese punctuation post-processor** (CT-Transformer/`ct-punc` or fine-tuned model) | FunASR, CapsWriter | Whisper under-punctuates Mandarin badly; without this, Chinese SRTs are unreadable walls of text. The single highest-leverage CJK fix. | M | 🔴 Not built — no punctuation-restoration model/postprocessor in `core/`. |
+| 2 | **WhisperX-style forced alignment** for ±50 ms word timestamps | WhisperX | Current word timestamps drift; this is the prerequisite for click-to-jump editor and accurate karaoke-style highlighting. | M | 🟢 Shipped — `core/alignment.py` (stable-ts DTW refinement to ±50ms), opt-in via the Advanced-dialog "Word alignment" combobox, off by default, tested. |
+| 3 | **Speaker diarization** (`pyannote.audio` 3.x) with global rename | WhisperX, MacWhisper 12, Descript | "Who said what" is the #1 user-visible gap. Global rename lets one edit propagate. | L | 🟢 Shipped — `core/diarization.py` (sherpa-onnx, no PyTorch), fully offline. Rename propagates everywhere within the open transcript (no cross-transcript speaker identity to rename against). |
+| 4 | **Initial-prompt presets per language** (esp. zh-Hans/zh-Hant separators, FR quotation conventions, DE compound-hint) | Whisper community lore | Fixes simplified-vs-traditional drift and underpunctuation without retraining. Trivial to ship, large UX win. | XS | 🟡 Partial — `initial_prompt` is wired through as a single global user-supplied field (same mechanism as hotwords), not automatic per-language presets. |
+| 5 | **Pluggable backend abstraction** (faster-whisper today, add SenseVoice / Parakeet later) | NVIDIA NeMo, FunASR | We will be stuck on one model otherwise. Build the seam now before features couple too tight. | M | 🟢 Shipped — `core/backends/base.py` `Backend` ABC, exactly the sketched layout in Section 3 below, now with 5 concrete backends. |
+| 6 | **SenseVoice-Small as second backend** for Mandarin/Cantonese/JP/KO | FunAudioLLM | 15x faster than whisper-large, claimed 50% relative WER win on zh. Single biggest CJK accuracy lever. | L | 🔴 Not built as such — the seam (#5) was used for whisper.cpp, Gemini, Google Cloud STT, and NVIDIA Parakeet instead. The CJK-specific accuracy lever this row calls for is still open. |
+| 7 | **Click-word → audio jump** in subtitle editor | Descript | The single feature that changes "transcript viewer" into "transcript editor." Requires #2. | M | 🟡 Partial — click-to-seek is shipped in `app/dialogs/transcript_viewer.py`, but at segment granularity, not per-word (the word label is a non-interactive display). |
+| 8 | **Filler-word detection + bulk remove** (uh/um/啊/嗯/呃/euh/ähm) | Descript, Riverside, CapCut | Multilingual filler list per lang; one-click "remove all ums in this segment / file." | S | 🟡 Partial — shipped (`_strip_fillers` in the transcript viewer), but the word list (`_FILLER_WORDS`) is English-only (uh/um/uhm/er/erm/eh/ah/mm/mmm/hm) — no FR/DE/ZH fillers as this row specifically asked for. |
+| 9 | **Custom hot-words / phrase biasing** | Deepgram, Azure, ElevenLabs, CapsWriter | Per-project glossary boosts proper-noun recall. Whisper supports via `initial_prompt`; we can wrap a UI on top. | S | 🟡 Partial — a "Hotwords" field exists in the Advanced dialog, but it's one global comma-separated field, not a per-project glossary manager. |
+| 10 | **CJK-aware line splitting** (max ~16 chars/line ZH, 9-12 CPS budget) | Netflix ZH style guide | Current 42-char default is wrong for ZH. Needs a width-aware splitter that counts Han glyphs as 2 cells. | S | 🔴 Not built — no CJK-width-aware line splitter found anywhere in `core/`. |
+| 11 | **Optional LLM post-processor** (summary, action items, chapter detection) | AssemblyAI LeMUR, Apple Intelligence, MacWhisper | Bring-your-own-key panel for local Ollama or cloud Claude/GPT. Decouples our ASR work from downstream NLP. | M | 🟡 Backend shipped, UI missing — `core/llm.py` (download-on-first-use local Qwen2.5-1.5B via llama-cpp-python) fully implements `summarise`/`action_items`/`ask`/`translate`, but the ONLY UI hook is the Advanced-dialog "Enable local LLM" download button — no button/panel anywhere actually invokes summarise/action-items/ask. Chapter detection (`core/chapters.py`) is a separate, fully-wired feature: it genuinely runs during transcription and writes a tested `<base>.chapters.json` sidecar, but per its own docstring the transcript viewer doesn't read it yet ("future work") — so chapters are generated but never navigable in the app. |
+| 12 | **Streaming / live-mic mode** with LocalAgreement-n | Whisper-Streaming, WhisperLive | Unlocks dictation use case. ~3.3s latency is acceptable. | L | 🟡 Partial — the "Live" tab records mic/system-audio (`core/recorder.py`) to WAV then runs the normal transcribe pipeline (record-then-transcribe); true continuous streaming (LocalAgreement-n) still not built. |
+| 13 | **Hot-key dictation overlay** | CapsWriter, MacWhisper, Wispr Flow | Hold-to-talk system tray app that drops text into focused window. Big productivity lever for power users. | L | 🔴 Not built — no hotkey/keyboard-hook code anywhere. |
+| 14 | **Sound-event tagging** (music/laughter/applause as `[Music]`-style cues) | ElevenLabs Scribe v2 | Required for SDH (subtitles for the deaf and hard-of-hearing). SenseVoice already emits AED tags we can lean on. | M | 🔴 Not built — no AED/sound-event-tag code anywhere. |
+| 15 | **PII / entity timestamps + redaction** | ElevenLabs Scribe v2, AssemblyAI | "Bleep out card numbers" feature; small but punches above its weight for healthcare/legal users. | M | 🔴 Not built — no redaction/PII/entity code anywhere. |
 
 XS ≤ 1 day · S ≤ 3 days · M ≤ 1-2 weeks · L 2-4 weeks · XL > 4 weeks.
+
+### Section 1 status update (2026-07-04)
+
+Re-checked every row above against the current codebase (file:line
+evidence in the Status column) — the same method used to fix
+`docs/GAPS_AGAINST_PEERS_2026.md` the same day. **5 of 15 fully
+shipped, 6 partial, 4 still not built.** The three biggest surprises
+since May: forced alignment (#2), diarization (#3), and the pluggable
+backend seam (#5) all landed — exactly as this document originally
+recommended, in #5's case down to the literal file layout. The most
+interesting *partial* is #11: a complete local-LLM post-processing
+engine (summarize / action items / Q&A / translate) and a fully-wired
+auto-chapter pipeline both exist in `core/`, tested and functional, but
+neither has a UI entry point a user could actually find — the exact
+same "built the engine, forgot the doorway" pattern the gap-analysis
+audit found in `core/search.py`'s cross-history search. The CJK-specific
+asks (#1, #6, #10) remain the least-served part of this document's
+original brief — none of the three shipped.
 
 ---
 
@@ -142,6 +165,15 @@ core/backends/
     parakeet.py       # new
 ```
 with a router that picks based on detected language + user preference + GPU presence. The existing `BatchedInferencePipeline` work and our SQLite history already speak a model-agnostic schema, so the cut should be tractable.
+
+> **2026-07-04:** this recommendation shipped, almost exactly as sketched —
+> `core/backends/base.py` defines a real `Backend` ABC, with
+> `faster_whisper_be.py`, `whisper_cpp.py`, `cloud_stt.py`,
+> `google_cloud_stt.py`, and `nvidia_asr.py` (Parakeet) as the five
+> concrete backends, selectable from the Transcribe-tab engine
+> combobox. The one gap: no `sensevoice.py` — the CJK-specific accuracy
+> lever this section leads with is still unaddressed (see row #6
+> above).
 
 ---
 
