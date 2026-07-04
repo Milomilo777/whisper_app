@@ -244,6 +244,7 @@ a = Analysis(
         'core.writers.json_writer',
         'core.writers.lrc',
         'core.writers.md',
+        'core.writers.otr',
         'core.writers.elan',
         'core.writers.inqscribe',
         'core.writers.express_scribe',

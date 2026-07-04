@@ -25,7 +25,7 @@ timestamps, so it cannot be parsed back into segments (``parse_to_segments``
 raises ``ConvertError`` for a ``.txt`` with no recognisable cues).
 
 EMIT (output) formats: any text writer in ``core.writers.WRITERS``
-(srt / vtt / tsv / txt / json / lrc / md / elan / inqscribe /
+(srt / vtt / tsv / txt / json / lrc / md / otr / elan / inqscribe /
 express_scribe), plus ``smtv_docx`` as a binary target (see
 ``CONVERT_TARGETS``). The other binary writers (docx / pdf) are still NOT
 offered here — they need extra context this generic converter cannot

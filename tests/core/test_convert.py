@@ -112,6 +112,26 @@ def test_convert_same_format_does_not_clobber_source(tmp_path):
     assert p.read_text(encoding="utf-8") == SRT_SAMPLE
 
 
+def test_otr_is_a_convert_target():
+    assert "otr" in convert.CONVERT_TARGETS
+
+
+@pytest.mark.parametrize("ext,content", [
+    ("srt", SRT_SAMPLE), ("vtt", VTT_SAMPLE),
+    ("tsv", TSV_SAMPLE), ("json", JSON_SAMPLE),
+])
+def test_convert_to_otr(tmp_path, ext, content):
+    p = tmp_path / f"sample.{ext}"
+    p.write_text(content, encoding="utf-8")
+    out = convert.convert_file(str(p), "otr")
+    assert out.endswith(".otr")
+    payload = json.loads(open(out, encoding="utf-8").read())
+    assert set(payload.keys()) == {"text", "media", "media-source", "media-time"}
+    assert "Hello world" in payload["text"]
+    # Re-parsing the emitted .otr recovers both segments.
+    assert len(convert.parse_to_segments(out)) == 2
+
+
 def test_explicit_out_path(tmp_path):
     p = tmp_path / "sample.json"
     p.write_text(JSON_SAMPLE, encoding="utf-8")

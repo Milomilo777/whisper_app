@@ -215,6 +215,7 @@ a = Analysis(
         'core.writers.json_writer',
         'core.writers.lrc',
         'core.writers.md',
+        'core.writers.otr',
         'core.writers.docx_writer',
         'core.writers.pdf_writer',
         'core.writers.smtv_docx_writer',

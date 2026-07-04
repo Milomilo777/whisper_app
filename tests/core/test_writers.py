@@ -16,6 +16,7 @@ from core.writers import (
     json_writer,
     lrc,
     md,
+    otr,
     srt,
     supported_formats,
     tsv,
@@ -162,6 +163,24 @@ def test_lrc_writer_no_title_when_path_empty(segments):
     assert not body.startswith("[ti:")
 
 
+def test_otr_writer_basic_shape(segments):
+    body = otr.write(segments, "/tmp/interview.mp3")
+    payload = json.loads(body)
+    assert set(payload.keys()) == {"text", "media", "media-source", "media-time"}
+    assert payload["text"].count('<span class="timestamp"') == len(segments)
+    assert "Hello world" in payload["text"]
+
+
+def test_otr_writer_uses_audio_file_name(segments):
+    body = otr.write(segments, "/tmp/interview.mp3")
+    assert json.loads(body)["media"] == "interview.mp3"
+
+
+def test_otr_writer_no_media_when_path_empty(segments):
+    body = otr.write(segments)
+    assert json.loads(body)["media"] == ""
+
+
 # --- registry -------------------------------------------------------------
 
 
@@ -183,7 +202,7 @@ def test_get_writer_raises_for_unknown_format():
 
 def test_supported_formats_includes_canonical_set():
     formats = supported_formats()
-    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "docx", "pdf"):
+    for required in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "otr", "docx", "pdf"):
         assert required in formats
 
 
@@ -345,7 +364,7 @@ def test_docx_writer_handles_empty_segments_gracefully():
 def test_is_binary_table():
     assert is_binary("docx") is True
     assert is_binary("DOCX") is True  # case-insensitive
-    for name in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md"):
+    for name in ("srt", "vtt", "tsv", "txt", "json", "lrc", "md", "otr"):
         assert is_binary(name) is False
 
 

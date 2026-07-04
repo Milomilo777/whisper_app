@@ -15,6 +15,7 @@ if str(_ROOT) not in sys.path:
 from core.integrations.otranscribe import (  # noqa: E402
     fmt_otr_time,
     otr_to_srt,
+    segments_to_otr,
     srt_to_otr,
     whisper_json_to_otr,
 )
@@ -147,6 +148,47 @@ def test_otr_to_srt_last_segment_end():
     start, end, _body = segs[0]
     assert abs(start - 10.0) < 0.001
     assert abs(end - 20.0) < 1.0
+
+
+def test_segments_to_otr_matches_writer_contract():
+    """This is the entry point ``core.writers.otr`` calls, so its output
+    must match the ``{start, end, text}`` writer contract used across
+    ``core.writers`` / ``core.convert``, not the (start, end, body)
+    tuples ``srt_to_otr``/``whisper_json_to_otr`` build internally."""
+    segs = [
+        {"start": 1.0, "end": 3.5, "text": "Hello world"},
+        {"start": 3.5, "end": 6.0, "text": "Second line"},
+    ]
+    out = segments_to_otr(segs, media_filename="interview-01.mp3")
+    payload = json.loads(out)
+    assert set(payload.keys()) == {"text", "media", "media-source", "media-time"}
+    assert payload["media"] == "interview-01.mp3"
+    assert payload["text"].count('<span class="timestamp"') == 2
+    assert "Hello world" in payload["text"]
+    assert "Second line" in payload["text"]
+
+
+def test_segments_to_otr_roundtrip():
+    segs = [
+        {"start": 1.0, "end": 3.5, "text": "Hello world"},
+        {"start": 3.5, "end": 6.0, "text": "Second line"},
+    ]
+    otr_string = segments_to_otr(segs, "audio.wav")
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=".otr", delete=False
+    ) as tmp:
+        tmp.write(otr_string)
+        otr_path = tmp.name
+    try:
+        srt_back = otr_to_srt(otr_path)
+    finally:
+        os.unlink(otr_path)
+    from core.integrations.otranscribe import _parse_srt as _ps  # noqa: E402
+
+    parsed = list(_ps(srt_back))
+    assert len(parsed) == 2
+    assert parsed[0][2] == "Hello world"
+    assert parsed[1][2] == "Second line"
 
 
 def test_media_field_basename_only():

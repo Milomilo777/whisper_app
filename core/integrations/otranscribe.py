@@ -1,11 +1,12 @@
 """oTranscribe (.otr) bidirectional file-format converter.
 
-Public API (exactly four names):
+Public API (exactly five names):
 
     fmt_otr_time(seconds) -> str          # display format M:SS or H:MM:SS
     srt_to_otr(srt_path, media_filename=...) -> str
     whisper_json_to_otr(json_path, media_filename=...) -> str
     otr_to_srt(otr_path) -> str
+    segments_to_otr(segments, media_filename=...) -> str
 
 Everything else in this module is private.
 
@@ -24,7 +25,13 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 
-__all__ = ["fmt_otr_time", "srt_to_otr", "whisper_json_to_otr", "otr_to_srt"]
+__all__ = [
+    "fmt_otr_time",
+    "srt_to_otr",
+    "whisper_json_to_otr",
+    "otr_to_srt",
+    "segments_to_otr",
+]
 
 NBSP = " "
 
@@ -157,6 +164,24 @@ def whisper_json_to_otr(json_path: str, media_filename: str = "") -> str:
         if body:
             segments.append((start, end, body))
     return _segments_to_otr_string(segments, media_filename)
+
+
+def segments_to_otr(segments, media_filename: str = "") -> str:
+    """Build the .otr JSON string from writer-shaped segments.
+
+    Accepts the same ``{start, end, text}`` dict shape every
+    ``core.writers`` text writer consumes (this is what lets
+    ``core.writers.otr`` — and so ``core.convert``'s generic
+    "convert to any format" picker — offer .otr as an EMIT target
+    alongside ``srt_to_otr``/``whisper_json_to_otr``'s existing
+    file-based entry points). Only ``start`` and ``text`` are read;
+    ``end`` has no separate representation in the .otr format itself.
+    """
+    triples = (
+        (seg["start"], seg.get("end", seg["start"]), seg.get("text", ""))
+        for seg in segments
+    )
+    return _segments_to_otr_string(triples, media_filename)
 
 
 class _OtrParser(HTMLParser):
