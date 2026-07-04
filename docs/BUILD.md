@@ -1,26 +1,49 @@
 # Build
 
-How to produce Windows binaries from source. v1.0.3 ships two
-shipped methods (Portable + Standard); a third (Compact) pipeline
-exists in this repo and still builds, but no Compact EXE is
-published — Portable + Standard cover every audience.
+How to produce Windows binaries from source.
 
-## TL;DR
+**Currently shipped (both from the same `embed_build\` tree):**
+Setup-Standard (installer) + Portable (zip of that same tree — NOT
+a PyInstaller onefile exe; that changed at v1.3.2, see CLAUDE.md
+"Style & scope"). The PyInstaller onefile (Method A below) and
+Compact/onedir (Method B) pipelines still exist and still build —
+their specs are kept in lock-step so they don't bit-rot — but
+neither is published.
+
+## TL;DR — the two shipped deliverables
+
+(replace `X.Y.Z` with the current `core.__version__` / `MyAppVersion`)
 
 ```cmd
-:: Method A — Portable single-file exe (~447 MB)
-pyinstaller --noconfirm --clean whisper_project_onefile.spec
-:: Output: dist\WhisperProject-v1.0.3-Portable.exe
-
-:: Method C — Standard installer with embeddable Python (~349 MB)
+:: 1. Build the embed tree (downloads Python, installs requirements.txt, copies app/core/bin)
 build_embed_installer.bat
+:: Output: embed_build\
+
+:: 2. Setup-Standard installer, from embed_build\
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
-:: Output: dist_installer\WhisperProject-v1.0.3-Setup-Standard.exe
+:: Output: dist_installer\WhisperProject-vX.Y.Z-Setup-Standard.exe
+
+:: 3. Portable zip — literally the same embed_build\ tree, zipped whole
+python -c "import shutil; shutil.make_archive(r'dist_installer\WhisperProject-vX.Y.Z-Portable', 'zip', r'embed_build')"
+:: Output: dist_installer\WhisperProject-vX.Y.Z-Portable.zip
+```
+
+See "Rebuild without bumping the version" below for the full,
+copy-pasteable recipe (including uploading to the existing GitHub
+release) used when re-shipping the SAME version with source-only
+changes.
+
+## Unshipped / optional pipelines
+
+```cmd
+:: Method A — Portable single-file exe (~447 MB; NOT the shipped "Portable" — unpublished)
+pyinstaller --noconfirm --clean whisper_project_onefile.spec
+:: Output: dist\WhisperProject-vX.Y.Z-Portable.exe
 
 :: Method B — Compact installer (~326 MB; unshipped, optional)
 pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.spec
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss
-:: Output: dist_installer\WhisperProject-v1.0.3-Setup-Compact.exe
+:: Output: dist_installer\WhisperProject-vX.Y.Z-Setup-Compact.exe
 ```
 
 ## Prerequisites
@@ -49,7 +72,7 @@ unpacks the bundle to `%TEMP%\_MEI<random>\` (~5 s on a typical
 machine) and runs the app from there. `core.paths.resource_base()`
 points to that temp dir at runtime.
 
-Output: `dist\WhisperProject-v1.0.3-Portable.exe` (~447 MB; the bundled
+Output: `dist\WhisperProject-vX.Y.Z-Portable.exe` (~447 MB; the bundled
 `stable_whisper` + transitive `torch` pushed the v0.7.0 ~190 MB up by
 the audit-2 polish push).
 
@@ -75,7 +98,7 @@ The installer uses LZMA2 ultra compression, packs the ~478 MB
 onedir tree to ~137 MB, ships per-user / per-machine shortcuts, and
 gives users a real Add/Remove Programs entry.
 
-Output: `dist_installer\WhisperProject-v1.0.3-Setup-Compact.exe`
+Output: `dist_installer\WhisperProject-vX.Y.Z-Setup-Compact.exe`
 (~137 MB).
 
 ## Method C — Standard installer with embeddable Python
@@ -110,13 +133,95 @@ Then wrap the tree in an Inno Setup installer:
 "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
 ```
 
-Output: `dist_installer\WhisperProject-v1.0.3-Setup-Standard.exe`
-(~153 MB).
+Output: `dist_installer\WhisperProject-vX.Y.Z-Setup-Standard.exe`
+(~150-400 MB depending on which optional heavy deps — torch/stable-ts
+— happen to be present; the batch script prunes them from
+`embed_build\`, see its "slim" step).
 
 Method C's shortcuts launch `pythonw.exe gui.py` rather than a
 frozen exe, so the entire Python source tree lives on disk after
 install — friendlier for debugging or local patching at the cost
 of a slightly larger installed footprint.
+
+**This is also how the shipped Portable is built** — it is the exact
+same `embed_build\` tree, just zipped whole instead of wrapped by
+Inno Setup:
+
+```cmd
+python -c "import shutil; shutil.make_archive(r'dist_installer\WhisperProject-vX.Y.Z-Portable', 'zip', r'embed_build')"
+```
+
+`WhisperProject-vX.Y.Z-Portable.zip` and
+`WhisperProject-vX.Y.Z-Setup-Standard.exe` are the two files that get
+uploaded to the GitHub release (see "Rebuild without bumping the
+version" below, and `docs/RELEASE_PROCESS.md` for a full version-bump
+release).
+
+## Rebuild without bumping the version
+
+Use this when the source changed (a bug fix, a UI tweak, a new writer,
+…) but the release is meant to stay the SAME version number — i.e. you
+are refreshing an already-published release's assets in place, not
+cutting a new one. Confirm this is really what's wanted before
+running Step 4 (it overwrites public, already-downloaded release
+assets under the same tag).
+
+**Step 1 — confirm the version is genuinely unchanged:**
+
+```cmd
+findstr /C:"__version__" core\__init__.py
+findstr /C:"MyAppVersion" installer_embed.iss
+findstr /C:"^version" pyproject.toml
+```
+
+All three must already show the version you intend to ship — this
+recipe does NOT bump anything.
+
+**Step 2 — validate the source first** (this is the same bar as any
+commit — see CLAUDE.md):
+
+```cmd
+python -m pyright app core
+python -m pytest tests\ --ignore=tests\smoke
+```
+
+Both must be clean before building — the build below has no separate
+CI gate to catch a regression.
+
+**Step 3 — full rebuild + package:**
+
+```cmd
+build_embed_installer.bat
+"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer_embed.iss
+python -c "import shutil; shutil.make_archive(r'dist_installer\WhisperProject-vX.Y.Z-Portable', 'zip', r'embed_build')"
+```
+
+`build_embed_installer.bat` always does a **full** rebuild (deletes
+and redownloads `embed_build\` from scratch) so the result is not
+sensitive to whatever was left over from a previous build — slower
+than an incremental refresh, but nothing to get wrong. It ends with
+its own sanity imports (full stack, Google Cloud STT, core modules,
+`gui.py` parses) and fails loudly (non-zero exit) if anything's
+missing.
+
+**Step 4 — update the existing GitHub release's assets in place**
+(same tag, no new tag, no version bump):
+
+```cmd
+gh release upload vX.Y.Z ^
+    dist_installer\WhisperProject-vX.Y.Z-Setup-Standard.exe ^
+    dist_installer\WhisperProject-vX.Y.Z-Portable.zip ^
+    --clobber
+```
+
+`--clobber` replaces the existing assets of the same name rather than
+erroring that they already exist. This is the step users' next
+download actually sees — anyone who already downloaded the old
+asset is unaffected (their file doesn't change under them), but
+`gh release view vX.Y.Z` afterwards should show fresh
+`createdAt`/size for both assets. Optionally follow with `gh release
+edit vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md` if the release
+notes body should also mention what changed in this refresh.
 
 ## Sanity check after any build
 
@@ -130,7 +235,7 @@ For the compiled artefacts, run the smoke E2E against each:
 
 ```cmd
 :: Method A
-set WHISPER_SMOKE_EXE=dist\WhisperProject-v1.0.3-Portable.exe
+set WHISPER_SMOKE_EXE=dist\WhisperProject-vX.Y.Z-Portable.exe
 python -m pytest tests\smoke\test_exe_real_e2e.py
 
 :: Method B (after silent install to C:\Temp\test_B)

@@ -1,12 +1,34 @@
 # Release process
 
-The exact sequence to ship a new build of Whisper Project. This is
-written for the **private-distribution** workflow — a small group of
-users on your distribution channel, not a public GitHub release.
+The exact sequence to ship a new build of Whisper Project. This was
+originally written for a private-distribution workflow; the repo and
+its GitHub releases are now public (`gh release create`/`gh release
+view` against `Milomilo777/whisper_app`) — "Step 8 — Distribute" below
+is stale on that point, everything else still applies.
 
 If anything here disagrees with `CLAUDE.md`, CLAUDE.md wins (it's
 auto-loaded into every Claude Code session and represents durable
 rules).
+
+---
+
+## Same-version rebuild (no version bump)
+
+Use this — NOT Steps 1-10 below — when source changed but the release
+should stay the SAME version number (a same-day fix/polish pass, not a
+new release). Full copy-pasteable recipe: `docs/BUILD.md` → "Rebuild
+without bumping the version". Short version:
+
+1. Confirm `core/__init__.py` / `installer_embed.iss` / `pyproject.toml`
+   still show the version you intend to ship (don't touch them).
+2. `pyright app core` + `pytest tests/ --ignore=tests/smoke` clean.
+3. `build_embed_installer.bat` → ISCC `installer_embed.iss` →
+   `shutil.make_archive(...)` for the Portable zip (see BUILD.md for
+   exact commands).
+4. `gh release upload vX.Y.Z <the two files> --clobber` — updates the
+   EXISTING release's assets in place, no new tag.
+5. Update `docs/CHANGELOG.md` (add bullets under the existing version
+   heading, don't create a new one) and `docs/SESSION_HANDOFF_NEXT.md`.
 
 ---
 
