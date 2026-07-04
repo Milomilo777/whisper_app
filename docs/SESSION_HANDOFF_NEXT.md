@@ -5,6 +5,44 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ REAL BUG FOUND BY A COLLEAGUE, FIXED + REBUILT (2026-07-04, later still) — macOS not yet rebuilt with this fix
+
+A colleague testing the published v1.5.0 Setup-Standard installer reported
+the SMTV docx output "sometimes" landing under an unexpected name. Root
+cause found and fixed: `core.transcriber._write_outputs` shared one
+collision-avoidance index across every requested format including
+`smtv_docx`, so a pre-existing `.srt`/`.json` from an earlier run of the
+same source pushed the SMTV team's file to a `(1)`/`(2)` suffix on its
+very first write — even when no `smtv_docx` had ever been written for
+that source before. Reproduced directly, fixed (excluded `smtv_docx`
+from the shared index; it now always resolves to its documented fixed
+filename), and added a regression test
+(`tests/core/test_output_indexing.py::test_smtv_docx_filename_stays_fixed_even_when_other_formats_are_indexed`).
+Full detail in `docs/CHANGELOG.md` `[1.5.0]`.
+
+Also confirmed for the colleague (they asked): yes, the `.otr`
+(oTranscribe) writer added earlier today really is wired into both the
+Advanced-settings output-format checkboxes AND the Convert-transcript
+picker — both pull from the same `core.writers.supported_formats()`
+registry, so no separate wiring was needed once the writer itself was
+registered.
+
+**Rebuilt and re-uploaded to the v1.5.0 release: Windows only**
+(`Setup-Standard.exe` + `Portable.zip`, both timestamped 2026-07-04
+07:52 UTC on the GitHub release). **macOS was NOT rebuilt with this
+fix** — the two `.dmg` assets on the release still predate it (built
+06:27 UTC, before this fix landed). Since the fix is pure `core/`
+Python with no platform-specific code, macOS needs the exact same fix;
+re-run `docs/BUILD.md`'s "Step 4b" macOS recipe
+(`gh workflow run macos-app.yml --ref master` -> download -> re-upload)
+before considering this fully shipped everywhere.
+
+Also this session: researched (not built) a compatibility bridge
+between our SMTV docx writer and the sibling `machine-translate-docx`
+project — see `docs/integrations/smtv-translator-bridge-research.md`.
+
+---
+
 ## ⭐ REPO-WIDE SWEEP (2026-07-04, same day, after the "everything resolved" entry below) — nothing pending
 
 Owner asked, broadly, whether anything was left to do in the whole
