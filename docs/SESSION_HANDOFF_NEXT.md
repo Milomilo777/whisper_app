@@ -5,6 +5,92 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ CURRENT STATE (2026-07-04) — still v1.5.0 (no version bump): otr writer + Convert-picker UX pass
+
+- **`core/writers/otr.py`** (new) registers `otr` in `core.writers.WRITERS`,
+  backed by a new public `core.integrations.otranscribe.segments_to_otr()`.
+  `.otr` was importable via `core.convert` before but never offered as an
+  EMIT target in File → Convert transcript — now it is (and it also shows
+  up as a transcription-output checkbox in the Advanced dialog, since both
+  pull from the same `supported_formats()` registry).
+- **Human-simulation UX pass on the Convert-transcript dialog** (real
+  running app, real screenshots, not just source-reading): the format
+  combobox showed bare internal registry keys (`elan`, `smtv_docx`, `otr`,
+  …) in plain alphabetical order with no hint of the real output extension.
+  Fixed via a new `core.convert.output_extension_for()` — the picker now
+  shows `name (.ext)` and lists the four common formats
+  (srt/vtt/txt/json) first.
+- **macOS DMG script fixed + verified on a real macOS runner**:
+  `platform/macos/pyinstaller/compileall-whisper-mac.sh` had a
+  copy-paste bug duplicating the pyinstaller invocation; fixed, hardened
+  (cd to repo root, `set -euo pipefail`, create-dmg check), and a
+  dedicated `macos-compileall-script-test.yml` workflow proved it
+  actually produces a `.dmg` end to end. The repo is now **public**, so
+  the earlier "macOS CI minutes cost 10x" constraint no longer applies here.
+- **Verification (REAL)**: pyright `app/ core/` 0/0/0; hermetic suite
+  green; the otr writer + the picker fix were both driven through the
+  real running `App` (not just pytest) with real screenshots and a real
+  `.otr` file produced and round-tripped.
+- **Release status**: `v1.5.0` was already published (both
+  `WhisperProject-v1.5.0-Setup-Standard.exe` and
+  `WhisperProject-v1.5.0-Portable.zip` are on the GitHub release) — the
+  previous handoff's uncertainty about this is resolved, it did ship.
+- **NEXT**: per explicit owner instruction this session, rebuild the
+  Windows installers with these changes included but **without** bumping
+  the version (stay on 1.5.0), then update (not replace/re-tag) the
+  existing `v1.5.0` GitHub release's assets in place. See whether this
+  session finished that or left it for you.
+
+---
+
+## ⭐ CURRENT STATE (2026-07-03) — v1.5.0: SMTV language fill, convert target, stats fixes, renamed to whisper_app
+
+- **Project renamed** `whisper_project_direct_download_v2` -> `whisper_app`
+  (both the GitHub repo and the local checkout folder name; the GitHub
+  rename leaves the old URL redirecting). `core/updates.py`'s
+  `GITHUB_REPO` constant, `pyproject.toml` urls, the READMEs/install
+  docs, and the Homebrew formula were all updated to match.
+- **`core/writers/smtv_docx_writer.py`**: the docx header row (row 2,
+  col 3) now shows the detected language instead of always reading the
+  literal "Foreign Language" -- it reuses the same `lang_label` the
+  title row and the "[... starts]" cue already fill.
+- **`core/convert.py`**: `smtv_docx` is now a valid `convert_file()`
+  target (new `CONVERT_TARGETS` tuple, wired into `app.app`'s File ->
+  Convert transcript picker). No language metadata survives a generic
+  transcript file, so it's filled the same way the writer treats "no
+  language detected."
+- **Fixed a real bug**: `app/services/transcription_service.py`'s
+  `_derive_transcript_stats` only recovered `word_count` from a `.json`
+  sidecar. Anyone whose `output_formats` didn't include `"json"` always
+  got `word_count=0` in both history and the opt-in usage-stats POST,
+  no matter how much was actually transcribed. It now falls back to
+  `core.convert.parse_to_segments` on whatever else was produced.
+- **`core/stats.py`** `build_stats_payload` gained `program_version`
+  plus host/hardware facts (`platform_system/_node/_release/_version/
+  _machine/_processor`, `cpu_count`, `mem_total` via the new `psutil`
+  dependency). `stats/transcription_stats.php` gained matching columns
+  with an `ALTER TABLE` migration for already-deployed DBs.
+- **Verification (REAL)**: pyright `app/ core/` 0/0/0; full hermetic
+  suite green (1 pre-existing skip, unrelated).
+- Version bumped to **1.5.0** everywhere (`core/__init__.py`,
+  `pyproject.toml`, both `.iss` files, the mac spec for parity though
+  macOS isn't being built this release). `docs/CHANGELOG.md` +
+  `docs/RELEASE_NOTES_v1.5.0.md` updated.
+- **Known gap**: `app/services/transcription_service.py` has no
+  dedicated test file at all (`_derive_transcript_stats` /
+  `_post_usage_stats` are untested in isolation -- exactly how the
+  word_count bug shipped unnoticed). The fix reuses well-tested pure
+  functions (`core.convert.parse_to_segments`,
+  `core.stats.count_words_in_segments`) but the wiring itself still
+  has no regression test. Worth a `tests/app/test_transcription_service.py`
+  in a future session.
+- **NEXT**: build artifacts (Setup-Standard + Portable, built without
+  the personal `creds/gcloud_stt.json`) and the actual GitHub release
+  (tag `v1.5.0`, prune the old `v1.4.0` release per policy) — see
+  whether this session finished them or left them for you.
+
+---
+
 ## ⭐ CURRENT STATE (2026-06-22) — v1.4.0: one Parakeet engine, leaner config, clean upgrades
 
 A colleague reported the Transcribe-tab "Parakeet — offline, NVIDIA" engine

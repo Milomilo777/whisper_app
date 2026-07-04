@@ -5,11 +5,12 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 ## [1.5.0] — 2026-07-03
 
 > SMTV + usage-stats release. The SMTV docx header now shows the detected
-> language, SMTV joins the Convert-transcript targets, a real word-count
-> bug in the usage-stats payload is fixed, and the opt-in stats payload
-> gained host/hardware + app-version fields. The project (and its GitHub
-> repo) is renamed to `whisper_app`. pyright `app/ core/` 0/0/0; hermetic
-> suite green.
+> language, SMTV and oTranscribe join the Convert-transcript targets, the
+> format picker shows each target's real file extension in a curated
+> (common-first) order, a real word-count bug in the usage-stats payload
+> is fixed, and the opt-in stats payload gained host/hardware + app-version
+> fields. The project (and its GitHub repo) is renamed to `whisper_app`.
+> pyright `app/ core/` 0/0/0; hermetic suite green.
 
 ### Added
 
@@ -23,6 +24,19 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   transcript file carries no language metadata, the emitted docx is filled
   the same way the writer already treats "no language detected" (neutral
   cue labels); the work title is taken from the source file's name.
+- **oTranscribe (.otr) added to File → Convert transcript.** `.otr` was
+  already importable there but not offered as an output — the app could
+  only export it from a live transcription task or a downloaded subtitle,
+  never from an arbitrary transcript file already on disk. A new
+  `core.writers.otr` (backed by a new public
+  `core.integrations.otranscribe.segments_to_otr()`) closes that gap.
+- **Convert-format picker is more user-friendly.** A human-simulation pass
+  on the dialog found the combobox showed bare internal registry names
+  (`elan`, `smtv_docx`, `otr`, …) in plain alphabetical order, so there was
+  no way to tell what file extension a pick would actually produce, and the
+  four formats almost everyone wants (`srt`/`vtt`/`txt`/`json`) were buried
+  among niche ones. It now shows `name (.ext)` for every target (via a new
+  `core.convert.output_extension_for()`) and lists the common four first.
 - **Usage-stats payload gained 9 new fields**: `program_version` (the
   sending app's version) and, from the host machine, `platform_system`,
   `platform_node`, `platform_release`, `platform_version`,

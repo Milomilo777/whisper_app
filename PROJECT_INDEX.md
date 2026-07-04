@@ -21,7 +21,7 @@ Build deliverables (Windows): build_embed_installer.bat then installer_embed.iss
 ```
 
 ## Architecture
-Single Tkinter app process (entry point gui.py -> app.run() -> app/app.py App(tk.Tk)) owns the UI and orchestration; it is the only thread that touches widgets. Background work is bridged into the Tk main loop via queue.Queue instances polled with after(). Two concurrency patterns: (1) Transcription runs in long-lived subprocess workers spawned as `python gui.py --worker` (core/worker.py) so the ~3 GB faster-whisper model loads once and stays hot; the parent and worker speak newline-delimited JSON over stdin/stdout (actions: transcribe/shutdown; events: ready/started/progress/log/done/error/startup_error/worker_exit), with a per-worker UUID token and ~5s heartbeat to survive PID recycling and detect wedges. (2) Downloads run as short-lived yt-dlp.exe subprocesses (one per task), whose stdout is read on a daemon thread, regex-parsed for progress, and pushed onto queues. The app/ package is layered: app/services (download_service, format_service, transcription_service, integrations_service) drive background work; app/domain holds task models (TranscriptionTask, VideoDownloadTask) and language enums; app/widgets builds tabs/console/tray; app/dialogs holds Toplevels (model_download, hub_setup, transcript_viewer, advanced, statistics). The core/ package is the engine: config.py (JSON at %LOCALAPPDATA%\\WhisperProject\\config.json), model_manager.py + hub.py (resumable MD5-verified ZIP model download/extract), transcriber.py with pluggable backends (core/backends: faster_whisper, whisper_cpp, parakeet), pre/post-processing (alignment, diarization, chapters, hallucination, separator, voiceprint), pluggable output writers (core/writers: srt/vtt/tsv/txt/json/lrc/md/docx/pdf), integrations (core/integrations: otranscribe, smtv), and infra (paths, history SQLite, logging_setup, watcher, recorder, _proc, _threads). NOTE: docs/ARCHITECTURE.md still describes an older single-file gui.py layout; the code has since been refactored into the app/ and core/ packages described here.
+Single Tkinter app process (entry point gui.py -> app.run() -> app/app.py App(tk.Tk)) owns the UI and orchestration; it is the only thread that touches widgets. Background work is bridged into the Tk main loop via queue.Queue instances polled with after(). Two concurrency patterns: (1) Transcription runs in long-lived subprocess workers spawned as `python gui.py --worker` (core/worker.py) so the ~3 GB faster-whisper model loads once and stays hot; the parent and worker speak newline-delimited JSON over stdin/stdout (actions: transcribe/shutdown; events: ready/started/progress/log/done/error/startup_error/worker_exit), with a per-worker UUID token and ~5s heartbeat to survive PID recycling and detect wedges. (2) Downloads run as short-lived yt-dlp.exe subprocesses (one per task), whose stdout is read on a daemon thread, regex-parsed for progress, and pushed onto queues. The app/ package is layered: app/services (download_service, format_service, transcription_service, integrations_service) drive background work; app/domain holds task models (TranscriptionTask, VideoDownloadTask) and language enums; app/widgets builds tabs/console/tray; app/dialogs holds Toplevels (model_download, hub_setup, transcript_viewer, advanced, statistics). The core/ package is the engine: config.py (JSON at %LOCALAPPDATA%\\WhisperProject\\config.json), model_manager.py + hub.py (resumable MD5-verified ZIP model download/extract), transcriber.py with pluggable backends (core/backends: faster_whisper, whisper_cpp, parakeet), pre/post-processing (alignment, diarization, chapters, hallucination, separator, voiceprint), pluggable output writers (core/writers: srt/vtt/tsv/txt/json/lrc/md/otr/docx/pdf), integrations (core/integrations: otranscribe, smtv), and infra (paths, history SQLite, logging_setup, watcher, recorder, _proc, _threads). NOTE: docs/ARCHITECTURE.md still describes an older single-file gui.py layout; the code has since been refactored into the app/ and core/ packages described here.
 
 **Tech stack:** Python >=3.11 (3.11/3.12/3.13), Tkinter + sv-ttk + tkinterdnd2 (drag-and-drop) for the GUI, faster-whisper (CTranslate2) as default transcription backend; optional pywhispercpp (whisper.cpp) and parakeet backends, stable-ts (word-level alignment, opt-in, pulls torch); sherpa-onnx (pyannote ONNX speaker diarisation, no HF token), yt-dlp.exe + bundled ffmpeg/ffprobe for media download and merging, python-vlc for embedded playback; python-docx + reportlab for docx/pdf output, platformdirs, requests, watchdog (folder watcher), pystray + Pillow (system tray), SQLite (history), Tooling: pytest + pytest-cov + responses, pyright (basic mode, 0/0/0 baseline on app/ core/), GitHub Actions CI, Packaging: PyInstaller (.spec files, unshipped) and Inno Setup (.iss) over an embeddable-Python tree; BSD-3-Clause license
 
@@ -153,7 +153,7 @@ The headless, Tk-free engine layer of the Whisper Project: model download/lifecy
 - `core/tiling.py` — Video-wall: yt-dlp | ffplay tile filter. ffplay is NOT bundled — resolved via bundled_binary, degrades gracefully if missing.
 - `core/burn_subs.py` — burn(video, srt, out) — ffmpeg subtitles filter overlay; synchronous, run on a background thread by callers.
 - `core/integrations/smtv.py` — Supreme Master TV episode scraper (stdlib urllib, parses videoPlayerData + article-text transcript). No yt-dlp, no new deps. DOM contract documented in docs/integrations/.
-- `core/integrations/otranscribe.py` — .otr <-> srt/whisper-json converter; exactly four public names, stdlib only.
+- `core/integrations/otranscribe.py` — .otr <-> srt/whisper-json converter; exactly five public names (incl. segments_to_otr for the writer-shaped dict contract), stdlib only.
 - `core/logging_setup.py` — setup_logging() — configures logging for app + worker processes.
 
 **Entry points**
@@ -428,10 +428,10 @@ python tests/fixtures/generate_sample_wav.py
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 10329
-- **Structure refreshed:** 2026-06-08T11:19:02
+- **Source files tracked:** 403
+- **Structure refreshed:** 2026-07-04T10:43:53
 - **Semantic sections last built:** 2026-06-03T15:55:57
-- **Drift since semantic build:** +10070 added · ~61 changed · -9 removed
+- **Drift since semantic build:** +146 added · ~76 changed · -11 removed
 
 > ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
 >
@@ -439,17 +439,18 @@ python tests/fixtures/generate_sample_wav.py
 
 | Top-level | Source files |
 |---|---|
-| `.claude` | 9962 |
-| `tests` | 168 |
-| `docs` | 74 |
-| `core` | 59 |
+| `tests` | 171 |
+| `docs` | 78 |
+| `core` | 64 |
 | `app` | 24 |
-| `(root)` | 14 |
-| `.github` | 12 |
-| `platform` | 9 |
+| `.claude` | 20 |
+| `(root)` | 15 |
+| `.github` | 13 |
+| `platform` | 10 |
 | `tools` | 6 |
 | `assets` | 1 |
+| `creds` | 1 |
 
-**By type:** `.py`×7045  `.md`×2516  `.bat`×124  `.spec`×124  `.html`×124  `.yml`×100  `.sh`×93  `.iss`×62  `.json`×45  `.toml`×31  `.txt`×31  `.rb`×31  `.ps1`×2  `.js`×1
+**By type:** `.py`×261  `.md`×90  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
