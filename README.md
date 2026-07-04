@@ -2,20 +2,24 @@
 
 > 📍 **Start at [`PROJECT_INDEX.md`](PROJECT_INDEX.md)** — a generated, tool-neutral repo map for fast, low-token onboarding by any AI agent or human.
 
-[![CI](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml/badge.svg?branch=chore%2Fcleanup-hardening)](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml)
+[![CI](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml/badge.svg)](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/Milomilo777/whisper_app?label=release)](https://github.com/Milomilo777/whisper_app/releases/latest)
 
 **A Windows desktop app that transcribes audio and video files locally
-using OpenAI's Whisper model.** Drag a file in, get an `.srt` + `.json`
-+ `.docx` back. No cloud, no account, no upload. Also downloads from
-any site `yt-dlp` supports.
+using OpenAI's Whisper model.** Drag a file in, get back `.srt`,
+`.vtt`, `.json`, `.docx`, `.pdf`, and more (a "Convert transcript"
+picker adds oTranscribe/ELAN/InqScribe and other formats on demand).
+No cloud, no account, no upload. Also downloads from any site `yt-dlp`
+supports.
 
-Two deliverables for two audiences:
+Two deliverables for two audiences (replace `X.Y.Z` with whatever
+[the latest release](https://github.com/Milomilo777/whisper_app/releases/latest)
+actually is):
 
 | Method | Asset | Size | Best for |
 |---|---|---|---|
-| **Portable** | `WhisperProject-v1.0.3-Portable.exe` | ~450 MB | one file, no install, USB-stick friendly |
-| **Standard** | `WhisperProject-v1.0.3-Setup-Standard.exe` | ~350 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
+| **Portable** | `WhisperProject-vX.Y.Z-Portable.zip` | ~340 MB | unzip and run, no install, USB-stick friendly |
+| **Standard** | `WhisperProject-vX.Y.Z-Setup-Standard.exe` | ~230 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
 
 Download from the latest release:
 **[github.com/Milomilo777/whisper_app/releases/latest](https://github.com/Milomilo777/whisper_app/releases/latest)**
@@ -28,8 +32,10 @@ Step-by-step install guide: [docs/INSTALL.md](docs/INSTALL.md).
 
 - **Transcribe** — drag-and-drop one or many files. Optional: Voice
   Activity Detection, word-level timestamps, speaker diarisation.
-  Outputs land next to your input in eight formats: `srt`, `vtt`,
-  `tsv`, `txt`, `json`, `lrc`, `md`, `docx`.
+  Outputs land next to your input in `srt`, `vtt`, `tsv`, `txt`,
+  `json`, `lrc`, `md`, `docx`, `pdf` — plus a separate "Convert
+  transcript" picker that re-emits any existing transcript file into
+  those formats or into oTranscribe/ELAN/InqScribe/Express Scribe.
 - **Last-Result card** — every finished transcription opens a card
   with file sizes, one-click "Open file" buttons, an "Open folder"
   shortcut, and a "View transcript" button that launches the in-app
@@ -205,9 +211,9 @@ security caveats.
 
 Newer audit + roadmap docs:
 
-- [SENIOR_REVIEW_2026-05-21.md](docs/SENIOR_REVIEW_2026-05-21.md)
-- [EXECUTION_ROADMAP.md](docs/EXECUTION_ROADMAP.md)
-- [FINAL_FREEZE_AUDIT_2026-05-21.md](docs/FINAL_FREEZE_AUDIT_2026-05-21.md)
+- [SENIOR_REVIEW_2026-05-21.md](docs/history/SENIOR_REVIEW_2026-05-21.md)
+- [EXECUTION_ROADMAP.md](docs/history/EXECUTION_ROADMAP.md)
+- [FINAL_FREEZE_AUDIT_2026-05-21.md](docs/history/FINAL_FREEZE_AUDIT_2026-05-21.md)
 - [roadmap/](docs/roadmap/) — future-release research
 
 ---
@@ -215,13 +221,14 @@ Newer audit + roadmap docs:
 ## Build from source
 
 ```cmd
-git clone https://github.com/Milomilo777/whisper_project_direct_download_v2.git
-cd whisper_project_direct_download_v2
+git clone https://github.com/Milomilo777/whisper_app.git
+cd whisper_app
 pip install -r requirements.txt
 python gui.py
 ```
 
-See [docs/BUILD.md](docs/BUILD.md) for the three build pipelines and
+See [docs/BUILD.md](docs/BUILD.md) for the build pipelines (which two
+are actually shipped vs. optional) and
 [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) for the ship
 sequence.
 
@@ -229,17 +236,17 @@ sequence.
 
 ## Status
 
-Stable at v1.0.3. The full audit + freeze-readiness review is in
-[docs/FINAL_FREEZE_AUDIT_2026-05-21.md](docs/FINAL_FREEZE_AUDIT_2026-05-21.md);
-the multi-day stability audit is in
-[docs/STABILITY_AUDIT_2026-05-23.md](docs/STABILITY_AUDIT_2026-05-23.md).
+Actively maintained; see the CI badge above for live build status and
+[docs/CHANGELOG.md](docs/CHANGELOG.md) for what shipped recently.
+Earlier freeze/stability audits are archived under
+[docs/history/](docs/history/) once superseded by newer work.
 
-Quality bars at v1.0.3:
+Quality bar enforced on every commit:
 
 - pyright `app/ core/` — 0 errors, 0 warnings, 0 informations
-- unit + integration suite — 551 tests passing
-- real-file end-to-end against the SMTV reference clip — 10/10
-- transcribe smoke + end-to-end — 7/7
+- the hermetic unit + integration suite (`pytest tests/
+  --ignore=tests/smoke`) runs on every push on both Windows and
+  Ubuntu — see [docs/TESTING.md](docs/TESTING.md)
 
 ---
 

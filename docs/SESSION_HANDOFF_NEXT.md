@@ -1050,9 +1050,9 @@ rebuild.
 | [docs/BUILD.md](BUILD.md) | Two shipped build pipelines + the unshipped Compact one |
 | [docs/ARCHITECTURE.md](ARCHITECTURE.md) | Process model + threading |
 | [docs/CONFIG.md](CONFIG.md) | Every config key documented |
-| [docs/DEEP_AUDIT_BRIEF.md](DEEP_AUDIT_BRIEF.md) | Senior-architect line-by-line audit + fix brief for a fresh session |
+| [docs/history/DEEP_AUDIT_BRIEF.md](history/DEEP_AUDIT_BRIEF.md) | Senior-architect line-by-line audit + fix brief for a fresh session |
 | [docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md) | How to ship the next release |
-| [docs/RELEASE_NOTES_v1.3.5.md](RELEASE_NOTES_v1.3.5.md) | v1.3.5 user-facing notes (latest) |
+| [docs/release-notes/RELEASE_NOTES_v1.3.5.md](release-notes/RELEASE_NOTES_v1.3.5.md) | v1.3.5 user-facing notes (latest) |
 | [docs/CHANGELOG.md](CHANGELOG.md) | Full version history |
-| [docs/STABILITY_AUDIT_2026-05-23.md](STABILITY_AUDIT_2026-05-23.md) | Multi-day stability audit + the P1 punch list |
+| [docs/history/STABILITY_AUDIT_2026-05-23.md](history/STABILITY_AUDIT_2026-05-23.md) | Multi-day stability audit + the P1 punch list |
 | [CLAUDE.md](../CLAUDE.md) | Durable rules for any Claude Code session |

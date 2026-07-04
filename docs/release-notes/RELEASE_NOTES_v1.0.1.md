@@ -121,7 +121,7 @@ Existing v0.7.x users:
 | Audit closure (R-series) | ~62 / 72 |
 
 Remaining audit items are documented in
-[FINAL_FREEZE_AUDIT_2026-05-21.md](FINAL_FREEZE_AUDIT_2026-05-21.md)
+[FINAL_FREEZE_AUDIT_2026-05-21.md](../history/FINAL_FREEZE_AUDIT_2026-05-21.md)
 — none are user-visible regressions.
 
 ---
