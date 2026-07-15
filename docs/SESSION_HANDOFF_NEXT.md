@@ -35,6 +35,39 @@ colleague for what was actually broken in Claude's build, and once
 fixed, rebuild macOS through the repo's own pipeline so the shipped
 macOS asset is source-traceable again like the Windows ones.
 
+**Same-session investigation (owner reported the size difference
+looked suspicious — "definitely something is missing" — but declined
+to answer any diagnostic questions, e.g. the exact macOS error, so
+this is as far as it got):**
+
+- Downloaded the actual CI artifact from the run that produced
+  Claude's broken build (`gh run view 28699783814`, workflow
+  `macos-app.yml`, 2026-07-04) and inspected its contents directly.
+  Core libraries were all present and correctly bundled:
+  `libctranslate2.4.8.1.dylib` (57 MB), `libopenblas64_.dylib`
+  (69 MB), `onnxruntime` (~37+31 MB), `sherpa_onnx`, `ffmpeg`/`ffprobe`
+  in `Contents/Frameworks/bin/`, and the main PyInstaller binary
+  (26 MB). No obviously-missing component was found this way.
+- The size comparison the owner flagged is not apples-to-apples:
+  Claude's old `x86_64` `.dmg` was single-arch (152 MB, measured
+  directly from the CI artifact zip), while the colleague's
+  replacement is a universal `.dmg` covering both `arm64` and
+  `x86_64` (399 MB / 418,211,880 bytes). `.dmg` (UDZO/zlib) and `.zip`
+  also don't necessarily compress this binary content at the same
+  ratio, which could account for part of the gap on its own.
+  - Note: the CI run's boot-smoke step (a hard, non-continue-on-error
+    requirement) already exercises the numpy → ctranslate2 →
+    faster-whisper import chain inside the frozen `.app` and passed
+    for both arches on that run — so a basic import/packaging failure
+    in the pre-`.dmg` `.app` is unlikely, though the pipeline never
+    smoke-tests the final `.dmg` itself (mount → drag to Applications
+    → launch), which is the actual end-user flow.
+- Bottom line: no hard evidence of a missing component was found by
+  static inspection from Windows (no Mac available to mount/launch
+  either build). Root cause remains unconfirmed. If this comes up
+  again, the fastest path is the exact macOS error text/screenshot
+  from whoever hit it, or reproducing on a real Mac.
+
 ---
 
 ## ⭐ REAL BUG FOUND BY A COLLEAGUE, FIXED + REBUILT (2026-07-04, later still) — macOS not yet rebuilt with this fix
