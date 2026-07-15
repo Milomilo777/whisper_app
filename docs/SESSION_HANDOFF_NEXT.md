@@ -5,6 +5,38 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ macOS build replaced with a colleague's build — Claude's build did not work (2026-07-15)
+
+The macOS `arm64`/`x86_64` `.dmg`s that Claude built and uploaded to
+the v1.5.0 release on 2026-07-04 (see entry below) did not work when
+the owner tried them. No repro details were captured — the failure
+mode and root cause are unknown.
+
+A colleague built a working replacement independently and shared it
+as a single universal `.dmg` at a private URL
+(`https://smch.ir/binaries/WhisperProject1.5.0.dmg`, said to cover
+both `arm64` and `x86_64`). Downloaded and uploaded to the v1.5.0
+release:
+
+- Added: `WhisperProject-v1.5.0-macOS-universal.dmg` (~400 MB).
+- Removed: `WhisperProject-v1.5.0-macOS-arm64.dmg`,
+  `WhisperProject-v1.5.0-macOS-x86_64.dmg`.
+
+**Provenance caveat**: this asset was downloaded from a third-party
+URL and published to the public release **without checksum or build
+provenance verification** — the owner explicitly accepted that risk
+and asked for it to be published as-is. It was **not** built from
+this repo's own pipeline (`docs/BUILD.md` Step 4b), so it is not
+reproducible from source control the way the other three release
+assets are.
+
+Follow-up for a future session: get repro/root-cause details from the
+colleague for what was actually broken in Claude's build, and once
+fixed, rebuild macOS through the repo's own pipeline so the shipped
+macOS asset is source-traceable again like the Windows ones.
+
+---
+
 ## ⭐ REAL BUG FOUND BY A COLLEAGUE, FIXED + REBUILT (2026-07-04, later still) — macOS not yet rebuilt with this fix
 
 A colleague testing the published v1.5.0 Setup-Standard installer reported

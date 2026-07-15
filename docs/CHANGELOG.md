@@ -74,6 +74,12 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   Anyone whose effective config resolved the online copy would have had
   opt-in telemetry silently go nowhere. Fixed to agree; added a
   regression test so the two can't drift apart unnoticed again.
+- **macOS build didn't work** — the `arm64`/`x86_64` `.dmg`s built by
+  Claude and uploaded 2026-07-04 were broken (owner-reported, no repro
+  details available). A colleague built a working replacement and it
+  was uploaded 2026-07-15 as a single universal `.dmg`, replacing both
+  prior macOS assets. See `docs/SESSION_HANDOFF_NEXT.md` for the
+  provenance caveat on this replacement build.
 
 ### Changed
 
