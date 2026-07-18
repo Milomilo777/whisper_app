@@ -33,7 +33,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-import psutil
+# psutil only feeds the two optional hardware fields below. This module's
+# contract is "stats never break anything", so a missing wheel (e.g. a
+# source checkout whose venv predates the 1.5.0 requirements bump) must
+# degrade those fields to "0", not blow up every importer at import time.
+try:
+    import psutil
+except ImportError:  # pragma: no cover - exercised via a blocked import in tests
+    psutil = None  # type: ignore[assignment]
 
 from core import __version__ as _PROGRAM_VERSION
 
@@ -107,6 +114,9 @@ def build_stats_payload(
     ``form_submitted`` flag tells the PHP endpoint to record the row; the
     client IP + geoip are added server-side from the request, NOT here.
     """
+    # Local alias: a module-level global is never narrowed by a None
+    # check (it could be reassigned elsewhere), a local is.
+    ps = psutil
     return {
         _FORM_FLAG: "1",
         "file_name": Path(str(file_name or "")).name,
@@ -123,8 +133,10 @@ def build_stats_payload(
         "platform_version": platform.version(),
         "platform_machine": platform.machine(),
         "platform_processor": platform.processor(),
-        "cpu_count": str(psutil.cpu_count() or 0),
-        "mem_total": str(int(psutil.virtual_memory().total)),
+        "cpu_count": str(ps.cpu_count() or 0) if ps is not None else "0",
+        "mem_total": (
+            str(int(ps.virtual_memory().total)) if ps is not None else "0"
+        ),
     }
 
 

@@ -974,10 +974,12 @@ class TranscriptionService:
         write is full of real words — so this falls back to re-parsing
         whichever other produced transcript ``core.convert`` can read back
         into segments. Returns ``(0, 0.0)`` when nothing usable is found —
-        never raises (stats are best-effort)."""
-        from core import convert as _convert
-        from core import stats as _stats
+        never raises (stats are best-effort; the imports sit inside the
+        try so even an ImportError degrades to (0, 0.0) instead of
+        breaking the task-done handler)."""
         try:
+            from core import convert as _convert
+            from core import stats as _stats
             paths = list(getattr(task, "output_paths", None) or [])
             json_path = next(
                 (p for p in paths if str(p).lower().endswith(".json")), ""
@@ -1024,9 +1026,9 @@ class TranscriptionService:
         Gated inside ``core.stats.post_stats_async`` on
         ``telemetry_opt_in`` + a non-empty ``stats_url`` — a no-op otherwise.
         """
-        from core import stats as _stats
         app = self.app
         try:
+            from core import stats as _stats
             import time as _time
             ai_time = (
                 (_time.time() - task.start_time) if task.start_time else 0.0
