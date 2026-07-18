@@ -77,6 +77,11 @@ class TranscriptionService:
         # self-perpetuating 100 ms chain, so over a long session the number
         # of concurrent poll loops grew without bound (Audit P2-1).
         self._poll_scheduled: bool = False
+        # Debounce for the alt-engine startup-error dialog: the worker
+        # auto-restart path retries a few times in quick succession, and
+        # each failed attempt emits its own startup_error — without this
+        # the user got one stacked dialog per attempt.
+        self._engine_error_dialog_at: float = 0.0
 
     def _ensure_poll_scheduled(self) -> None:
         """Schedule poll() at most once; coalesces all callers."""
@@ -636,19 +641,21 @@ class TranscriptionService:
                         event.get("message") or "engine failed to start"
                     )
                     label = _eng.VALUE_TO_LABEL.get(engine, engine)
-                    try:
-                        from app.widgets.error_dialog import show_error
-                        show_error(
-                            app,
-                            "Transcription engine failed to start",
-                            f"The selected engine ({label}) could not "
-                            "start. Check its model/key settings in "
-                            "Advanced > Backend, or switch back to the "
-                            "default Faster-Whisper engine.",
-                            detail=detail,
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
+                    if now - self._engine_error_dialog_at > 10.0:
+                        self._engine_error_dialog_at = now
+                        try:
+                            from app.widgets.error_dialog import show_error
+                            show_error(
+                                app,
+                                "Transcription engine failed to start",
+                                f"The selected engine ({label}) could not "
+                                "start. Check its model/key settings in "
+                                "Advanced > Backend, or switch back to the "
+                                "default Faster-Whisper engine.",
+                                detail=detail,
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
                 elif not app.model_setup_running:
                     app.log("Existing model failed to load. Starting required download.")
                     self.stop_all()
