@@ -272,6 +272,29 @@ def main() -> int:
     def progress_cb(percent: float) -> None:
         emit("progress", percent=percent)
 
+    # Audit D8: heartbeat thread. Without this the parent has no way
+    # to distinguish "worker is mid-CPU-bound-transcribe" from
+    # "worker silently wedged". We emit a tiny heartbeat every 5 s
+    # so the parent can declare the worker dead if heartbeats stop.
+    # Daemon thread — dies with the process; no shutdown signal
+    # needed. Started BEFORE the model load: an alternative backend's
+    # first load can silently download GBs (HF weights, ggml model,
+    # even a pip install of transformers+torch) for far longer than
+    # the parent's 120 s liveness timeout — the watchdog used to kill
+    # the healthy worker mid-download and restart it in a loop.
+    HEARTBEAT_INTERVAL_SECONDS = 5.0
+
+    def _heartbeat() -> None:
+        while True:
+            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            try:
+                emit("heartbeat", ts=time.time())
+            except Exception:
+                logger.exception("heartbeat emit failed")
+
+    threading.Thread(target=_heartbeat, name="worker-heartbeat",
+                     daemon=True).start()
+
     if not load_existing_model(log_cb):
         detail = get_model_error() or "Existing model failed to load in worker"
         emit("startup_error", message=detail)
@@ -294,25 +317,6 @@ def main() -> int:
     except Exception:  # noqa: BLE001
         logger.exception("Could not read effective device; emitting bare ready")
         emit("ready")
-
-    # Audit D8: heartbeat thread. Without this the parent has no way
-    # to distinguish "worker is mid-CPU-bound-transcribe" from
-    # "worker silently wedged". We emit a tiny heartbeat every 5 s
-    # so the parent can declare the worker dead if heartbeats stop.
-    # Daemon thread — dies with the process; no shutdown signal
-    # needed.
-    HEARTBEAT_INTERVAL_SECONDS = 5.0
-
-    def _heartbeat() -> None:
-        while True:
-            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
-            try:
-                emit("heartbeat", ts=time.time())
-            except Exception:
-                logger.exception("heartbeat emit failed")
-
-    threading.Thread(target=_heartbeat, name="worker-heartbeat",
-                     daemon=True).start()
 
     # Reasonable max line size — a single JSON command should be
     # under a few KB. Anything past 1 MB is either a runaway parent
