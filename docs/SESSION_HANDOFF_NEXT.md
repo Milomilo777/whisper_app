@@ -5,224 +5,96 @@ this repo. Read this file before anything else.
 
 ---
 
-## ⭐ Hover-help "(?)" icons added across the whole UI — NOT built/released yet (2026-07-18)
+## ⭐ UI readability pass: hover-help everywhere + 2 new reusable tools — NOT built/released yet (2026-07-18)
 
-Owner asked for every UI section to get a small hover-help icon
-explaining what it does (some sections already had informal grey
-inline notes; most had nothing). Added:
+Owner asked for hover-help icons across the whole UI, then for
+repeated self-critique rounds ("loop until no more issues") on that
+work — about 20 commits, summarized here (the full round-by-round
+history is in git log / earlier revisions of this file if ever
+needed — not repeated below).
 
-- `app/widgets/tooltip.py` — new shared helper (`bind_tooltip`,
-  `help_icon`, `add_section_help`). Previously every spot that wanted
-  a hover tooltip (only the R3 device badge did) reimplemented its own
-  popup; `App._bind_device_badge_tooltip` now calls the shared helper
-  instead of duplicating it.
-- `app/widgets/tabs.py` — icons on all 5 tabs (Transcribe, Queue,
-  Download, Video Tiling, Server). Skipped fields that already had an
-  inline grey explanatory note, to avoid clutter.
-- `app/dialogs/advanced.py` — section badges on every `LabelFrame` +
-  per-field icons on previously-unexplained controls (Batch size,
-  Initial prompt, Hotwords, Backend, hallucination "BoH" jargon,
-  Demucs, voiceprint, filename template, SponsorBlock). The Google
-  Cloud / Cloud STT / NVIDIA Parakeet frames already had full
-  paragraphs, left as-is.
-- `app/dialogs/transcript_viewer.py` — icons for "Remove fillers" and
-  the segment-list colour coding (confidence green/amber/red,
-  suspect-row red background), which had zero explanation before.
-- `core/server/static/index.html` (the LAN/web UI) — a lightweight
-  CSS-only `?` badge on Source / Output formats / Language / Advanced
-  options (no JS framework, matches the file's existing vanilla
-  style).
-- `app/dialogs/hub_setup.py`, `model_download.py`, `model_loading.py`,
-  `statistics.py` were checked and left untouched — each already has a
-  self-explanatory title/paragraph or is a single-purpose native
-  dialog with nothing ambiguous to annotate.
+**Two new reusable tools other sessions should use, not reinvent:**
 
-Verified: full `pyright` clean (0/0/0), full hermetic `pytest` suite
-green, `gui.py` launches with no traceback. A live-render visual check
-was attempted (screenshot of the Advanced dialog) but aborted — it
-grabbed an unrelated foreground window on the real desktop instead of
-the Tk dialog (focus/z-order issue); the screenshot was deleted
-unread rather than risk inspecting unrelated desktop content. Grid
-placements were instead manually audited column-by-column (this is
-how one real overlap — the SponsorBlock row — was caught and fixed
-before commit); no further visual QA was done.
+- `app/widgets/tooltip.py` — `bind_tooltip(widget, text_or_getter)`
+  (low-level yellow-popup binder), `help_icon(parent, text)` (a small
+  "ⓘ" for next to one control), `section_labelframe(parent, title,
+  help_text, **kwargs)` (a `ttk.LabelFrame` whose *title bar* carries
+  the help icon via `labelwidget=` — the only safe way to add a
+  section-level hover icon; see `PROJECT_INDEX.md`'s Gotchas for why a
+  place()-based corner badge is NOT safe — that was a real bug here).
+- `app/widgets/error_dialog.py` — `show_error(parent, title, message,
+  detail=None)`: a plain-language sentence up front, raw `str(e)`
+  behind a collapsible "Show details" (still copyable). Use this
+  instead of `messagebox.showerror(title, str(e))` for anything a
+  non-technical user might hit.
 
-**Same-session follow-up — owner asked for a self-critique pass, which
-found and fixed a real bug:**
+**What changed:** hover-help icons on all 5 tabs (`app/widgets/tabs.py`)
+and every real section of the Advanced dialog (`app/dialogs/advanced.py`,
+now via `section_labelframe` + a "Jump to" nav sidebar since it's 10
+stacked sections), the transcript viewer's toolbar (Remove-fillers +
+segment colour-coding, previously unexplained), and a lightweight
+CSS-only version on the LAN/web UI (`core/server/static/index.html`).
+Console log (`app/widgets/console.py`) now matches the app's Light/Dark
+theme and colours likely-failure lines red. The Statistics dialog was
+rebuilt from a raw text blob into labeled rows. 9 spots across
+`app.py`/`transcript_viewer.py`/`integrations_service.py`/
+`hardware_wizard.py`/`platform.py` that dumped a raw exception as the
+whole error message now use `show_error`.
 
-- Instead of guessing from a screenshot, re-verified layout by
-  instantiating the real `App`/`AdvancedDialog`/`TranscriptViewer`
-  headlessly and reading `winfo_reqwidth()`/`winfo_width()` directly —
-  no screen capture, no privacy risk, and it's exact instead of
-  eyeballed.
-- **Found:** the Transcribe tab's "quick options" row (Language +
-  Identify speakers + Per-word timestamps + Time range), after gaining
-  4 new hover icons, required 983px but the app's shipped default
-  960px window only gives it 928px. `pack(side="left")` doesn't wrap —
-  it clips silently, so on a fresh install some of that row (likely
-  the Time-range fields) would have rendered off-screen.
-  Fixed by splitting it into two stacked lines (verified back down to
-  661px required). See commit `b03796f`.
-- Checked the same risk on the Engine-picker row, both Video Tiling
-  option rows, and the transcript viewer's toolbar — all comfortably
-  under their available width, no changes needed there.
-- Also, as part of "make it more readable everywhere": rebuilt the
-  Statistics dialog (`app/dialogs/statistics.py`) from a single
-  `messagebox.showinfo` text blob into a small labeled-rows Toplevel
-  (commit `2b5318f`), and loosened the Advanced dialog's inter-section
-  spacing from `pady=(0, 8)` to `(0, 14)` so its 10 stacked sections
-  are easier to tell apart now that most carry a corner badge (commit
-  `3fae872`).
-- Still not built/released — same owner instruction as above.
+**Real bugs found + fixed by the self-critique rounds (not just
+polish) — all verified against a real running Tk instance, never
+guessed, and a screenshot-based visual check was tried once and
+abandoned after it grabbed an unrelated foreground window on the real
+desktop instead of the intended dialog (deleted unread):**
 
-**Same-session, next round — owner asked "what else could be more
-readable" and to go through several layers of reflection myself.**
-Investigated with grep/read evidence (not guesses) and proposed 4
-options via AskUserQuestion; owner picked all 4:
+1. Transcribe tab's "quick options" row needed 983px but only had
+   928px on the shipped default 960px window — `pack(side="left")`
+   doesn't wrap, it clips silently. Fixed by splitting it into two
+   lines.
+2. The Advanced dialog's nav sidebar tipped one section into overflow
+   **at the dialog's own 1100px floor**, which a common 1366x768
+   laptop actually hits. Root cause (pre-dating this session, just
+   newly exposed): a hard-coded `wraplength=820` repeated 9x plus two
+   Labels with no wraplength at all. Fixed the wraplengths, not just
+   the symptom.
+3. The log-console red-highlight heuristic could have false-positived
+   on a routine line whose *filename* happened to contain "fail" or
+   "error" (e.g. `f"Saved {otr_path}"` for a file named
+   `my_failsafe_video.mp4`). Fixed with a word-boundary regex,
+   verified against 9 cases including that exact trap.
+4. The place()-based corner badge (`add_section_help`, now deleted)
+   had a **real, systematic collision bug**: 5 sections had a badge
+   sitting directly on top of real content, because it assumed a
+   section's top-right corner is always empty — true only when that
+   section's first row doesn't already reach the right edge. Root
+   cause fixed via `section_labelframe` (see above), not a
+   coordinate patch.
+5. The main App window, `AdvancedDialog`, and `TranscriptViewer` were
+   all resizable with **no `minsize()`** — nothing stopped shrinking
+   any of them below what every fix above assumed. Added one to all
+   three, screen-aware for `AdvancedDialog`. Verified end-to-end with
+   the screen size itself simulated as 1366x768.
+6. `app/widgets/platform.py`'s `open_folder()` had the same raw-
+   exception-dump problem as the 8 spots fixed in point "What changed"
+   above — missed by the original single-line grep, found by
+   re-running it in multiline mode.
 
-1. **Friendly errors** — 8 spots (`app.py`, `transcript_viewer.py`,
-   `integrations_service.py`, `hardware_wizard.py`) showed a raw
-   Python exception string as the entire dialog body. New
-   `app/widgets/error_dialog.show_error()` leads with a plain
-   sentence, tucks the raw detail behind a collapsible "Show details"
-   (still copyable). One spot (`app.py` Convert-transcript,
-   `ConvertError`) was left alone — its message was already
-   human-authored and specific, not a raw traceback.
-2. **Log console colour + theme** — `app/widgets/console.py` was a
-   fixed black/lime terminal regardless of the app's own Light/Dark
-   toggle, and every line was the same colour (a real failure read
-   identically to routine status text). Added `apply_console_theme()`
-   (wired into `App.apply_theme()`) and `insert_log_line()`, which
-   tags a line red when it matches the "could not / fail / error"
-   wording every existing failure-path `self.log(...)` call already
-   uses — verified against the real call sites first, so nothing
-   needed to change at any of the ~20 existing call sites.
-3. **Advanced dialog jump-to-section sidebar** — 10 stacked
-   `LabelFrame`s behind one long scroll had no way to jump to one.
-   Added a "Jump to" list on the left; verified numerically (not
-   visually) against a real running dialog that every link lands on
-   its target, including that the last few correctly clamp to the
-   bottom of the scroll region instead of landing somewhere invalid.
-4. **Two title renames** — `"AI Layer (Phase 2 + 3)"` → `"AI Layer
-   (optional)"` (internal phase numbering has no business being
-   user-facing) and `"Voice Activity Detection"` → `"... (skip
-   silence)"` so the title alone explains the purpose.
+Two further rounds (a `ruff --select F401,F811,F821` sweep, confirmed
+all pre-existing; a fresh full re-read of the 3 new files) turned up
+nothing new beyond one dead-code deletion (`add_section_help` itself,
+once nothing called it anymore) — treated as convergence.
 
-Verified the same way as before: real `pyright` (0/0/0), full hermetic
-suite green, `gui.py` launch clean, plus the existing
-`test_dialogs_open_and_close` smoke test (which opens a real
-`AdvancedDialog`) still passes with the new sidebar. Still not
-built/released — same owner instruction.
-
-**Same-session, third round — owner asked to critique this round too.**
-This one found a real, reproducible bug (not just polish):
-
-- The nav sidebar (170px) tipped the Advanced dialog's "Whisper
-  extras" section into a genuine overflow **at the dialog's own
-  hard-coded 1100px floor** — which a common 1366x768 laptop actually
-  hits (`screen_w*0.75=1024` clamps up to the 1100 floor there), not
-  an exotic edge case. Forced the dialog to exactly 1100px against a
-  real running instance and measured `winfo_reqwidth()` to confirm:
-  1133px needed vs 918px available. Isolated the cause precisely by
-  removing the new hover icons in-memory and re-measuring — they
-  contributed ~0px; the real driver was two pre-existing
-  no-wraplength explanatory Labels plus a hard-coded `wraplength=820`
-  repeated 9x across the Google Cloud / Cloud STT / NVIDIA frames
-  (all pre-dating this session, just newly exposed by the sidebar
-  eating 170px). Fixed the actual wraplengths (820→680, plus two
-  missing wraplengths added), shrank the sidebar a bit more, and
-  shortened one long button label. Re-verified after each change:
-  all 10 sections now fit with real margin at the 1100px floor.
-- Matched the nav sidebar's link colour to the dialog's own
-  pre-existing link colour (was accidentally using the tooltip-icon
-  blue instead).
-- The log-console colour heuristic (`could not`/`fail`/`error`
-  substring) could have false-positived on a routine line that merely
-  *mentions* a filename containing one of those words (e.g. `f"Saved
-  {otr_path}"` where the user named their source
-  `my_failsafe_video.mp4`). Tightened to a word-boundary regex on the
-  exact forms the real call sites use, verified against 9 cases
-  including that exact trap.
-- Added a scrollbar to the error dialog's collapsible detail box
-  (defensive — current call sites only ever pass a short `str(e)`,
-  but nothing should silently truncate a longer one later).
-
-Verified with real running Tk instances each time (not visual
-guessing): forced-width measurements, an in-memory icon-removal
-isolation test, all 10 nav-jump targets re-checked land in view, the
-9 console false-positive/true-positive cases, and the error dialog's
-toggle actually growing the window. Still not built/released.
-
-**Same-session, fourth round — owner asked to loop the critique until
-no more issues turn up.** This round's headline finding: the earlier
-place()-based corner badges (`add_section_help`) had a real,
-systematic collision bug, not just a width problem.
-
-- Wrote a pixel-level collision checker (compares every badge's actual
-  rendered bounding box against every sibling's, across all 5 tabs +
-  the Advanced dialog at 2 sizes) instead of guessing. Found 5 real
-  overlaps: the Transcribe hero drop-zone's title label, the Download
-  tab's time-range slider, the Server tab's Options row, and the
-  Advanced dialog's VAD + Whisper-extras sections all had a badge
-  sitting on top of real content. The root cause: `add_section_help`
-  assumed the top-right corner is always empty, which is only true
-  when a section's first row doesn't already reach the right edge.
-- Fixed at the root: `app/widgets/tooltip.section_labelframe()` puts
-  the help icon in the LabelFrame's own title bar via `labelwidget=`
-  instead of floating a badge over the content — Tk keeps that
-  structurally separate from grid/pack content, so this bug class
-  can't recur. Migrated all 11 real sections to it; the one true
-  exception (the drop-zone, which deliberately has no title) got its
-  icon moved inline next to the Browse button instead.
-- Also found (same audit): the main App window, `AdvancedDialog`, and
-  `TranscriptViewer` were all resizable with **no `minsize()`** —
-  nothing stopped a user, a stale saved `window_geometry`, or a script
-  from shrinking any of them below the width every fix in this session
-  assumed held. Added a matching `minsize()` to all three (screen-aware
-  for `AdvancedDialog`, so it can't force a genuinely small screen's
-  window wider than it can display). Verified end-to-end with the
-  dialog's own screen-size calls monkey-patched to simulate a real
-  1366x768 laptop (not this dev machine's much wider display): it
-  opens at exactly the 1100px floor, every section fits, and trying to
-  shrink it further is correctly refused by Tk.
-- Also fixed a raw-exception dump the earlier error-message sweep
-  missed (`app/widgets/platform.py`'s `open_folder()`) — found by
-  re-running that search in multiline mode, since the original
-  single-line regex couldn't have caught this one anyway.
-
-Re-verified everything after each fix: pyright 0/0/0, full hermetic +
-smoke suite green, zero badge/content overlaps on a fresh sweep, nav
-jumps still land correctly post-migration. Still not built/released.
-
-**Same-session, fifth/sixth rounds — convergence check.** Two more
-passes looking for anything the above missed:
-
-- Round 5: `ruff --select F401,F811,F821` across every file touched
-  this session. 5 findings, all confirmed pre-existing (checked
-  against the original pre-session commit `389fae2` directly) — none
-  introduced this session, so left untouched (out of scope).
-- Round 6: fresh line-by-line re-read of `tooltip.py`, `error_dialog.py`,
-  `console.py`; grepped for any leftover structural assumption the
-  `section_labelframe` migration could have broken (`.winfo_children()`
-  iteration, `.cget("text")` assertions in tests — none found). Did
-  find that `add_section_help` was now dead code (zero callers anywhere
-  after the migration) — deleted it rather than keep a "might be
-  useful later" shim, per this project's own stated convention against
-  that. Also did an end-to-end open/close sweep of `TranscriptViewer`
-  (via its real `open_viewer` entry point), `HardwareWizard`, and
-  `Statistics` — all three open and close cleanly with no exception.
-
-Both rounds turned up nothing new beyond that one dead-code removal —
-treating this as convergence for now. Re-verified once more: pyright
-0/0/0, full hermetic + smoke suite green. Still not built/released.
+Verified throughout: `pyright` 0/0/0, full hermetic + smoke suite
+green, `gui.py` launches clean, zero badge/content overlaps on a full
+pixel-level sweep, all "Jump to" nav links land correctly.
 
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
-So the 6 commits above are source-only; no installer/exe was rebuilt
-and no `gh release` touched. Next session that *does* cut a release
-should fold this in (Setup-Standard + Portable + macOS, per the
-"Release assets must track every bug fix" rule below — this one is an
-exception only because the owner opted out of it for now).
+So all commits above are source-only; no installer/exe was rebuilt and
+no `gh release` touched. Next session that *does* cut a release should
+fold this in (Setup-Standard + Portable + macOS, per the "Release
+assets must track every bug fix" rule below — this one is an exception
+only because the owner opted out of it for now).
 
 ---
 
