@@ -20,6 +20,8 @@ from core.model_manager import (
 )
 from core.writers import supported_formats
 
+from app.widgets.tooltip import add_section_help, help_icon
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -311,6 +313,15 @@ class AdvancedDialog(tk.Toplevel):
         # VAD parameters
         vad = ttk.LabelFrame(body, text="Voice Activity Detection")
         vad.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            vad,
+            "Voice Activity Detection skips silent stretches so the model "
+            "only processes speech — faster, and avoids hallucinated text "
+            "on silence. Min silence: how long a gap must be to count as "
+            "silence. Threshold: how confident the detector must be that "
+            "audio is speech (lower = more sensitive). Speech pad: extra "
+            "padding kept around each detected speech chunk.",
+        )
         self._slider_row(vad, "Min silence (ms)", self._vad_min_silence, 100, 2000, 50, 0)
         self._slider_row(vad, "Threshold", self._vad_threshold, 0.1, 0.9, 0.05, 1, is_float=True)
         self._slider_row(vad, "Speech pad (ms)", self._vad_speech_pad, 0, 1000, 50, 2)
@@ -318,6 +329,13 @@ class AdvancedDialog(tk.Toplevel):
         # Output formats
         outputs = ttk.LabelFrame(body, text="Output formats")
         outputs.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            outputs,
+            "Which transcript file types to write for every transcription "
+            "(SRT/VTT subtitles, plain TXT, JSON with timestamps, etc.). "
+            "You can check more than one — all checked formats are "
+            "written for every job.",
+        )
         for i, name in enumerate(supported_formats()):
             ttk.Checkbutton(
                 outputs,
@@ -328,6 +346,13 @@ class AdvancedDialog(tk.Toplevel):
         # Whisper extras
         extras = ttk.LabelFrame(body, text="Whisper extras")
         extras.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            extras,
+            "Model choice + lower-level tuning for the offline/local "
+            "engines: which weights to run, how much to batch on a GPU, "
+            "prompt/hotword biasing, the backend engine, word-level "
+            "timing refinement, and output naming.",
+        )
 
         # Model picker (v0.8) — slug → catalog entry. The catalog is the
         # MERGED config catalog (built-in MODEL_REGISTRY + any models the
@@ -370,14 +395,32 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Spinbox(extras, from_=1, to=64, increment=1, textvariable=self._batch_size, width=6).grid(
             row=1, column=1, sticky="w", padx=8, pady=4
         )
+        help_icon(
+            extras,
+            "How many audio chunks the GPU processes at once. Higher can "
+            "be faster but uses more VRAM; only affects CUDA runs, CPU "
+            "ignores this.",
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
         ttk.Label(extras, text="Initial prompt").grid(row=2, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(extras, textvariable=self._initial_prompt, width=42).grid(
             row=2, column=1, sticky="ew", padx=8, pady=4
         )
+        help_icon(
+            extras,
+            "Optional text fed to the model as context before it starts — "
+            "e.g. proper nouns or a punctuation/formatting style to "
+            "nudge it toward. Leave blank for none.",
+        ).grid(row=2, column=2, sticky="w", padx=8, pady=4)
         ttk.Label(extras, text="Hotwords (comma-separated)").grid(row=3, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(extras, textvariable=self._hotwords, width=42).grid(
             row=3, column=1, sticky="ew", padx=8, pady=4
         )
+        help_icon(
+            extras,
+            "Words or short phrases (names, jargon, acronyms) the model "
+            "should be biased toward recognizing correctly when it hears "
+            "something close to them.",
+        ).grid(row=3, column=2, sticky="w", padx=8, pady=4)
         ttk.Label(extras, text="Backend").grid(row=4, column=0, sticky="w", padx=8, pady=4)
         backend_combo = ttk.Combobox(
             extras,
@@ -391,6 +434,13 @@ class AdvancedDialog(tk.Toplevel):
             extras, text="Download whisper.cpp model...",
             command=self._download_whisper_cpp_model,
         ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
+        help_icon(
+            extras,
+            "Which engine runs the offline model. Faster-Whisper is the "
+            "default; whisper.cpp helps on low-end CPUs; the cloud/NVIDIA "
+            "options need their own setup further down this dialog. Same "
+            "picker as the Engine dropdown on the Transcribe tab.",
+        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=4)
 
         ttk.Label(extras, text="Word alignment").grid(row=5, column=0, sticky="w", padx=8, pady=4)
         ttk.Combobox(
@@ -412,6 +462,13 @@ class AdvancedDialog(tk.Toplevel):
             text="Flag likely hallucinations (repetition + BoH heuristics)",
             variable=self._hallucination_detect,
         ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            extras,
+            "Marks segments that look like Whisper's known failure modes "
+            "on silence/noise: repeated phrases, or text matching common "
+            "'beginning of hallucination' (BoH) patterns. Flags them in "
+            "the output rather than removing them.",
+        ).grid(row=6, column=3, sticky="w", padx=(0, 8), pady=4)
 
         ttk.Label(extras, text="Hardware").grid(row=7, column=0, sticky="w", padx=8, pady=4)
         ttk.Button(
@@ -428,6 +485,12 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Entry(extras, textvariable=self._filename_template, width=42).grid(
             row=8, column=1, columnspan=2, sticky="ew", padx=8, pady=4
         )
+        help_icon(
+            extras,
+            "Pattern used to name each output file. Mix the tokens below "
+            "with literal text; the default {base}.{ext} just keeps the "
+            "source filename with the new extension.",
+        ).grid(row=8, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Label(
             extras,
             text="Tokens: {base} {ext} {lang} {date} {speaker_count}",
@@ -438,6 +501,13 @@ class AdvancedDialog(tk.Toplevel):
         # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
         ai = ttk.LabelFrame(body, text="AI Layer (Phase 2 + 3)")
         ai.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            ai,
+            "Optional local-AI extras layered on top of the transcript: a "
+            "small offline LLM for summaries/chapter titles/Q&A, noise "
+            "cleanup before transcribing, and cross-file speaker "
+            "recognition. All opt-in and run on this machine.",
+        )
         ttk.Checkbutton(
             ai, text="Enable local LLM (download Qwen2.5-1.5B ~1 GB on first use)",
             variable=self._ai_enabled,
@@ -454,6 +524,12 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Pre-process noisy audio with Demucs vocals separation",
             variable=self._demucs_enabled,
         ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            ai,
+            "Demucs isolates vocals from background music/noise before "
+            "transcribing. Can improve accuracy on noisy recordings; "
+            "adds processing time.",
+        ).grid(row=2, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Checkbutton(
             ai, text="Generate auto-chapter markers (writes <name>.chapters.json)",
             variable=self._auto_chapters_enabled,
@@ -462,6 +538,12 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
             variable=self._voiceprint_enabled,
         ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            ai,
+            "Matches speakers across different files against voice "
+            "profiles you've enrolled, so e.g. 'SPEAKER_00' becomes the "
+            "person's actual name instead of a generic label.",
+        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=4)
 
         self._build_gcloud_frame(body)
 
@@ -589,6 +671,12 @@ class AdvancedDialog(tk.Toplevel):
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
         watch.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            watch,
+            "Automatically queues any new audio/video file dropped into "
+            "this folder for transcription, using your current Transcribe "
+            "settings — no need to open the app and browse for it.",
+        )
         ttk.Checkbutton(
             watch, text="Auto-transcribe new files dropped here",
             variable=self._watched_folder_enabled,
@@ -606,6 +694,12 @@ class AdvancedDialog(tk.Toplevel):
         # Tray + telemetry
         misc = ttk.LabelFrame(body, text="App behaviour")
         misc.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            misc,
+            "General app behaviour: whether closing the window minimises "
+            "to the system tray instead of exiting, and whether anonymous "
+            "usage statistics (no audio or transcript content) are sent.",
+        )
         tray_check = ttk.Checkbutton(
             misc, text="Minimise to system tray instead of exit",
             variable=self._minimise_to_tray,
@@ -624,14 +718,27 @@ class AdvancedDialog(tk.Toplevel):
         # SponsorBlock + auto-transcribe (Phase 3a)
         download = ttk.LabelFrame(body, text="Downloads (yt-dlp)")
         download.pack(fill="x", pady=(0, 8))
+        add_section_help(
+            download,
+            "Options for video downloads (Download Videos tab): whether a "
+            "download is auto-queued for transcription, which SponsorBlock "
+            "segments get cut, and browser cookies for login-walled sites.",
+        )
         ttk.Checkbutton(
             download,
             text="Transcribe after download",
             variable=self._auto_transcribe,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         ttk.Label(download, text="SponsorBlock — remove these segments:").grid(
-            row=1, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 4)
+            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4)
         )
+        help_icon(
+            download,
+            "SponsorBlock is a community-maintained database of "
+            "skippable segments (ads, intros, self-promo, etc.) for the "
+            "exact video. Checked categories are cut from the downloaded "
+            "file automatically when the site has data for it.",
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=(8, 4))
         for i, (cat, label) in enumerate(_SPONSORBLOCK_CATEGORIES):
             ttk.Checkbutton(download, text=label, variable=self._sb_vars[cat]).grid(
                 row=2 + i // 3, column=i % 3, sticky="w", padx=8, pady=2
