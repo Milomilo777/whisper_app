@@ -185,6 +185,13 @@ def friendly_load_error(exc: Any) -> str:
     """Turn a model-load exception into a clear, user-facing message."""
     msg = str(exc)
     low = msg.lower()
+    if "does not recognize this architecture" in low:
+        return (
+            "This model needs a newer 'transformers' package than the one "
+            "installed (e.g. nvidia/nemotron-3.5-asr-streaming-0.6b needs "
+            "transformers >= 5.14). Update it: pip install -U transformers "
+            f"— then try again. [{msg[:200]}]"
+        )
     if "librosa" in low:
         return (
             "The local NVIDIA ASR model needs the 'librosa' package, which "
