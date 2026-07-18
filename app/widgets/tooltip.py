@@ -18,21 +18,28 @@ TextOrGetter = Union[str, Callable[[], str]]
 _BG = "#ffffe0"
 _FG = "#000000"
 _WRAP = 340
+# Standard tooltip grace period (Windows uses ~400-500 ms): sweeping the
+# mouse across the UI shouldn't flash a popup at every widget it crosses.
+_DELAY_MS = 450
 # "question_arrow" is one of Tk's cross-platform standard cursor names
 # (X11 cursor font, mapped by Tk on Windows/macOS too); guarded anyway
 # since not every Tk build ships every named cursor.
 _CURSOR = "question_arrow"
 
 
-def bind_tooltip(widget: tk.Widget, text: TextOrGetter, *, wraplength: int = _WRAP) -> None:
+def bind_tooltip(
+    widget: tk.Widget, text: TextOrGetter, *,
+    wraplength: int = _WRAP, delay_ms: int = _DELAY_MS,
+) -> None:
     """Show a classic yellow tooltip near *widget* on hover.
 
     *text* may be a plain string or a zero-arg callable returning the
     current text, for tooltips whose content changes at runtime (e.g. a
-    status badge). The popup is a borderless Toplevel, destroyed on
-    <Leave> or on any click so it never lingers.
+    status badge). The popup is a borderless Toplevel, shown after a
+    short grace delay, destroyed on <Leave> or on any click so it never
+    lingers.
     """
-    state: dict[str, tk.Toplevel | None] = {"tip": None}
+    state: dict[str, Any] = {"tip": None, "after": None}
 
     def _resolve() -> str:
         try:
@@ -40,7 +47,26 @@ def bind_tooltip(widget: tk.Widget, text: TextOrGetter, *, wraplength: int = _WR
         except Exception:  # noqa: BLE001
             return ""
 
-    def _show(_event: Any) -> None:
+    def _position(tip: tk.Toplevel) -> tuple[int, int]:
+        x = widget.winfo_rootx() + 12
+        y = widget.winfo_rooty() + widget.winfo_height() + 4
+        # Keep the popup on-screen near the right/bottom edges — but only
+        # when the widget itself is on the primary monitor:
+        # winfo_screenwidth/height describe the primary display only, so
+        # "clamping" a tooltip for a window sitting on a secondary monitor
+        # would fling it onto the wrong screen.
+        screen_w = widget.winfo_screenwidth()
+        screen_h = widget.winfo_screenheight()
+        if 0 <= widget.winfo_rootx() < screen_w and 0 <= widget.winfo_rooty() < screen_h:
+            if x + tip.winfo_reqwidth() > screen_w:
+                x = max(screen_w - tip.winfo_reqwidth() - 4, 0)
+            if y + tip.winfo_reqheight() > screen_h:
+                # Flip above the widget rather than run off the bottom.
+                y = max(widget.winfo_rooty() - tip.winfo_reqheight() - 4, 0)
+        return x, y
+
+    def _show() -> None:
+        state["after"] = None
         if state["tip"] is not None:
             return
         msg = _resolve()
@@ -48,25 +74,44 @@ def bind_tooltip(widget: tk.Widget, text: TextOrGetter, *, wraplength: int = _WR
             return
         try:
             tip = tk.Toplevel(widget)
+            # Withdraw until sized + positioned, so it can't flash at the
+            # window manager's default spot before wm_geometry lands.
+            tip.wm_withdraw()
             tip.wm_overrideredirect(True)
             try:
                 tip.wm_attributes("-topmost", True)
             except tk.TclError:
                 pass
-            x = widget.winfo_rootx() + 12
-            y = widget.winfo_rooty() + widget.winfo_height() + 4
-            tip.wm_geometry(f"+{x}+{y}")
             tk.Label(
                 tip, text=msg, justify="left",
                 background=_BG, foreground=_FG,
                 relief="solid", borderwidth=1, wraplength=wraplength,
                 padx=6, pady=4,
             ).pack()
+            tip.update_idletasks()
+            x, y = _position(tip)
+            tip.wm_geometry(f"+{x}+{y}")
+            tip.wm_deiconify()
             state["tip"] = tip
         except Exception:  # noqa: BLE001
             state["tip"] = None
 
+    def _schedule(_event: Any) -> None:
+        if state["tip"] is not None or state["after"] is not None:
+            return
+        try:
+            state["after"] = widget.after(delay_ms, _show)
+        except tk.TclError:
+            state["after"] = None
+
     def _hide(_event: Any) -> None:
+        after_id = state["after"]
+        state["after"] = None
+        if after_id is not None:
+            try:
+                widget.after_cancel(after_id)
+            except tk.TclError:
+                pass
         tip = state["tip"]
         state["tip"] = None
         if tip is not None:
@@ -75,12 +120,13 @@ def bind_tooltip(widget: tk.Widget, text: TextOrGetter, *, wraplength: int = _WR
             except Exception:  # noqa: BLE001
                 pass
 
-    widget.bind("<Enter>", _show, add="+")
+    widget.bind("<Enter>", _schedule, add="+")
     widget.bind("<Leave>", _hide, add="+")
     widget.bind("<ButtonPress>", _hide, add="+")
+    widget.bind("<Destroy>", _hide, add="+")
 
 
-def help_icon(parent: tk.Widget, text: TextOrGetter, *, wraplength: int = _WRAP) -> ttk.Label:
+def help_icon(parent: tk.Misc, text: TextOrGetter, *, wraplength: int = _WRAP) -> ttk.Label:
     """A small "ⓘ" label that shows *text* as a hover tooltip.
 
     Pack/grid the returned Label next to a control or a section's title.
@@ -95,7 +141,7 @@ def help_icon(parent: tk.Widget, text: TextOrGetter, *, wraplength: int = _WRAP)
 
 
 def section_labelframe(
-    parent: tk.Widget, title: str, help_text: str, *, wraplength: int = _WRAP, **kwargs: object,
+    parent: tk.Misc, title: str, help_text: str, *, wraplength: int = _WRAP, **kwargs: object,
 ) -> ttk.LabelFrame:
     """Build a ``ttk.LabelFrame`` whose title bar itself carries the hover
     help, via ``labelwidget=`` instead of the plain ``text=`` option.
