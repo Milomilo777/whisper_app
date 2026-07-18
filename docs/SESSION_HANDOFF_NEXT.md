@@ -47,6 +47,34 @@ placements were instead manually audited column-by-column (this is
 how one real overlap — the SponsorBlock row — was caught and fixed
 before commit); no further visual QA was done.
 
+**Same-session follow-up — owner asked for a self-critique pass, which
+found and fixed a real bug:**
+
+- Instead of guessing from a screenshot, re-verified layout by
+  instantiating the real `App`/`AdvancedDialog`/`TranscriptViewer`
+  headlessly and reading `winfo_reqwidth()`/`winfo_width()` directly —
+  no screen capture, no privacy risk, and it's exact instead of
+  eyeballed.
+- **Found:** the Transcribe tab's "quick options" row (Language +
+  Identify speakers + Per-word timestamps + Time range), after gaining
+  4 new hover icons, required 983px but the app's shipped default
+  960px window only gives it 928px. `pack(side="left")` doesn't wrap —
+  it clips silently, so on a fresh install some of that row (likely
+  the Time-range fields) would have rendered off-screen.
+  Fixed by splitting it into two stacked lines (verified back down to
+  661px required). See commit `b03796f`.
+- Checked the same risk on the Engine-picker row, both Video Tiling
+  option rows, and the transcript viewer's toolbar — all comfortably
+  under their available width, no changes needed there.
+- Also, as part of "make it more readable everywhere": rebuilt the
+  Statistics dialog (`app/dialogs/statistics.py`) from a single
+  `messagebox.showinfo` text blob into a small labeled-rows Toplevel
+  (commit `2b5318f`), and loosened the Advanced dialog's inter-section
+  spacing from `pady=(0, 8)` to `(0, 14)` so its 10 stacked sections
+  are easier to tell apart now that most carry a corner badge (commit
+  `3fae872`).
+- Still not built/released — same owner instruction as above.
+
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
 So the 6 commits above are source-only; no installer/exe was rebuilt
