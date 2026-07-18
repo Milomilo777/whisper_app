@@ -153,6 +153,47 @@ isolation test, all 10 nav-jump targets re-checked land in view, the
 9 console false-positive/true-positive cases, and the error dialog's
 toggle actually growing the window. Still not built/released.
 
+**Same-session, fourth round — owner asked to loop the critique until
+no more issues turn up.** This round's headline finding: the earlier
+place()-based corner badges (`add_section_help`) had a real,
+systematic collision bug, not just a width problem.
+
+- Wrote a pixel-level collision checker (compares every badge's actual
+  rendered bounding box against every sibling's, across all 5 tabs +
+  the Advanced dialog at 2 sizes) instead of guessing. Found 5 real
+  overlaps: the Transcribe hero drop-zone's title label, the Download
+  tab's time-range slider, the Server tab's Options row, and the
+  Advanced dialog's VAD + Whisper-extras sections all had a badge
+  sitting on top of real content. The root cause: `add_section_help`
+  assumed the top-right corner is always empty, which is only true
+  when a section's first row doesn't already reach the right edge.
+- Fixed at the root: `app/widgets/tooltip.section_labelframe()` puts
+  the help icon in the LabelFrame's own title bar via `labelwidget=`
+  instead of floating a badge over the content — Tk keeps that
+  structurally separate from grid/pack content, so this bug class
+  can't recur. Migrated all 11 real sections to it; the one true
+  exception (the drop-zone, which deliberately has no title) got its
+  icon moved inline next to the Browse button instead.
+- Also found (same audit): the main App window, `AdvancedDialog`, and
+  `TranscriptViewer` were all resizable with **no `minsize()`** —
+  nothing stopped a user, a stale saved `window_geometry`, or a script
+  from shrinking any of them below the width every fix in this session
+  assumed held. Added a matching `minsize()` to all three (screen-aware
+  for `AdvancedDialog`, so it can't force a genuinely small screen's
+  window wider than it can display). Verified end-to-end with the
+  dialog's own screen-size calls monkey-patched to simulate a real
+  1366x768 laptop (not this dev machine's much wider display): it
+  opens at exactly the 1100px floor, every section fits, and trying to
+  shrink it further is correctly refused by Tk.
+- Also fixed a raw-exception dump the earlier error-message sweep
+  missed (`app/widgets/platform.py`'s `open_folder()`) — found by
+  re-running that search in multiline mode, since the original
+  single-line regex couldn't have caught this one anyway.
+
+Re-verified everything after each fix: pyright 0/0/0, full hermetic +
+smoke suite green, zero badge/content overlaps on a fresh sweep, nav
+jumps still land correctly post-migration. Still not built/released.
+
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
 So the 6 commits above are source-only; no installer/exe was rebuilt
