@@ -36,6 +36,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Optional
 
+from app.widgets.tooltip import help_icon
+
 
 logger = logging.getLogger(__name__)
 
@@ -464,12 +466,25 @@ class TranscriptViewer(tk.Toplevel):
                    command=self._open_find_replace).pack(side="left", padx=(0, 4))
         ttk.Button(topbar, text="Remove fillers",
                    command=self._remove_fillers).pack(side="left", padx=(0, 4))
+        help_icon(
+            topbar,
+            "Deletes standalone filler words (um, uh, like, you know, ...) "
+            "from every segment's text. Only removes whole filler words, "
+            "not real content — review with Ctrl+Z / re-open if unsure.",
+        ).pack(side="left", padx=(0, 4))
         ttk.Button(topbar, text="Save changes  (Ctrl+S)",
                    command=self._save_changes).pack(side="left", padx=(0, 4))
 
         ttk.Button(topbar, text="Open JSON folder", command=self._open_json_folder).pack(
             side="right"
         )
+        help_icon(
+            topbar,
+            "Segment list colours: green/amber/red text is the model's "
+            "confidence (high/medium/low). A light-red row background "
+            "means the hallucination detector flagged that segment as "
+            "suspect. Yellow highlight marks the segment now playing.",
+        ).pack(side="right", padx=(0, 12))
 
         # Body: left = segment list, right = media controls
         body = ttk.PanedWindow(outer, orient="horizontal")
