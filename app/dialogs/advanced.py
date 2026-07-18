@@ -260,8 +260,8 @@ class AdvancedDialog(tk.Toplevel):
         # through hunting for one setting; each entry here jumps the
         # canvas straight to that section. Populated as each section is
         # built below (self._nav_targets), wired up once they all exist.
-        nav = ttk.Frame(content_container, width=160)
-        nav.pack(side="left", fill="y", padx=(0, 10))
+        nav = ttk.Frame(content_container, width=132)
+        nav.pack(side="left", fill="y", padx=(0, 6))
         nav.pack_propagate(False)
         ttk.Label(
             nav, text="Jump to", font=("TkDefaultFont", 9, "bold"),
@@ -446,7 +446,7 @@ class AdvancedDialog(tk.Toplevel):
         )
         backend_combo.grid(row=4, column=1, sticky="ew", padx=8, pady=4)
         ttk.Button(
-            extras, text="Download whisper.cpp model...",
+            extras, text="Get whisper.cpp model...",
             command=self._download_whisper_cpp_model,
         ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
         help_icon(
@@ -468,7 +468,7 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Label(
             extras,
             text="stable_ts refines word timestamps via DTW (~10-30% slower).",
-            foreground="#666",
+            foreground="#666", wraplength=170, justify="left",
         ).grid(row=5, column=2, sticky="w", padx=8, pady=4)
 
         # Hallucination detector toggle (v0.8) + Hardware re-detect.
@@ -493,7 +493,7 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Label(
             extras,
             text="Probes CUDA / NPU / DirectML and picks the fastest tier.",
-            foreground="#666",
+            foreground="#666", wraplength=170, justify="left",
         ).grid(row=7, column=2, sticky="w", padx=8, pady=4)
 
         ttk.Label(extras, text="Output filename template").grid(row=8, column=0, sticky="w", padx=8, pady=4)
@@ -581,7 +581,7 @@ class AdvancedDialog(tk.Toplevel):
                 "service. The default engines stay fully offline."
             ),
             foreground="#b00020",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
         ttk.Label(cloud, text="Google API key").grid(
@@ -597,7 +597,7 @@ class AdvancedDialog(tk.Toplevel):
             cloud,
             textvariable=self._cloud_test_result,
             foreground="#666",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
         ttk.Label(
@@ -627,7 +627,7 @@ class AdvancedDialog(tk.Toplevel):
                 "from an API key — check your usage in Google's billing "
                 "console:"
             ),
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
         link = ttk.Label(
@@ -659,7 +659,7 @@ class AdvancedDialog(tk.Toplevel):
                 "the NeMo toolkit and is not loadable here.)"
             ),
             foreground="#444",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
         ttk.Label(nvidia, text="Model (HF id or local path)").grid(
@@ -683,7 +683,7 @@ class AdvancedDialog(tk.Toplevel):
                 "Installs transformers/torch/librosa and downloads the model "
                 "ahead of time, instead of waiting on the first transcription."
             ),
-            foreground="#666",
+            foreground="#666", wraplength=500, justify="left",
         ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 8))
         nvidia.columnconfigure(1, weight=1)
 
@@ -805,8 +805,8 @@ class AdvancedDialog(tk.Toplevel):
 
         for label, frame in self._nav_targets:
             link = ttk.Label(
-                nav, text=label, foreground="#3a7bd5", cursor="hand2",
-                wraplength=150, justify="left",
+                nav, text=label, foreground="#1a73e8", cursor="hand2",
+                wraplength=122, justify="left",
             )
             link.pack(anchor="w", pady=2, fill="x")
             link.bind("<Button-1>", lambda _e, f=frame: _jump(f))
@@ -837,7 +837,7 @@ class AdvancedDialog(tk.Toplevel):
                 "Gemini option above). New Google Cloud customers get 60 free "
                 "minutes every month plus a $300 / 90-day credit."
             ),
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 8))
 
@@ -871,7 +871,7 @@ class AdvancedDialog(tk.Toplevel):
             gc,
             textvariable=self._gcloud_test_result,
             foreground="#666",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
@@ -890,7 +890,7 @@ class AdvancedDialog(tk.Toplevel):
                 "you own."
             ),
             foreground="#666",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 4))
         ttk.Label(gc, text="Cloud Storage bucket:").grid(
@@ -912,7 +912,7 @@ class AdvancedDialog(tk.Toplevel):
         ttk.Label(
             gc,
             textvariable=self._gcloud_usage_text,
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=8, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 0))
         ttk.Label(
@@ -936,7 +936,7 @@ class AdvancedDialog(tk.Toplevel):
             gc,
             text="Cloud transcription uploads your audio to Google (it is not offline).",
             foreground="#b00020",
-            wraplength=820,
+            wraplength=680,
             justify="left",
         ).grid(row=11, column=0, columnspan=3, sticky="w", padx=8, pady=(4, 4))
 
