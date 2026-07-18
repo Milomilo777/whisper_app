@@ -619,7 +619,37 @@ class TranscriptionService:
                 # and, because we clear app.workers below, poll() stops and
                 # the loading modal's ready-routing would be dead forever.
                 self._release_pending_load(worker, success=False)
-                if not app.model_setup_running:
+                # A startup failure on an ALTERNATIVE engine (whisper.cpp /
+                # cloud / NVIDIA) cannot be fixed by downloading the Whisper
+                # model — that flow both hid the real error behind a generic
+                # "model load was cancelled" line AND force-opened a
+                # mandatory ~3 GB download modal for a model the selected
+                # engine never uses. Surface the engine's own error instead.
+                from core.backends import availability as _eng
+                engine = _eng.normalise_engine(
+                    app.app_config.get("transcribe_backend")
+                )
+                if engine != "faster_whisper":
+                    self.stop_all()
+                    app.workers = []
+                    detail = str(
+                        event.get("message") or "engine failed to start"
+                    )
+                    label = _eng.VALUE_TO_LABEL.get(engine, engine)
+                    try:
+                        from app.widgets.error_dialog import show_error
+                        show_error(
+                            app,
+                            "Transcription engine failed to start",
+                            f"The selected engine ({label}) could not "
+                            "start. Check its model/key settings in "
+                            "Advanced > Backend, or switch back to the "
+                            "default Faster-Whisper engine.",
+                            detail=detail,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif not app.model_setup_running:
                     app.log("Existing model failed to load. Starting required download.")
                     self.stop_all()
                     app.workers = []
