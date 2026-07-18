@@ -1,6 +1,7 @@
 """The Text widget at the bottom of the App (the log feed)."""
 from __future__ import annotations
 
+import re
 import sys
 import tkinter as tk
 
@@ -13,15 +14,17 @@ _LIGHT = {"bg": "#f5f5f5", "fg": "#1a6b1a", "error_fg": "#c62828"}
 
 # Every existing failure-path self.log(...) call in the app already
 # reads "Could not ...", "... failed", or "... error" (checked against
-# the real call sites, not guessed) — so a plain substring match reliably
-# flags the lines a user actually wants to notice, with no per-call-site
-# changes needed anywhere else in the codebase.
-_ERROR_KEYWORDS = ("could not", "fail", "error")
+# the real call sites, not guessed). Matched as whole words, not a bare
+# substring: self.log(...) calls routinely interpolate a user's own
+# filename into an otherwise-routine success line (e.g. "Saved
+# {otr_path}"), and a bare "fail"/"error" substring would wrongly light
+# up a line just because someone's file was named e.g.
+# "my_failsafe_video.mp4" or "errorlog_notes.srt".
+_ERROR_PATTERN = re.compile(r"could not|\bfailed\b|\berror\b", re.IGNORECASE)
 
 
 def _is_error_line(msg: str) -> bool:
-    low = msg.lower()
-    return any(k in low for k in _ERROR_KEYWORDS)
+    return _ERROR_PATTERN.search(msg) is not None
 
 
 def build_console(parent: tk.Misc, height: int = 8, theme: str = "dark") -> tk.Text:

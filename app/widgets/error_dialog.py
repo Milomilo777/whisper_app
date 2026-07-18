@@ -27,9 +27,19 @@ def show_error(
     if detail:
         toggle_row = ttk.Frame(body)
         toggle_row.pack(fill="x", pady=(10, 0))
-        text_box = tk.Text(body, height=5, width=54, wrap="word")
+
+        # A scrollbar in case ``detail`` is ever longer than the 5 visible
+        # lines (today every call site passes only str(e) — normally a
+        # short one-liner — but nothing here should silently hide part of
+        # the text if that ever changes).
+        detail_box = ttk.Frame(body)
+        text_box = tk.Text(detail_box, height=5, width=54, wrap="word")
+        detail_scroll = ttk.Scrollbar(detail_box, orient="vertical", command=text_box.yview)
+        text_box.configure(yscrollcommand=detail_scroll.set)
         text_box.insert("1.0", detail)
         text_box.configure(state="disabled")
+        text_box.pack(side="left", fill="both", expand=True)
+        detail_scroll.pack(side="right", fill="y")
         state = {"shown": False}
 
         def _copy_detail() -> None:
@@ -41,10 +51,10 @@ def show_error(
 
         def _toggle() -> None:
             if state["shown"]:
-                text_box.pack_forget()
+                detail_box.pack_forget()
                 toggle_btn.configure(text="Show details ▸")
             else:
-                text_box.pack(fill="both", expand=True, pady=(6, 0))
+                detail_box.pack(fill="both", expand=True, pady=(6, 0))
                 toggle_btn.configure(text="Hide details ▾")
             state["shown"] = not state["shown"]
 
