@@ -256,6 +256,18 @@ class AdvancedDialog(tk.Toplevel):
         content_container = ttk.Frame(main)
         content_container.pack(fill="both", expand=True)
 
+        # Quick-nav sidebar — ten stacked sections is a lot to scroll
+        # through hunting for one setting; each entry here jumps the
+        # canvas straight to that section. Populated as each section is
+        # built below (self._nav_targets), wired up once they all exist.
+        nav = ttk.Frame(content_container, width=160)
+        nav.pack(side="left", fill="y", padx=(0, 10))
+        nav.pack_propagate(False)
+        ttk.Label(
+            nav, text="Jump to", font=("TkDefaultFont", 9, "bold"),
+        ).pack(anchor="w", pady=(0, 6))
+        self._nav_targets: list[tuple[str, ttk.LabelFrame]] = []
+
         canvas = tk.Canvas(content_container, highlightthickness=0)
         # Keep a handle so _teardown_mousewheel can drop the global
         # bind_all on close (the <Leave> unbind only fires while the dialog
@@ -311,8 +323,9 @@ class AdvancedDialog(tk.Toplevel):
         canvas.bind("<Leave>", _unbind_mousewheel)
 
         # VAD parameters
-        vad = ttk.LabelFrame(body, text="Voice Activity Detection")
+        vad = ttk.LabelFrame(body, text="Voice Activity Detection (skip silence)")
         vad.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Voice Activity Detection", vad))
         add_section_help(
             vad,
             "Voice Activity Detection skips silent stretches so the model "
@@ -329,6 +342,7 @@ class AdvancedDialog(tk.Toplevel):
         # Output formats
         outputs = ttk.LabelFrame(body, text="Output formats")
         outputs.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Output formats", outputs))
         add_section_help(
             outputs,
             "Which transcript file types to write for every transcription "
@@ -346,6 +360,7 @@ class AdvancedDialog(tk.Toplevel):
         # Whisper extras
         extras = ttk.LabelFrame(body, text="Whisper extras")
         extras.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Whisper extras", extras))
         add_section_help(
             extras,
             "Model choice + lower-level tuning for the offline/local "
@@ -499,8 +514,9 @@ class AdvancedDialog(tk.Toplevel):
         extras.columnconfigure(1, weight=1)
 
         # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
-        ai = ttk.LabelFrame(body, text="AI Layer (Phase 2 + 3)")
+        ai = ttk.LabelFrame(body, text="AI Layer (optional)")
         ai.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("AI Layer", ai))
         add_section_help(
             ai,
             "Optional local-AI extras layered on top of the transcript: a "
@@ -545,7 +561,8 @@ class AdvancedDialog(tk.Toplevel):
             "person's actual name instead of a generic label.",
         ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=4)
 
-        self._build_gcloud_frame(body)
+        gc_frame = self._build_gcloud_frame(body)
+        self._nav_targets.append(("Google Cloud STT", gc_frame))
 
         # Cloud Speech-to-Text (Google) — OPTIONAL, uploads audio.
         # Placed after the Google Cloud Speech-to-Text section: the Gemini
@@ -554,6 +571,7 @@ class AdvancedDialog(tk.Toplevel):
             body, text="Cloud Speech-to-Text (Google) — optional, uploads audio"
         )
         cloud.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Cloud STT (Gemini)", cloud))
         ttk.Label(
             cloud,
             text=(
@@ -628,6 +646,7 @@ class AdvancedDialog(tk.Toplevel):
             text="NVIDIA Parakeet / FastConformer — local, runs offline",
         )
         nvidia.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("NVIDIA Parakeet", nvidia))
         ttk.Label(
             nvidia,
             text=(
@@ -671,6 +690,7 @@ class AdvancedDialog(tk.Toplevel):
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
         watch.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Watched folder", watch))
         add_section_help(
             watch,
             "Automatically queues any new audio/video file dropped into "
@@ -694,6 +714,7 @@ class AdvancedDialog(tk.Toplevel):
         # Tray + telemetry
         misc = ttk.LabelFrame(body, text="App behaviour")
         misc.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("App behaviour", misc))
         add_section_help(
             misc,
             "General app behaviour: whether closing the window minimises "
@@ -718,6 +739,7 @@ class AdvancedDialog(tk.Toplevel):
         # SponsorBlock + auto-transcribe (Phase 3a)
         download = ttk.LabelFrame(body, text="Downloads (yt-dlp)")
         download.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Downloads (yt-dlp)", download))
         add_section_help(
             download,
             "Options for video downloads (Download Videos tab): whether a "
@@ -755,12 +777,41 @@ class AdvancedDialog(tk.Toplevel):
                     "chromium", "opera", "vivaldi"],
         ).grid(row=7, column=0, sticky="w", padx=8, pady=(0, 4))
 
+        self._populate_nav_sidebar(nav, canvas, body)
+
         buttons = ttk.Frame(main)
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Cancel", command=self._on_close).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save_and_close).pack(side="right")
 
-    def _build_gcloud_frame(self, body) -> None:
+    def _populate_nav_sidebar(
+        self, nav: "ttk.Frame", canvas: "tk.Canvas", body: "ttk.Frame",
+    ) -> None:
+        """Wire up the "Jump to" links once every section frame exists.
+
+        Each link scrolls the canvas so the target section's top edge
+        lines up with the canvas's own top. ``frame.winfo_y()`` is the
+        target's pixel offset relative to its parent (``body``, the
+        scrollable content) — fixed regardless of the current scroll
+        position, unlike a screen-relative coordinate — divided by
+        ``body``'s total height gives the ``yview_moveto`` fraction
+        directly. Needs ``update_idletasks`` first so both heights have
+        settled from layout instead of reading stale/zero values.
+        """
+        def _jump(frame: "ttk.LabelFrame") -> None:
+            self.update_idletasks()
+            total = max(body.winfo_height(), 1)
+            canvas.yview_moveto(max(0.0, min(1.0, frame.winfo_y() / total)))
+
+        for label, frame in self._nav_targets:
+            link = ttk.Label(
+                nav, text=label, foreground="#3a7bd5", cursor="hand2",
+                wraplength=150, justify="left",
+            )
+            link.pack(anchor="w", pady=2, fill="x")
+            link.bind("<Button-1>", lambda _e, f=frame: _jump(f))
+
+    def _build_gcloud_frame(self, body) -> ttk.LabelFrame:
         """Build the Google Cloud Speech-to-Text (service-account) frame.
 
         Kept separate from the Gemini "paste a key" frame above because the
@@ -894,6 +945,8 @@ class AdvancedDialog(tk.Toplevel):
         # Initialise the dynamic bits (bucket enable/disable + usage label).
         self._refresh_gcloud_dynamic()
         self._refresh_gcloud_usage()
+
+        return gc
 
     def _slider_row(self, parent, label: str, var, lo, hi, _step, row: int, *, is_float: bool = False):
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=4)
