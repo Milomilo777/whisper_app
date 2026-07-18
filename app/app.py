@@ -1686,7 +1686,11 @@ class App(tk.Tk):
                     st = _eng.engine_status(value, cfg_snapshot, deep=True)
                 except Exception as e:  # noqa: BLE001
                     st = _eng.EngineStatus(value, False, str(e) or "probe failed")
-                self.after(0, lambda: self._apply_engine_status(value, st))
+                # post_to_main, NOT self.after: this runs on a daemon
+                # thread, and off-thread after() raises on Python 3.14.
+                self.post_to_main(
+                    lambda: self._apply_engine_status(value, st)
+                )
 
             threading.Thread(target=_probe, daemon=True).start()
         except Exception:  # noqa: BLE001

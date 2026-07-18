@@ -77,10 +77,11 @@ def _bare_app(App, *, engine_label: str, backend: str):
     a.engine_status_var = _Var("")
     a.engine_status_label = None
     # _refresh_engine_status now probes on a background thread and marshals
-    # the result back via self.after — run callbacks inline (synchronously,
-    # on the same thread) so the test can assert on the final state without
-    # a real Tk event loop.
+    # the result back via self.post_to_main — run callbacks inline
+    # (synchronously, on the same thread) so the test can assert on the
+    # final state without a real Tk event loop.
     a.after = lambda _ms, fn: fn()
+    a.post_to_main = lambda fn: fn()
     return a
 
 
