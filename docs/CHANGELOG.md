@@ -74,6 +74,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   needs `transformers >= 5.14`; older versions failed with a generic
   message. Verified end-to-end: with transformers 5.14.1 that model loads
   and transcribes correctly through the GUI.
+- **Usage-stats rows claimed the Whisper model name for alternative-engine
+  runs** (2026-07-18) — an NVIDIA/cloud/whisper.cpp transcription posted
+  e.g. "faster-whisper-large-v3" as its model. The payload now sends the
+  backend name, plus the concrete HF model id for `nvidia_asr`.
+- **macOS dmg build scripts now arch-suffix the output filename**
+  (2026-07-18) — `builddmg.command` / `compileall-whisper-mac.sh` derive
+  x64/arm64 from `uname -m`, so a single-arch build can no longer ship
+  under an arch-less (or "universal") name.
 - **Usage-stats `word_count` was 0 whenever "json" wasn't among the
   chosen output formats** — the payload builder itself was correct, but
   the caller only ever tried to recover the word count from a `.json`

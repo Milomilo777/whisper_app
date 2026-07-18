@@ -38,6 +38,19 @@ Outcomes (details in `docs/CHANGELOG.md` under 1.5.0 Fixed):
   the healthy worker mid-first-download (heartbeat now starts before
   load); the engine-status probe called `self.after()` off-thread.
 
+Bonus finds in the follow-up hunt (also fixed): usage-stats rows
+claimed the Whisper model name for alt-engine runs (now the backend
+name + HF id); the alt-engine error dialog stacked once per restart
+attempt (debounced); the macOS dmg build scripts now arch-suffix the
+output name themselves (x64/arm64) so a single-arch build can never
+ship arch-less again.
+
+Known minor gap, deliberately not changed: the HEADLESS (watched-
+folder / crash-resume) ready wait is still 120 s on Windows, so an
+alternative engine's very first multi-GB model download can abort a
+headless enqueue (the interactive GUI path is unaffected — its modal
+waits). Revisit only if someone actually hits it.
+
 ---
 
 ## ⭐ Fragility hunt round 2 (2026-07-18, later) — LAN-page HTML injection fixed
