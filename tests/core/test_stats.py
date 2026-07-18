@@ -178,3 +178,29 @@ def test_no_post_with_empty_payload(monkeypatch):
     monkeypatch.setattr(stats, "_post", lambda *a, **k: None)
     cfg = {"telemetry_opt_in": True, "stats_url": "https://example.com/s.php"}
     assert stats.post_stats_async(cfg, {}) is False
+
+
+# --- worker-side transcript stats (transcriber -> "done" event) -------------
+
+def test_record_transcript_stats_sets_task_fields():
+    from core.task import TranscriptionTask
+    from core.transcriber import _record_transcript_stats
+
+    task = TranscriptionTask("a.mp4")
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "one two"},
+        {"start": 2.0, "end": 5.5, "text": "three four five"},
+    ]
+    _record_transcript_stats(task, segments)
+    assert task.word_count == 5
+    assert task.audio_duration == 5.5
+
+
+def test_record_transcript_stats_empty_segments_leave_zeroes():
+    from core.task import TranscriptionTask
+    from core.transcriber import _record_transcript_stats
+
+    task = TranscriptionTask("a.mp4")
+    _record_transcript_stats(task, [])
+    assert task.word_count == 0
+    assert task.audio_duration == 0.0

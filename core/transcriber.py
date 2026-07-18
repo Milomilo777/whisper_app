@@ -524,6 +524,26 @@ def _segment_to_dict(seg: Any, want_words: bool) -> dict[str, Any]:
     return payload
 
 
+def _record_transcript_stats(
+    task: Any, segments_data: list[dict[str, Any]]
+) -> None:
+    """Attach ``word_count`` / ``audio_duration`` to *task* from the
+    in-memory segments, so the worker's "done" event can report them.
+
+    The parent app previously re-parsed a produced output file for these
+    numbers, which fails whenever the selected formats include no
+    machine-readable transcript (txt/docx/pdf/smtv_docx only) — those runs
+    always recorded ``word_count=0``. Best-effort: never raises.
+    """
+    try:
+        from .stats import audio_duration_from_segments, count_words_in_segments
+
+        task.word_count = count_words_in_segments(segments_data)
+        task.audio_duration = audio_duration_from_segments(segments_data)
+    except Exception:  # noqa: BLE001 — stats must never fail a transcription
+        pass
+
+
 def _offset_segments(segments_data: list[dict[str, Any]], offset: float) -> None:
     """Shift every segment (and its words) by ``offset`` seconds, in place.
 
@@ -1578,6 +1598,7 @@ def transcribe(
         # card) so it never has to re-derive names from config — that
         # missed docx/pdf and the de-duped "name (1).srt" form.
         task.output_paths = list(written)
+        _record_transcript_stats(task, segments_data)
         log(f"Wrote {len(written)} output file(s): {', '.join(os.path.basename(p) for p in written)}",
             log_cb)
 
@@ -1731,6 +1752,7 @@ def _transcribe_via_alt_backend(
     if chapter_path:
         written.append(chapter_path)
     task.output_paths = list(written)
+    _record_transcript_stats(task, segments_data)
     log(
         f"Wrote {len(written)} output file(s): "
         f"{', '.join(os.path.basename(p) for p in written)}",
@@ -2055,6 +2077,7 @@ def resume_transcription(
         if chapter_path:
             written.append(chapter_path)
         task.output_paths = list(written)
+        _record_transcript_stats(task, final_segments)
         log(
             f"Resume: wrote {len(written)} output file(s): "
             f"{', '.join(os.path.basename(p) for p in written)}",

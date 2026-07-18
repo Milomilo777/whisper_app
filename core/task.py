@@ -55,3 +55,12 @@ class TranscriptionTask:
         # re-deriving names from config (which missed docx/pdf and the
         # de-duped "name (1).srt" form). None until a run completes.
         self.output_paths: list[str] | None = None
+        # Transcript stats computed by the worker from the in-memory
+        # segments (word total; last segment end as the duration lower
+        # bound) and carried back in its "done" event. The parent's
+        # history/usage-stats path prefers these over re-parsing an
+        # output file, which is impossible when the user's selected
+        # formats include no machine-readable transcript (txt/docx/pdf
+        # only) — that case used to record word_count=0.
+        self.word_count: int = 0
+        self.audio_duration: float = 0.0

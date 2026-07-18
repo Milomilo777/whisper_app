@@ -76,6 +76,37 @@ def test_derive_stats_returns_zero_when_nothing_parseable_was_produced(tmp_path)
     assert _service()._derive_transcript_stats(task) == (0, 0.0)
 
 
+def test_derive_stats_prefers_worker_reported_numbers_over_file_parsing(tmp_path):
+    """A docx/pdf/txt-only run has no parseable output file, but the worker
+    now reports word_count/audio_duration in its "done" event (stored on the
+    task) -- those must win, with no file access needed."""
+    docx_path = tmp_path / "clip.docx"
+    docx_path.write_bytes(b"not a real docx")
+    task = SimpleNamespace(
+        output_paths=[str(docx_path)],
+        file_path=str(tmp_path / "clip.mp4"),
+        word_count=57,
+        audio_duration=123.4,
+    )
+
+    assert _service()._derive_transcript_stats(task) == (57, 123.4)
+
+
+def test_derive_stats_zero_worker_count_still_falls_back_to_files(tmp_path):
+    """An older worker never sends the fields (task keeps word_count=0) --
+    the file-based fallback must still run and find the real words."""
+    json_path = tmp_path / "clip.json"
+    _write_json_segments(json_path, [{"start": 0.0, "end": 2.5, "text": "Hello world"}])
+    task = SimpleNamespace(
+        output_paths=[str(json_path)],
+        file_path=str(tmp_path / "clip.mp4"),
+        word_count=0,
+        audio_duration=0.0,
+    )
+
+    assert _service()._derive_transcript_stats(task) == (2, 2.5)
+
+
 def test_derive_stats_skips_a_listed_path_that_does_not_exist_on_disk(tmp_path):
     missing = tmp_path / "gone.srt"  # listed but never actually written
     real_json = tmp_path / "clip.json"

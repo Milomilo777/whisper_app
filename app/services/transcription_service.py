@@ -654,6 +654,18 @@ class TranscriptionService:
                     outs = event.get("outputs")
                     if isinstance(outs, list):
                         worker["task"].output_paths = [str(p) for p in outs]
+                    # Worker-computed transcript stats (absent from older
+                    # workers) — the authoritative word count even when no
+                    # machine-readable output format was selected.
+                    try:
+                        worker["task"].word_count = int(
+                            event.get("word_count") or 0
+                        )
+                        worker["task"].audio_duration = float(
+                            event.get("audio_duration") or 0.0
+                        )
+                    except (TypeError, ValueError):
+                        pass
                 self.finish_task(worker)
             elif event_type == "error":
                 if worker["task"]:
@@ -980,6 +992,13 @@ class TranscriptionService:
         try:
             from core import convert as _convert
             from core import stats as _stats
+            # Prefer the worker-computed numbers from the "done" event —
+            # they exist regardless of which output formats were selected.
+            # 0 words falls through to the file-based path so an older
+            # worker (which never sends the fields) still gets counted.
+            wc = int(getattr(task, "word_count", 0) or 0)
+            if wc > 0:
+                return wc, float(getattr(task, "audio_duration", 0.0) or 0.0)
             paths = list(getattr(task, "output_paths", None) or [])
             json_path = next(
                 (p for p in paths if str(p).lower().endswith(".json")), ""

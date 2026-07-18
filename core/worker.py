@@ -434,6 +434,14 @@ def main() -> int:
                     "done",
                     file_path=file_path,
                     outputs=getattr(task, "output_paths", None) or [],
+                    # Added fields (protocol is add-only): transcript stats
+                    # computed from the in-memory segments, so the parent
+                    # never needs a machine-readable output file to know
+                    # the word count (txt/docx/pdf-only runs recorded 0).
+                    word_count=int(getattr(task, "word_count", 0) or 0),
+                    audio_duration=float(
+                        getattr(task, "audio_duration", 0.0) or 0.0
+                    ),
                 )
             finally:
                 _set_current_task(None)
