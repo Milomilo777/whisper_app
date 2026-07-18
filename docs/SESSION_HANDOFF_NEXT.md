@@ -5,6 +5,58 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ Hover-help "(?)" icons added across the whole UI — NOT built/released yet (2026-07-18)
+
+Owner asked for every UI section to get a small hover-help icon
+explaining what it does (some sections already had informal grey
+inline notes; most had nothing). Added:
+
+- `app/widgets/tooltip.py` — new shared helper (`bind_tooltip`,
+  `help_icon`, `add_section_help`). Previously every spot that wanted
+  a hover tooltip (only the R3 device badge did) reimplemented its own
+  popup; `App._bind_device_badge_tooltip` now calls the shared helper
+  instead of duplicating it.
+- `app/widgets/tabs.py` — icons on all 5 tabs (Transcribe, Queue,
+  Download, Video Tiling, Server). Skipped fields that already had an
+  inline grey explanatory note, to avoid clutter.
+- `app/dialogs/advanced.py` — section badges on every `LabelFrame` +
+  per-field icons on previously-unexplained controls (Batch size,
+  Initial prompt, Hotwords, Backend, hallucination "BoH" jargon,
+  Demucs, voiceprint, filename template, SponsorBlock). The Google
+  Cloud / Cloud STT / NVIDIA Parakeet frames already had full
+  paragraphs, left as-is.
+- `app/dialogs/transcript_viewer.py` — icons for "Remove fillers" and
+  the segment-list colour coding (confidence green/amber/red,
+  suspect-row red background), which had zero explanation before.
+- `core/server/static/index.html` (the LAN/web UI) — a lightweight
+  CSS-only `?` badge on Source / Output formats / Language / Advanced
+  options (no JS framework, matches the file's existing vanilla
+  style).
+- `app/dialogs/hub_setup.py`, `model_download.py`, `model_loading.py`,
+  `statistics.py` were checked and left untouched — each already has a
+  self-explanatory title/paragraph or is a single-purpose native
+  dialog with nothing ambiguous to annotate.
+
+Verified: full `pyright` clean (0/0/0), full hermetic `pytest` suite
+green, `gui.py` launches with no traceback. A live-render visual check
+was attempted (screenshot of the Advanced dialog) but aborted — it
+grabbed an unrelated foreground window on the real desktop instead of
+the Tk dialog (focus/z-order issue); the screenshot was deleted
+unread rather than risk inspecting unrelated desktop content. Grid
+placements were instead manually audited column-by-column (this is
+how one real overlap — the SponsorBlock row — was caught and fixed
+before commit); no further visual QA was done.
+
+**Owner explicitly said (same session): do NOT rebuild or bump the
+version for this — it rides along with the next release's changes.**
+So the 6 commits above are source-only; no installer/exe was rebuilt
+and no `gh release` touched. Next session that *does* cut a release
+should fold this in (Setup-Standard + Portable + macOS, per the
+"Release assets must track every bug fix" rule below — this one is an
+exception only because the owner opted out of it for now).
+
+---
+
 ## ⭐ macOS build replaced with a colleague's build — Claude's build did not work (2026-07-15)
 
 The macOS `arm64`/`x86_64` `.dmg`s that Claude built and uploaded to
