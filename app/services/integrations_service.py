@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import TYPE_CHECKING
 
+from app.widgets.error_dialog import show_error
 from core.integrations.otranscribe import otr_to_srt, srt_to_otr
 
 if TYPE_CHECKING:
@@ -45,7 +46,10 @@ class IntegrationsService:
                 f.write(payload)
         except Exception as e:  # noqa: BLE001
             logger.exception("Export to .otr failed")
-            messagebox.showerror("Export failed", str(e), parent=self.app)
+            show_error(
+                self.app, "Export failed",
+                "Could not create the oTranscribe (.otr) file.", detail=str(e),
+            )
             return
         self.app.log(f"Saved {otr_path}")
         self.app.status_var.set(f"Saved {os.path.basename(otr_path)}")
@@ -74,7 +78,10 @@ class IntegrationsService:
                 f.write(text)
         except Exception as e:  # noqa: BLE001
             logger.exception("Import .otr → SRT failed")
-            messagebox.showerror("Import failed", str(e), parent=self.app)
+            show_error(
+                self.app, "Import failed",
+                "Could not convert that .otr file to SRT.", detail=str(e),
+            )
             return
         self.app.log(f"Wrote {srt_path}")
         self.app.status_var.set(f"Saved {os.path.basename(srt_path)}")

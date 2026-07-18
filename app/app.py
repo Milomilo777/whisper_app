@@ -26,7 +26,8 @@ from app.services.transcription_service import (
     TranscriptionService,
 )
 from app.dialogs.statistics import show_statistics as _show_stats
-from app.widgets.console import build_console
+from app.widgets.console import apply_console_theme, build_console, insert_log_line
+from app.widgets.error_dialog import show_error
 from app.widgets.platform import open_folder as _open_folder_helper
 from app.widgets.tabs import (
     build_download_tab,
@@ -685,7 +686,7 @@ class App(tk.Tk):
 
         self._build_menu()
         self._build_tabs()
-        self.txt = build_console(self)
+        self.txt = build_console(self, theme=_resolve_theme(self.theme_var.get()))
 
         # Wire global keyboard shortcuts now that the widgets exist:
         #   Ctrl+O          → Browse for a file to transcribe
@@ -1361,7 +1362,10 @@ class App(tk.Tk):
 
     def apply_theme(self) -> None:
         name = self.theme_var.get()
-        sv_ttk.set_theme(_resolve_theme(name))
+        resolved = _resolve_theme(name)
+        sv_ttk.set_theme(resolved)
+        if hasattr(self, "txt") and self.txt is not None:
+            apply_console_theme(self.txt, resolved)
         self.app_config["theme"] = name
         # Guard the save like every other pref handler (Audit B1 / FB-01): a
         # disk/permissions failure inside this Tk callback must not raise out
@@ -3843,7 +3847,11 @@ class App(tk.Tk):
                 import subprocess
                 subprocess.run(["xdg-open", path], check=False)
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror("Open failed", str(e), parent=self)
+            show_error(
+                self, "Open failed",
+                "Could not open that file with your system's default app.",
+                detail=str(e),
+            )
 
     def _install_tray(self) -> None:
         """Bring up the system-tray icon if pystray + Pillow are present.
@@ -4592,8 +4600,7 @@ class App(tk.Tk):
     def log(self, msg: str) -> None:
         self._ui_logger.info(msg)
         if hasattr(self, "txt") and self.txt is not None:
-            self.txt.insert("end", msg + "\n")
-            self.txt.see("end")
+            insert_log_line(self.txt, msg)
 
     def log_threadsafe(self, msg: str) -> None:
         """Thread-safe wrapper around :meth:`log` for background threads.

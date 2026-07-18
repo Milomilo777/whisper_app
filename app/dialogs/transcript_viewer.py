@@ -36,6 +36,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Optional
 
+from app.widgets.error_dialog import show_error
 from app.widgets.tooltip import help_icon
 
 
@@ -786,7 +787,10 @@ class TranscriptViewer(tk.Toplevel):
         try:
             _os_open(folder)
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror("Open failed", str(e), parent=self)
+            show_error(
+                self, "Open failed",
+                "Could not open the transcript's folder.", detail=str(e),
+            )
 
     def _open_in_system_player(self) -> None:
         if not self.media_path:
@@ -799,7 +803,11 @@ class TranscriptViewer(tk.Toplevel):
         try:
             _os_open(self.media_path)
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror("Open failed", str(e), parent=self)
+            show_error(
+                self, "Open failed",
+                "Could not open the media file in your system player.",
+                detail=str(e),
+            )
 
     # -- edit operations -------------------------------------------------
 
@@ -886,7 +894,11 @@ class TranscriptViewer(tk.Toplevel):
                 os.unlink(part)
             except OSError:
                 pass
-            messagebox.showerror("Save failed", str(e), parent=self)
+            show_error(
+                self, "Save failed",
+                "Could not write your changes to the transcript file.",
+                detail=str(e),
+            )
             return
         self._dirty = False
         messagebox.showinfo(

@@ -39,6 +39,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Optional
 
+from app.widgets.error_dialog import show_error
 from core import hardware as _hw
 from core.paths import bundled_binary
 
@@ -354,7 +355,11 @@ class HardwareWizard(tk.Toplevel):
         try:
             from core import transcriber as _t
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror("Benchmark failed", str(e), parent=self)
+            show_error(
+                self, "Benchmark failed",
+                "Could not load the transcription module needed to benchmark.",
+                detail=str(e),
+            )
             return
         if not _t.is_model_ready() or _t.MODEL is None:
             messagebox.showinfo(
@@ -457,7 +462,10 @@ class HardwareWizard(tk.Toplevel):
         try:
             path = _hw.save_hardware_choice(tier, benchmark_rtf=self._benchmark_rtf)
         except Exception as e:  # noqa: BLE001
-            messagebox.showerror("Save failed", str(e), parent=self)
+            show_error(
+                self, "Save failed",
+                "Could not save your hardware preference.", detail=str(e),
+            )
             return
         if self.app is not None:
             self.app.log(
