@@ -521,24 +521,24 @@ pip install pyright pytest
 ## Structure (auto-refreshed — do not hand-edit this block)
 
 - **Source files tracked:** 408
-- **Structure refreshed:** 2026-07-04T15:30:21
+- **Structure refreshed:** 2026-07-18T11:10:10
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +0 added · ~0 changed · -0 removed
+- **Drift since semantic build:** +1 added · ~6 changed · -1 removed
 
 | Top-level | Source files |
 |---|---|
 | `tests` | 173 |
-| `docs` | 79 |
+| `docs` | 80 |
 | `core` | 64 |
 | `app` | 24 |
 | `.claude` | 20 |
-| `(root)` | 17 |
+| `(root)` | 16 |
 | `.github` | 13 |
 | `platform` | 10 |
 | `tools` | 6 |
 | `assets` | 1 |
 | `creds` | 1 |
 
-**By type:** `.py`×263  `.md`×92  `.json`×18  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×263  `.md`×93  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
