@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import os
 import sys
+import tkinter as tk
 from tkinter import messagebox
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import tkinter as tk
+from app.widgets.error_dialog import show_error
 
 
 def open_folder(folder: str, parent: "tk.Misc | None" = None) -> None:
@@ -29,7 +28,17 @@ def open_folder(folder: str, parent: "tk.Misc | None" = None) -> None:
             import subprocess
             subprocess.run(["xdg-open", folder], check=False)
     except Exception as e:  # noqa: BLE001
-        kwargs = {"parent": parent} if parent is not None else {}
-        messagebox.showerror(
-            "Open folder failed", str(e), **kwargs  # type: ignore[arg-type]
-        )
+        # show_error needs a real Tk/Toplevel to attach to and to read
+        # geometry from; open_folder's own signature allows a looser
+        # tk.Misc (or no parent at all) for callers that don't have one,
+        # so fall back to the plain messagebox in that rarer case.
+        if isinstance(parent, (tk.Tk, tk.Toplevel)):
+            show_error(
+                parent, "Open folder failed",
+                "Could not open that folder.", detail=str(e),
+            )
+        else:
+            kwargs = {"parent": parent} if parent is not None else {}
+            messagebox.showerror(
+                "Open folder failed", str(e), **kwargs  # type: ignore[arg-type]
+            )
