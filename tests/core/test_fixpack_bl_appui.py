@@ -284,11 +284,16 @@ def _drop_app(App):
     return a
 
 
-def test_drop_folder_or_dead_path_logs_no_op(App, monkeypatch):
+def test_drop_dead_path_is_flagged_not_silent(App, monkeypatch):
+    # A path that is neither a file nor an existing folder is itemised in
+    # the "Ignored N dropped item(s)" log line (it used to fall through to
+    # the generic "Nothing to do" catch-all; folders are now expanded into
+    # their media files instead — covered in tests/core/test_dnd_paths.py).
     monkeypatch.setattr("app.app.os.path.isfile", lambda s: False)
+    monkeypatch.setattr("app.app.os.path.isdir", lambda s: False)
     a = _drop_app(App)
     App._on_drop(a, types.SimpleNamespace(data=r"C:\some\folder"))
-    assert any("Nothing to do" in m for m in a.logs)
+    assert any("Ignored 1 dropped item" in m for m in a.logs)
 
 
 def test_drop_multi_url_notes_only_first_used(App, monkeypatch):
@@ -302,18 +307,20 @@ def test_drop_multi_url_notes_only_first_used(App, monkeypatch):
 
 def test_drop_unsupported_scheme_flagged(App, monkeypatch):
     monkeypatch.setattr("app.app.os.path.isfile", lambda s: False)
+    monkeypatch.setattr("app.app.os.path.isdir", lambda s: False)
     a = _drop_app(App)
     App._on_drop(a, types.SimpleNamespace(data="ftp://host/clip.mp4"))
-    assert any("unsupported type" in m for m in a.logs)
+    assert any("Ignored 1 dropped item" in m for m in a.logs)
     # Nothing was enqueued or routed.
     assert a.enqueued == [] and a.download_url_var.get() == ""
 
 
 def test_drop_magnet_scheme_flagged(App, monkeypatch):
     monkeypatch.setattr("app.app.os.path.isfile", lambda s: False)
+    monkeypatch.setattr("app.app.os.path.isdir", lambda s: False)
     a = _drop_app(App)
     App._on_drop(a, types.SimpleNamespace(data="magnet:?xt=urn:btih:abc"))
-    assert any("unsupported type" in m for m in a.logs)
+    assert any("Ignored 1 dropped item" in m for m in a.logs)
 
 
 @pytest.mark.skipif(

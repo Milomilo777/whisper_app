@@ -181,6 +181,28 @@ def _file_uri_to_path(uri: str) -> str:
         return ""
 
 
+def _media_files_in_folder(folder: str) -> list[str]:
+    """Top-level media files inside a dropped folder (sorted, stable order).
+
+    Only the folder's own files are scanned — deliberately no recursion, so
+    dropping e.g. a drive root can't silently enqueue thousands of files.
+    Media-ness comes from core.watcher's single extension list. Returns []
+    on any listing error (permissions, folder vanished mid-drop).
+    """
+    from core.watcher import is_media_file
+
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return []
+    out: list[str] = []
+    for name in names:
+        full = os.path.join(folder, name)
+        if os.path.isfile(full) and is_media_file(name):
+            out.append(full)
+    return out
+
+
 # --- About dialog content (pure, Tk-free, unit-testable) -------------------
 # The About dialog's text and links live in these two module-level helpers so
 # they can be unit-tested without ever building a tk.Tk() root. The dialog in
@@ -4491,8 +4513,12 @@ class App(tk.Tk):
             field
           - multiple files   → enqueue each as a Transcription task
             without further prompts
+          - folder dropped   → its top-level media files are treated as
+            a multi-file drop (empty folders are reported, not ignored)
           - URL dropped      → if it's a known download URL, paste
             into the Download tab's URL field
+          - anything else    → reported in the log; a drop is never a
+            silent no-op
         """
         raw = getattr(event, "data", "") or ""
         items = _split_dnd_paths(raw)
@@ -4505,6 +4531,7 @@ class App(tk.Tk):
                 items = [raw]
         paths: list[str] = []
         urls: list[str] = []
+        folders: list[str] = []
         unsupported: list[str] = []
         for item in items:
             s = item.strip()
@@ -4524,11 +4551,28 @@ class App(tk.Tk):
                     unsupported.append(s)
             elif os.path.isfile(s):
                 paths.append(s)
-            elif "://" in s or s.split(":", 1)[0] in ("ftp", "magnet", "smb"):
-                # A recognised-but-unsupported scheme (ftp:, magnet:, smb:,
-                # …). Don't pretend it worked — note it so the drop isn't a
-                # silent no-op.
+            elif os.path.isdir(s):
+                folders.append(s)
+            else:
+                # An unsupported scheme (ftp:, magnet:, smb:, …), a path
+                # that no longer exists, or plain text. Don't pretend it
+                # worked — note it so the drop isn't a silent no-op.
                 unsupported.append(s)
+
+        for folder in folders:
+            found = _media_files_in_folder(folder)
+            display = os.path.basename(folder.rstrip("\\/")) or folder
+            if found:
+                paths.extend(found)
+                self.log(
+                    f"Dropped folder {display}: queueing its "
+                    f"{len(found)} media file(s)."
+                )
+            else:
+                self.log(
+                    f"Dropped folder {display} has no media files at its "
+                    f"top level; nothing to queue."
+                )
 
         if urls and hasattr(self, "download_url_var"):
             self.download_url_var.set(urls[0])
@@ -4552,18 +4596,17 @@ class App(tk.Tk):
                     self.log(f"Enqueued {count} files via drag-and-drop")
         if unsupported:
             self.log(
-                f"Ignored {len(unsupported)} dropped item(s) with an "
-                f"unsupported type (e.g. {unsupported[0]}). Drop a media file "
-                f"or an http(s) URL."
+                f"Ignored {len(unsupported)} dropped item(s) that aren't "
+                f"usable (e.g. {unsupported[0]}). Drop a media file, a "
+                f"folder of media files, or an http(s) URL."
             )
-        elif not paths and not urls and raw.strip():
-            # A non-empty payload that produced nothing actionable — a folder,
-            # a deleted/unreachable path, or an empty selection. Without this
-            # the drop is a silent no-op and the user can't tell what went
-            # wrong.
+        elif not paths and not urls and not folders and raw.strip():
+            # A non-empty payload that produced nothing actionable — e.g.
+            # an empty selection. Without this the drop is a silent no-op
+            # and the user can't tell what went wrong.
             self.log(
-                "Nothing to do with that drop — drop a media FILE (not a "
-                "folder) or an http(s) URL."
+                "Nothing to do with that drop — drop a media file, a "
+                "folder of media files, or an http(s) URL."
             )
 
     def _cancel_running(self) -> None:

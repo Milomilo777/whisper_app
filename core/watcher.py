@@ -24,6 +24,15 @@ _MEDIA_EXTENSIONS = {
 }
 
 
+def is_media_file(path: str) -> bool:
+    """True when ``path``'s extension is one of the watched media types.
+
+    Shared with the app's drag-and-drop folder handling so "what counts
+    as a media file" stays defined in exactly one place.
+    """
+    return os.path.splitext(path)[1].lower() in _MEDIA_EXTENSIONS
+
+
 def is_available() -> bool:
     try:
         import watchdog  # type: ignore[import-untyped] # noqa: F401

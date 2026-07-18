@@ -29,6 +29,15 @@ def test_watcher_media_extension_filter():
     assert expected.issubset(w._MEDIA_EXTENSIONS)
 
 
+def test_is_media_file_extension_gate():
+    """The public helper shared with the drag-and-drop folder handler."""
+    from core import watcher as w
+    assert w.is_media_file("clip.MP4")           # case-insensitive
+    assert w.is_media_file(r"C:\x\audio.flac")   # full paths fine
+    assert not w.is_media_file("notes.txt")
+    assert not w.is_media_file("no_extension")
+
+
 def test_folder_watcher_stop_when_unavailable(monkeypatch, tmp_path):
     """FolderWatcher.stop on an unstarted instance is a noop."""
     from core import watcher as w

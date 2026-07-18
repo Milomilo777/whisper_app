@@ -154,6 +154,59 @@ def test_on_drop_url_routes_to_download_tab(monkeypatch):
     assert app.nb.selected == app.t3
 
 
+# --- folder drops + never-silent junk drops ----------------------------
+
+import os
+
+from app.app import _media_files_in_folder
+
+
+def test_media_files_in_folder_filters_and_sorts(tmp_path):
+    (tmp_path / "b.mp4").write_bytes(b"x")
+    (tmp_path / "a.wav").write_bytes(b"x")
+    (tmp_path / "notes.txt").write_bytes(b"x")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "c.mp4").write_bytes(b"x")  # below top level — must NOT be picked up
+    found = _media_files_in_folder(str(tmp_path))
+    assert [os.path.basename(p) for p in found] == ["a.wav", "b.mp4"]
+
+
+def test_media_files_in_folder_missing_folder_is_empty():
+    assert _media_files_in_folder(r"C:\definitely\not\here\at-all") == []
+
+
+def test_on_drop_folder_with_media_enqueues_them(tmp_path):
+    (tmp_path / "a.mp4").write_bytes(b"x")
+    (tmp_path / "b.wav").write_bytes(b"x")
+    app = _fake_app()
+    _drive(app, "{" + str(tmp_path) + "}")
+    assert sorted(os.path.basename(p) for p in app.enqueued) == ["a.mp4", "b.wav"]
+
+
+def test_on_drop_folder_single_media_lands_in_transcribe_field(tmp_path):
+    media = tmp_path / "only.mp4"
+    media.write_bytes(b"x")
+    app = _fake_app()
+    _drive(app, "{" + str(tmp_path) + "}")
+    assert app.fv.value == str(media)
+    assert app.nb.selected == app.t1
+
+
+def test_on_drop_empty_folder_is_reported_not_silent(tmp_path):
+    app = _fake_app()
+    _drive(app, "{" + str(tmp_path) + "}")
+    assert app.enqueued == []
+    assert app.fv.value == ""
+    assert any("no media files" in msg for msg in app.logs)
+
+
+def test_on_drop_nonexistent_path_is_reported_not_silent():
+    app = _fake_app()
+    _drive(app, r"C:\gone\away.mp4")
+    assert any("Ignored 1 dropped item" in msg for msg in app.logs)
+
+
 # --- BUG I: bulk enqueue gates the model/worker readiness ONCE -------------
 
 
