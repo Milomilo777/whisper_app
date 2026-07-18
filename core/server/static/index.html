@@ -64,10 +64,23 @@
     position: relative; vertical-align: middle;
   }
   .help .tip {
-    display: none; position: absolute; left: 50%; top: 120%;
-    transform: translateX(-50%); width: 240px; background: #ffffe0;
+    /* Anchored at the icon's left edge (not centred): every help icon
+       sits just right of a short label, so centring a 240px bubble on it
+       pushed the bubble's left half off-screen on narrow phones. */
+    display: none; position: absolute; left: -12px; top: 120%;
+    width: max-content; max-width: min(240px, calc(100vw - 40px));
+    background: #ffffe0;
     color: #000; font-size: .78rem; line-height: 1.35; padding: 6px 8px;
     border-radius: 4px; border: 1px solid #999; text-align: left; z-index: 20;
+  }
+  @media (max-width: 480px) {
+    /* On a phone the bubble can't reliably fit beside the icon at all;
+       show it as a full-width strip pinned to the bottom of the screen
+       instead (tap the icon to show, tap anywhere else to dismiss). */
+    .help .tip {
+      position: fixed; left: 12px; right: 12px; bottom: 12px; top: auto;
+      width: auto; max-width: none;
+    }
   }
   .help:hover .tip, .help:focus .tip { display: block; }
 </style>
