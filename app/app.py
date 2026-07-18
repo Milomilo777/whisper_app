@@ -1848,40 +1848,13 @@ class App(tk.Tk):
     def _bind_device_badge_tooltip(self, widget: "ttk.Label") -> None:
         """Lightweight hover tooltip showing the full device detail.
 
-        Self-contained (no shared tooltip helper exists in the codebase yet);
-        creates a borderless Toplevel on <Enter> and destroys it on <Leave>.
+        Uses the shared tooltip helper with a getter (not a plain string)
+        since ``device_badge_tip`` is rewritten on every model-state change
+        after this is first bound.
         """
-        state: dict[str, Any] = {"tip": None}
+        from app.widgets.tooltip import bind_tooltip
 
-        def _show(_event: Any) -> None:
-            if state["tip"] is not None or not self.device_badge_tip:
-                return
-            try:
-                tip = tk.Toplevel(widget)
-                tip.wm_overrideredirect(True)
-                x = widget.winfo_rootx() + 12
-                y = widget.winfo_rooty() + widget.winfo_height() + 4
-                tip.wm_geometry(f"+{x}+{y}")
-                tk.Label(
-                    tip, text=self.device_badge_tip, justify="left",
-                    background="#ffffe0", foreground="#000000",
-                    relief="solid", borderwidth=1, wraplength=320,
-                ).pack()
-                state["tip"] = tip
-            except Exception:  # noqa: BLE001
-                state["tip"] = None
-
-        def _hide(_event: Any) -> None:
-            tip = state["tip"]
-            state["tip"] = None
-            if tip is not None:
-                try:
-                    tip.destroy()
-                except Exception:  # noqa: BLE001
-                    pass
-
-        widget.bind("<Enter>", _show)
-        widget.bind("<Leave>", _hide)
+        bind_tooltip(widget, lambda: self.device_badge_tip, wraplength=320)
 
     def warn_cpu_once(self, downgraded: bool) -> None:
         """One-time modal + log warning that transcription is on CPU (slower).
