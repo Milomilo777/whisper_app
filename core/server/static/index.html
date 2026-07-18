@@ -57,6 +57,19 @@
   .seg .spk { color: #d9a; font-weight: 600; margin-right: 6px; }
   .hidden { display: none; }
   .tokbox { margin: 0 0 16px; }
+  .help {
+    display: inline-block; width: 15px; height: 15px; margin-left: 6px;
+    line-height: 15px; text-align: center; border-radius: 50%;
+    background: #333; color: #9ad; font-size: .72rem; cursor: help;
+    position: relative; vertical-align: middle;
+  }
+  .help .tip {
+    display: none; position: absolute; left: 50%; top: 120%;
+    transform: translateX(-50%); width: 240px; background: #ffffe0;
+    color: #000; font-size: .78rem; line-height: 1.35; padding: 6px 8px;
+    border-radius: 4px; border: 1px solid #999; text-align: left; z-index: 20;
+  }
+  .help:hover .tip, .help:focus .tip { display: block; }
 </style>
 </head>
 <body>
@@ -78,7 +91,9 @@
   <!-- ============ Submit view ============ -->
   <section id="view-submit">
     <fieldset>
-      <legend>Source</legend>
+      <legend>Source
+        <span class="help" tabindex="0">?<span class="tip">Upload a file, or paste a link (YouTube, etc.) and the server fetches it itself — no need to download it first.</span></span>
+      </legend>
       <label>Upload audio/video<br>
         <input type="file" id="file" accept="audio/*,video/*">
       </label>
@@ -89,19 +104,25 @@
     </fieldset>
 
     <fieldset>
-      <legend>Output formats</legend>
+      <legend>Output formats
+        <span class="help" tabindex="0">?<span class="tip">Which transcript file types to produce for this job. Check as many as you want — every checked format is generated.</span></span>
+      </legend>
       <div class="fmts" id="fmts"></div>
     </fieldset>
 
     <fieldset>
-      <legend>Language</legend>
+      <legend>Language
+        <span class="help" tabindex="0">?<span class="tip">Spoken language in the file. Auto-detect works well in most cases; picking it explicitly is faster and can be more accurate for short or noisy clips.</span></span>
+      </legend>
       <label>Spoken language (Auto = detect)<br>
         <select id="lang"></select>
       </label>
     </fieldset>
 
     <details>
-      <summary>Advanced options</summary>
+      <summary>Advanced options
+        <span class="help" tabindex="0">?<span class="tip">Voice-activity/silence skipping, per-word timestamps, speaker identification, hallucination flagging, auto-chapters, and an optional time-range clip.</span></span>
+      </summary>
       <fieldset class="opt">
         <label><input type="checkbox" id="o_vad" checked> Voice activity detection (skip silence)</label>
         <div class="row">
