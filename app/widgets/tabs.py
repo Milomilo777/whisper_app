@@ -13,6 +13,7 @@ from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from app.domain.languages import SUBTITLE_LANGUAGES
+from app.widgets.tooltip import add_section_help, help_icon
 
 if TYPE_CHECKING:
     from app.app import App
@@ -270,6 +271,13 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         justify="center",
     ).pack(fill="x", pady=(2, 12))
     ttk.Button(drop_zone, text="Browse files...", command=app.browse).pack()
+    add_section_help(
+        drop_zone,
+        "Pick an audio or video file to transcribe locally (mp3, wav, mp4, "
+        "mkv, and most other common formats). The file is processed on "
+        "this machine and never leaves it unless you pick a cloud Engine "
+        "below.",
+    )
 
     # ── Row 1: file path display (always visible — shows what's selected) ─
     file_row = ttk.Frame(parent)
@@ -309,7 +317,14 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         state="readonly",
         width=44,
     )
-    engine_combo.pack(side="left", padx=(6, 12))
+    engine_combo.pack(side="left", padx=(6, 8))
+    help_icon(
+        engine_row,
+        "Which transcription engine to use. Offline engines (Faster-Whisper, "
+        "whisper.cpp, NVIDIA Parakeet) run entirely on this machine; the two "
+        "cloud engines upload your audio to Google. Set up keys/models for "
+        "each in Advanced settings.",
+    ).pack(side="left", padx=(0, 8))
     engine_combo.bind("<<ComboboxSelected>>", lambda _e: app._on_engine_selected())
     app.engine_status_var = tk.StringVar(value="")
     app.engine_status_label = ttk.Label(
@@ -336,7 +351,13 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         state="readonly",
         width=14,
     )
-    lang_combo.pack(side="left", padx=(6, 24))
+    lang_combo.pack(side="left", padx=(6, 4))
+    help_icon(
+        quick_opts,
+        "Spoken language in the file. Auto detects it from the first few "
+        "seconds of audio; picking it explicitly is faster and can be more "
+        "accurate for short or noisy clips.",
+    ).pack(side="left", padx=(0, 20))
     lang_combo.bind("<<ComboboxSelected>>", lambda _e: app._save_transcribe_prefs())
 
     # Feature toggles — friendly phrasing instead of "diarization" /
@@ -356,7 +377,13 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     )
     if not _diar_available:
         diar_check.state(["disabled"])
-    diar_check.pack(side="left", padx=(0, 24))
+    diar_check.pack(side="left", padx=(0, 4))
+    help_icon(
+        quick_opts,
+        "Splits the transcript by who is speaking (SPEAKER_00, SPEAKER_01, "
+        "...). Adds processing time and needs the optional sherpa-onnx "
+        "component to be installed.",
+    ).pack(side="left", padx=(0, 20))
 
     ttk.Checkbutton(
         quick_opts,
@@ -364,6 +391,12 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         variable=app.word_timestamps_var,
         command=app._save_transcribe_prefs,
     ).pack(side="left")
+    help_icon(
+        quick_opts,
+        "Stores a start/end time for every individual word instead of only "
+        "per sentence. Useful for karaoke-style captions or precise "
+        "editing; makes the output file larger.",
+    ).pack(side="left", padx=(4, 0))
 
     # Optional time-slice — transcribe only a portion of a long file
     # (e.g. 5 minutes out of a 10-hour recording). 0:00:00 on a side means
@@ -378,6 +411,11 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Entry(quick_opts, textvariable=app.transcribe_end_time_var, width=9).pack(
         side="left", padx=(2, 0)
     )
+    help_icon(
+        quick_opts,
+        "Transcribe only this portion of the file (format H:MM:SS). Leave "
+        "both at 0:00:00 to transcribe the whole file.",
+    ).pack(side="left", padx=(4, 0))
 
     # ── Row 4: the big accent Transcribe CTA + tiny Advanced link ────
     cta_row = ttk.Frame(parent)
@@ -428,6 +466,12 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         row=6, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(0, 12),
     )
+    add_section_help(
+        app.last_result_frame,
+        "The output files from the most recently finished transcription, "
+        "with quick Open/Reveal actions. Stays empty until a job "
+        "completes; see the Transcription Queue tab for jobs in progress.",
+    )
     # The card sizes to its content instead of greedily filling the whole
     # lower half of the tab (it previously expanded via rowconfigure
     # weight=1, which dominated the window).
@@ -446,8 +490,17 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
 
 
 def build_queue_tab(app: "App", parent: ttk.Frame) -> None:
-    ttk.Button(parent, text="Clear completed", command=app.clear_completed).pack(
-        anchor="e", padx=10, pady=6
+    top_row = ttk.Frame(parent)
+    top_row.pack(fill="x", padx=10, pady=6)
+    help_icon(
+        top_row,
+        "Every transcription job you start is tracked here. Use the "
+        "buttons below the list (or right-click a row) to pause, resume, "
+        "cancel, re-run, or remove it; double-click a finished row to "
+        "open its output folder.",
+    ).pack(side="left")
+    ttk.Button(top_row, text="Clear completed", command=app.clear_completed).pack(
+        side="right"
     )
 
     cols = ("file", "status", "progress", "language", "time")
@@ -555,6 +608,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Entry(top, textvariable=app.download_url_var, width=80).grid(
         row=0, column=1, columnspan=2, sticky="ew", padx=(6, 0)
     )
+    help_icon(
+        top,
+        "Paste a link from YouTube or any other yt-dlp-supported site. "
+        "Available formats and subtitles are looked up automatically as "
+        "soon as you paste it.",
+    ).grid(row=0, column=3, sticky="w", padx=(6, 0))
 
     ttk.Label(top, text="Folder").grid(row=1, column=0, sticky="w", pady=(8, 0))
     app.download_folder_var = tk.StringVar(value=app.app_config.get("download_folder", ""))
@@ -564,6 +623,10 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Button(top, text="Browse", command=app.browse_download_folder).grid(
         row=1, column=2, sticky="ew", padx=(6, 0), pady=(8, 0)
     )
+    help_icon(
+        top, "Where the downloaded file is saved. Defaults to the folder "
+        "you last used; Browse to change it.",
+    ).grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     ttk.Label(top, text="Mode").grid(row=2, column=0, sticky="w", pady=(8, 0))
     app.download_mode_var = tk.StringVar(value="Audio and video")
@@ -576,6 +639,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     )
     app.download_mode_combo.grid(row=2, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
     app.download_mode_combo.bind("<<ComboboxSelected>>", lambda _e: app.update_download_mode())
+    help_icon(
+        top,
+        "'Audio and video' downloads a normal video file. 'Audio' "
+        "extracts just the audio track — smaller and faster if you only "
+        "need the sound or plan to transcribe it.",
+    ).grid(row=2, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     ttk.Label(top, text="Audio").grid(row=3, column=0, sticky="w", pady=(8, 0))
     app.audio_format_var = tk.StringVar()
@@ -583,6 +652,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         top, textvariable=app.audio_format_var, state="readonly", width=76
     )
     app.audio_format_combo.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
+    help_icon(
+        top,
+        "Audio-only quality/codec choice, filled in once the URL is "
+        "looked up. Higher bitrate means a larger file and better "
+        "quality.",
+    ).grid(row=3, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     ttk.Label(top, text="Video").grid(row=4, column=0, sticky="w", pady=(8, 0))
     app.video_format_var = tk.StringVar()
@@ -590,6 +665,11 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         top, textvariable=app.video_format_var, state="readonly", width=76
     )
     app.video_format_combo.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(6, 0), pady=(8, 0))
+    help_icon(
+        top,
+        "Video quality/resolution choice, filled in once the URL is "
+        "looked up. Only used in 'Audio and video' mode.",
+    ).grid(row=4, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     ttk.Label(top, text="Output").grid(row=5, column=0, sticky="w", pady=(8, 0))
     app.output_format_var = tk.StringVar(value="mp4")
@@ -597,6 +677,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         top, textvariable=app.output_format_var, state="readonly", width=20
     )
     app.output_format_combo.grid(row=5, column=1, sticky="w", padx=(6, 0), pady=(8, 0))
+    help_icon(
+        top,
+        "Container format for the saved file (e.g. mp4). Changing it may "
+        "re-encode the file instead of just repackaging it, which takes "
+        "longer.",
+    ).grid(row=5, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     # --- Optional time-range slice (v1.0.3) -------------------------------
     # Two short Entry widgets inside a LabelFrame, plus a tiny hint label
@@ -608,6 +694,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     trim_frame = ttk.LabelFrame(top, text="Time range (optional)", padding=(8, 4))
     trim_frame.grid(
         row=5, column=2, sticky="ew", padx=(12, 0), pady=(8, 0)
+    )
+    add_section_help(
+        trim_frame,
+        "Download (and optionally transcribe) only this portion of the "
+        "video instead of the whole thing. Leave both at 0:00:00 for the "
+        "full length.",
     )
     ttk.Label(trim_frame, text="Start").grid(row=0, column=0, sticky="w")
     start_entry = ttk.Entry(
@@ -672,6 +764,13 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Label(sub_frame, textvariable=app.subtitle_status_var, foreground="#666").pack(
         side="left", padx=(10, 0)
     )
+    help_icon(
+        top,
+        "Downloads the video's existing subtitles/captions (auto-"
+        "generated or manual) in the chosen language, instead of "
+        "transcribing the audio yourself. Only available when the site "
+        "provides them.",
+    ).grid(row=6, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
     app.auto_transcribe_var = tk.BooleanVar(
         value=bool(app.app_config.get("auto_transcribe_after_download", False))
@@ -682,6 +781,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         variable=app.auto_transcribe_var,
         command=app._save_auto_transcribe_pref,
     ).grid(row=7, column=1, columnspan=2, sticky="w", padx=(6, 0), pady=(4, 0))
+    help_icon(
+        top,
+        "Automatically queues the downloaded file for transcription as "
+        "soon as the download finishes, using the settings in the "
+        "Transcribe tab.",
+    ).grid(row=7, column=3, sticky="w", padx=(6, 0), pady=(4, 0))
 
     # SMTV "all parts" toggle. Built always, shown only when an SMTV
     # episode with >=1 sibling parts is detected. format_service sets
@@ -694,6 +799,11 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         variable=app.smtv_download_all_parts_var,
     )
     smtv_check.pack(side="left")
+    help_icon(
+        smtv_frame,
+        "This episode has multiple parts on the source site. Checking "
+        "this queues every part, not just the one you pasted.",
+    ).pack(side="left", padx=(6, 0))
 
     def _toggle(*, visible: bool) -> None:
         if visible:
@@ -844,6 +954,11 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Spinbox(
         row2, from_=1, to=64, width=5, textvariable=app.tiling_divisions_var,
     ).pack(side="left", padx=(8, 0))
+    help_icon(
+        row2,
+        "How many tiles per side. 3 makes a 3×3 grid — 9 copies of the "
+        "same stream filling the screen(s).",
+    ).pack(side="left", padx=(4, 0))
 
     ttk.Label(row2, text="Quality:").pack(side="left", padx=(16, 0))
     saved_quality = cfg.get("tiling_quality", "Auto")
@@ -858,6 +973,12 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     quality_combo.bind(
         "<<ComboboxSelected>>", lambda _e: app._save_tiling_prefs()
     )
+    help_icon(
+        row2,
+        "Video quality for each tile. Auto picks a resolution based on "
+        "the grid size and available bandwidth/CPU; a lower fixed "
+        "quality reduces load with a large grid.",
+    ).pack(side="left", padx=(4, 0))
 
     ttk.Button(row2, text="Start tiling", command=app.start_tiling).pack(
         side="left", padx=(16, 4)
@@ -889,6 +1010,12 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     ttk.Button(
         row3, text="Monitors…", command=app.choose_tiling_monitors,
     ).pack(side="left", padx=(16, 0))
+    help_icon(
+        row3,
+        "Multi-monitor spreads the grid across every monitor picked in "
+        "'Monitors…'. Auto-restart reconnects automatically if the "
+        "stream drops.",
+    ).pack(side="left", padx=(10, 0))
 
     # Restore the saved monitor selection (spatial indices from core.monitors).
     saved_sel = cfg.get("tiling_selected_monitors") or []
@@ -1008,6 +1135,12 @@ def build_server_tab(app: "App", parent: ttk.Frame) -> None:
     # --- options -------------------------------------------------------------
     opts = ttk.LabelFrame(frame, text="Options", padding=12)
     opts.pack(fill="x", pady=(0, 8))
+    add_section_help(
+        opts,
+        "Port, network sharing, and an optional access password for the "
+        "web page this tab starts. Each field also has its own note "
+        "below it.",
+    )
 
     # Port.
     port_row = ttk.Frame(opts)
