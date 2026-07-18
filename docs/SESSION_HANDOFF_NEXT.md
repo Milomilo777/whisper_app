@@ -194,6 +194,28 @@ Re-verified everything after each fix: pyright 0/0/0, full hermetic +
 smoke suite green, zero badge/content overlaps on a fresh sweep, nav
 jumps still land correctly post-migration. Still not built/released.
 
+**Same-session, fifth/sixth rounds — convergence check.** Two more
+passes looking for anything the above missed:
+
+- Round 5: `ruff --select F401,F811,F821` across every file touched
+  this session. 5 findings, all confirmed pre-existing (checked
+  against the original pre-session commit `389fae2` directly) — none
+  introduced this session, so left untouched (out of scope).
+- Round 6: fresh line-by-line re-read of `tooltip.py`, `error_dialog.py`,
+  `console.py`; grepped for any leftover structural assumption the
+  `section_labelframe` migration could have broken (`.winfo_children()`
+  iteration, `.cget("text")` assertions in tests — none found). Did
+  find that `add_section_help` was now dead code (zero callers anywhere
+  after the migration) — deleted it rather than keep a "might be
+  useful later" shim, per this project's own stated convention against
+  that. Also did an end-to-end open/close sweep of `TranscriptViewer`
+  (via its real `open_viewer` entry point), `HardwareWizard`, and
+  `Statistics` — all three open and close cleanly with no exception.
+
+Both rounds turned up nothing new beyond that one dead-code removal —
+treating this as convergence for now. Re-verified once more: pyright
+0/0/0, full hermetic + smoke suite green. Still not built/released.
+
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
 So the 6 commits above are source-only; no installer/exe was rebuilt
