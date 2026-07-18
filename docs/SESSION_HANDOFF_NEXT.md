@@ -114,6 +114,45 @@ suite green, `gui.py` launch clean, plus the existing
 `AdvancedDialog`) still passes with the new sidebar. Still not
 built/released — same owner instruction.
 
+**Same-session, third round — owner asked to critique this round too.**
+This one found a real, reproducible bug (not just polish):
+
+- The nav sidebar (170px) tipped the Advanced dialog's "Whisper
+  extras" section into a genuine overflow **at the dialog's own
+  hard-coded 1100px floor** — which a common 1366x768 laptop actually
+  hits (`screen_w*0.75=1024` clamps up to the 1100 floor there), not
+  an exotic edge case. Forced the dialog to exactly 1100px against a
+  real running instance and measured `winfo_reqwidth()` to confirm:
+  1133px needed vs 918px available. Isolated the cause precisely by
+  removing the new hover icons in-memory and re-measuring — they
+  contributed ~0px; the real driver was two pre-existing
+  no-wraplength explanatory Labels plus a hard-coded `wraplength=820`
+  repeated 9x across the Google Cloud / Cloud STT / NVIDIA frames
+  (all pre-dating this session, just newly exposed by the sidebar
+  eating 170px). Fixed the actual wraplengths (820→680, plus two
+  missing wraplengths added), shrank the sidebar a bit more, and
+  shortened one long button label. Re-verified after each change:
+  all 10 sections now fit with real margin at the 1100px floor.
+- Matched the nav sidebar's link colour to the dialog's own
+  pre-existing link colour (was accidentally using the tooltip-icon
+  blue instead).
+- The log-console colour heuristic (`could not`/`fail`/`error`
+  substring) could have false-positived on a routine line that merely
+  *mentions* a filename containing one of those words (e.g. `f"Saved
+  {otr_path}"` where the user named their source
+  `my_failsafe_video.mp4`). Tightened to a word-boundary regex on the
+  exact forms the real call sites use, verified against 9 cases
+  including that exact trap.
+- Added a scrollbar to the error dialog's collapsible detail box
+  (defensive — current call sites only ever pass a short `str(e)`,
+  but nothing should silently truncate a longer one later).
+
+Verified with real running Tk instances each time (not visual
+guessing): forced-width measurements, an in-memory icon-removal
+isolation test, all 10 nav-jump targets re-checked land in view, the
+9 console false-positive/true-positive cases, and the error dialog's
+toggle actually growing the window. Still not built/released.
+
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
 So the 6 commits above are source-only; no installer/exe was rebuilt
