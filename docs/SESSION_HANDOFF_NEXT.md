@@ -5,6 +5,37 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ Fragility hunt round 2 (2026-07-18, later) — LAN-page HTML injection fixed
+
+A second sweep, focused on the less-audited surfaces (on-demand
+`optional_deps` merge, the Gemini / Google-Cloud response parsers,
+output-write atomicity, the HTTP server, tray, recorder downmix,
+config coercion). **Almost everything was already robustly guarded** —
+`optional_deps.install` has a full staging + per-entry backup/rollback
+merge; both cloud parsers tolerate non-object JSON / missing fields /
+malformed timestamps; `_write_outputs` is `.part`+`os.replace` atomic
+with path-traversal rejection; `token_ok` is `hmac.compare_digest` on
+bytes; `normalize_formats` / filename sanitisation / uuid4 job ids all
+hold. Nothing actionable there.
+
+One real, network-exploitable bug found + fixed: **the LAN web page
+(`core/server/static/index.html`) injected several untrusted strings
+straight into `innerHTML`.** `j.source` and transcript text were
+escaped, but the download-link display name (derives from the
+uploaded/downloaded media filename — a non-Windows host keeps `<`
+intact), a failed job's `error` message (embeds the submitted URL
+verbatim), the fetch-failure `e.message`, and the per-job `formats`
+list were not. On a shared LAN a hostile video title / URL could run
+script in another viewer's browser. Fixed: every such sink now goes
+through `escapeHtml`, `j.progress` is coerced via `Number()`, and
+`escapeHtml` itself was completed to also escape `'` (so it's safe for
+single-quoted attributes too). Server-side validation already limited
+exposure; this closes the client side. Verified: page script extracted
+and passed `node --check`. Source-only (static asset; no Python
+touched, so pyright/pytest unaffected) — ships with the next release.
+
+---
+
 ## ⭐ Fragility triage + 2 fixes (2026-07-18, evening) — backlog list below is now STALE
 
 Owner asked for fragile points to be found and hardened. The
