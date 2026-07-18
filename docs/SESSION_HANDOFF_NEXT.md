@@ -75,6 +75,45 @@ found and fixed a real bug:**
   `3fae872`).
 - Still not built/released — same owner instruction as above.
 
+**Same-session, next round — owner asked "what else could be more
+readable" and to go through several layers of reflection myself.**
+Investigated with grep/read evidence (not guesses) and proposed 4
+options via AskUserQuestion; owner picked all 4:
+
+1. **Friendly errors** — 8 spots (`app.py`, `transcript_viewer.py`,
+   `integrations_service.py`, `hardware_wizard.py`) showed a raw
+   Python exception string as the entire dialog body. New
+   `app/widgets/error_dialog.show_error()` leads with a plain
+   sentence, tucks the raw detail behind a collapsible "Show details"
+   (still copyable). One spot (`app.py` Convert-transcript,
+   `ConvertError`) was left alone — its message was already
+   human-authored and specific, not a raw traceback.
+2. **Log console colour + theme** — `app/widgets/console.py` was a
+   fixed black/lime terminal regardless of the app's own Light/Dark
+   toggle, and every line was the same colour (a real failure read
+   identically to routine status text). Added `apply_console_theme()`
+   (wired into `App.apply_theme()`) and `insert_log_line()`, which
+   tags a line red when it matches the "could not / fail / error"
+   wording every existing failure-path `self.log(...)` call already
+   uses — verified against the real call sites first, so nothing
+   needed to change at any of the ~20 existing call sites.
+3. **Advanced dialog jump-to-section sidebar** — 10 stacked
+   `LabelFrame`s behind one long scroll had no way to jump to one.
+   Added a "Jump to" list on the left; verified numerically (not
+   visually) against a real running dialog that every link lands on
+   its target, including that the last few correctly clamp to the
+   bottom of the scroll region instead of landing somewhere invalid.
+4. **Two title renames** — `"AI Layer (Phase 2 + 3)"` → `"AI Layer
+   (optional)"` (internal phase numbering has no business being
+   user-facing) and `"Voice Activity Detection"` → `"... (skip
+   silence)"` so the title alone explains the purpose.
+
+Verified the same way as before: real `pyright` (0/0/0), full hermetic
+suite green, `gui.py` launch clean, plus the existing
+`test_dialogs_open_and_close` smoke test (which opens a real
+`AdvancedDialog`) still passes with the new sidebar. Still not
+built/released — same owner instruction.
+
 **Owner explicitly said (same session): do NOT rebuild or bump the
 version for this — it rides along with the next release's changes.**
 So the 6 commits above are source-only; no installer/exe was rebuilt
