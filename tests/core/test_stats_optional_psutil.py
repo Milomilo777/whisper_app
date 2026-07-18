@@ -12,6 +12,7 @@ suite.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 
 
@@ -25,7 +26,11 @@ def test_stats_import_and_payload_survive_missing_psutil():
         assert reloaded.psutil is None
 
         payload = reloaded.build_stats_payload(
-            file_name=r"C:\somewhere\clip.mp4",
+            # Build the path with the RUNNING OS's separator: pathlib only
+            # splits on the native one, so a hard-coded r"C:\..." string kept
+            # its backslashes as part of the .name on Linux and this test
+            # failed on the Ubuntu CI legs.
+            file_name=os.path.join("somewhere", "clip.mp4"),
             model="large-v3",
             language="en",
             audio_duration=12.5,
