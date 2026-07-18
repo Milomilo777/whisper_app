@@ -1082,11 +1082,29 @@ class TranscriptionService:
             ai_time = (
                 (_time.time() - task.start_time) if task.start_time else 0.0
             )
-            model = str(
-                (app.app_config.get("model") or {}).get("name")
-                or app.app_config.get("whisper_model")
-                or ""
+            # Report the model that actually transcribed. The config's
+            # Whisper model name is only the truth for faster_whisper —
+            # an alternative engine (whisper.cpp / cloud / NVIDIA) never
+            # touches it, so those rows used to claim e.g.
+            # "faster-whisper-large-v3" for an NVIDIA Parakeet run.
+            from core.backends import availability as _eng
+            backend = _eng.normalise_engine(
+                app.app_config.get("transcribe_backend")
             )
+            if backend == "faster_whisper":
+                model = str(
+                    (app.app_config.get("model") or {}).get("name")
+                    or app.app_config.get("whisper_model")
+                    or ""
+                )
+            elif backend == "nvidia_asr":
+                from core.backends.nvidia_asr import DEFAULT_MODEL_ID
+                model_id = str(
+                    app.app_config.get("nvidia_asr_model_id") or ""
+                ).strip() or DEFAULT_MODEL_ID
+                model = f"{backend}:{model_id}"
+            else:
+                model = backend
             payload = _stats.build_stats_payload(
                 file_name=getattr(task, "file_path", "") or "",
                 model=model,

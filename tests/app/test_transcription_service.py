@@ -174,6 +174,36 @@ def test_post_usage_stats_builds_the_expected_payload(monkeypatch):
     assert payload["file_name"] == "some clip.mp4"  # basename only -- no local path leak
 
 
+def test_post_usage_stats_reports_the_engine_model_for_alt_backends(monkeypatch):
+    """An NVIDIA/cloud/whisper.cpp run must not claim the Whisper model
+    name -- those engines never touch it."""
+    captured: dict = {}
+
+    def _fake_post_stats_async(config, payload, **kwargs):
+        captured["payload"] = payload
+        return True
+
+    monkeypatch.setattr(core_stats, "post_stats_async", _fake_post_stats_async)
+
+    app_config = {
+        "telemetry_opt_in": True,
+        "stats_url": "https://example/stats",
+        "model": {"name": "large-v3"},
+        "transcribe_backend": "nvidia_asr",
+        "nvidia_asr_model_id": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+    }
+    task = SimpleNamespace(file_path="a.mp4", detected_language="", status="finished", start_time=0.0)
+
+    _service(app_config)._post_usage_stats(task, word_count=25, audio_duration=9.7)
+    assert captured["payload"]["model"] == (
+        "nvidia_asr:nvidia/nemotron-3.5-asr-streaming-0.6b"
+    )
+
+    app_config["transcribe_backend"] = "whisper_cpp"
+    _service(app_config)._post_usage_stats(task, word_count=25, audio_duration=9.7)
+    assert captured["payload"]["model"] == "whisper_cpp"
+
+
 def test_post_usage_stats_falls_back_to_whisper_model_key_when_model_dict_is_absent():
     captured: dict = {}
     app_config = {
