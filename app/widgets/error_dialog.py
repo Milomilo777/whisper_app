@@ -7,6 +7,7 @@ unlike a bare ``messagebox.showerror(title, str(e))``.
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 
 
@@ -22,7 +23,26 @@ def show_error(
     body = ttk.Frame(top, padding=16)
     body.pack(fill="both", expand=True)
 
-    ttk.Label(body, text=message, wraplength=380, justify="left").pack(anchor="w")
+    msg_row = ttk.Frame(body)
+    msg_row.pack(fill="x")
+    # A messagebox.showerror shows the platform's error icon; keep that
+    # at-a-glance "something went wrong" cue here too. A coloured glyph
+    # instead of an image keeps this working on every platform/theme.
+    icon = ttk.Label(msg_row, text="⚠", foreground="#c62828")
+    try:
+        icon_font = tkfont.nametofont("TkDefaultFont").copy()
+        icon_font.configure(size=16)
+        icon.configure(font=icon_font)
+        # A tkinter Font deletes its Tcl font when the Python object is
+        # garbage-collected; park a reference on the widget to keep it
+        # alive as long as the label is.
+        setattr(icon, "_font_ref", icon_font)
+    except tk.TclError:
+        pass
+    icon.pack(side="left", anchor="n", padx=(0, 10))
+    ttk.Label(msg_row, text=message, wraplength=380, justify="left").pack(
+        side="left", anchor="w"
+    )
 
     if detail:
         toggle_row = ttk.Frame(body)
@@ -64,7 +84,13 @@ def show_error(
             side="left", padx=(8, 0)
         )
 
-    ttk.Button(body, text="OK", command=top.destroy).pack(anchor="e", pady=(14, 0))
+    ok_btn = ttk.Button(body, text="OK", command=top.destroy)
+    ok_btn.pack(anchor="e", pady=(14, 0))
+
+    # Same keyboard contract as a native messagebox: Enter/Esc dismiss,
+    # and focus starts on OK so a plain Enter works immediately.
+    top.bind("<Return>", lambda _e: top.destroy())
+    top.bind("<Escape>", lambda _e: top.destroy())
 
     top.update_idletasks()
     try:
@@ -75,5 +101,10 @@ def show_error(
         pass
     try:
         top.grab_set()
+    except tk.TclError:
+        pass
+    ok_btn.focus_set()
+    try:
+        top.bell()
     except tk.TclError:
         pass
