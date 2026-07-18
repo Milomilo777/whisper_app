@@ -334,18 +334,26 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     # Cheap readiness probe for the initial selection (no heavy import).
     app._refresh_engine_status()
 
-    # ── Row 3: three quick options (language + identify speakers +
-    #     per-word timestamps) ────────────────────────────────────────
+    # ── Row 3: quick options, split across two lines so a full row of
+    #     help icons doesn't overflow the app's default 960px width
+    #     (pack(side="left") never wraps — it silently clips instead).
+    #     Line 1: language + the two feature toggles. Line 2: the
+    #     optional time-slice, which reads better on its own line
+    #     anyway (it's conceptually separate from the toggles above).
     quick_opts = ttk.Frame(parent)
     quick_opts.grid(
         row=3, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(0, 8),
     )
+    opts_line1 = ttk.Frame(quick_opts)
+    opts_line1.pack(fill="x")
+    opts_line2 = ttk.Frame(quick_opts)
+    opts_line2.pack(fill="x", pady=(6, 0))
 
-    ttk.Label(quick_opts, text="Language:").pack(side="left")
+    ttk.Label(opts_line1, text="Language:").pack(side="left")
     lang_values = ["Auto"] + [name for name, _ in _LANGS]
     lang_combo = ttk.Combobox(
-        quick_opts,
+        opts_line1,
         textvariable=app.transcribe_lang_var,
         values=lang_values,
         state="readonly",
@@ -353,7 +361,7 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     )
     lang_combo.pack(side="left", padx=(6, 4))
     help_icon(
-        quick_opts,
+        opts_line1,
         "Spoken language in the file. Auto detects it from the first few "
         "seconds of audio; picking it explicitly is faster and can be more "
         "accurate for short or noisy clips.",
@@ -370,7 +378,7 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         else f"Identify speakers (unavailable — {_diar_reason})"
     )
     diar_check = ttk.Checkbutton(
-        quick_opts,
+        opts_line1,
         text=diar_label,
         variable=app.diarization_var,
         command=app._save_transcribe_prefs,
@@ -379,20 +387,20 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         diar_check.state(["disabled"])
     diar_check.pack(side="left", padx=(0, 4))
     help_icon(
-        quick_opts,
+        opts_line1,
         "Splits the transcript by who is speaking (SPEAKER_00, SPEAKER_01, "
         "...). Adds processing time and needs the optional sherpa-onnx "
         "component to be installed.",
     ).pack(side="left", padx=(0, 20))
 
     ttk.Checkbutton(
-        quick_opts,
+        opts_line1,
         text="Per-word timestamps",
         variable=app.word_timestamps_var,
         command=app._save_transcribe_prefs,
     ).pack(side="left")
     help_icon(
-        quick_opts,
+        opts_line1,
         "Stores a start/end time for every individual word instead of only "
         "per sentence. Useful for karaoke-style captions or precise "
         "editing; makes the output file larger.",
@@ -401,18 +409,18 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
     # Optional time-slice — transcribe only a portion of a long file
     # (e.g. 5 minutes out of a 10-hour recording). 0:00:00 on a side means
     # "unset"; leaving both at 0:00:00 transcribes the whole file.
-    ttk.Label(quick_opts, text="    Time range:").pack(side="left")
+    ttk.Label(opts_line2, text="Time range:").pack(side="left")
     app.transcribe_start_time_var = tk.StringVar(value="0:00:00")
-    ttk.Entry(quick_opts, textvariable=app.transcribe_start_time_var, width=9).pack(
-        side="left", padx=(4, 2)
+    ttk.Entry(opts_line2, textvariable=app.transcribe_start_time_var, width=9).pack(
+        side="left", padx=(6, 2)
     )
-    ttk.Label(quick_opts, text="to").pack(side="left")
+    ttk.Label(opts_line2, text="to").pack(side="left")
     app.transcribe_end_time_var = tk.StringVar(value="0:00:00")
-    ttk.Entry(quick_opts, textvariable=app.transcribe_end_time_var, width=9).pack(
+    ttk.Entry(opts_line2, textvariable=app.transcribe_end_time_var, width=9).pack(
         side="left", padx=(2, 0)
     )
     help_icon(
-        quick_opts,
+        opts_line2,
         "Transcribe only this portion of the file (format H:MM:SS). Leave "
         "both at 0:00:00 to transcribe the whole file.",
     ).pack(side="left", padx=(4, 0))
@@ -624,7 +632,8 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         row=1, column=2, sticky="ew", padx=(6, 0), pady=(8, 0)
     )
     help_icon(
-        top, "Where the downloaded file is saved. Defaults to the folder "
+        top,
+        "Where the downloaded file is saved. Defaults to the folder "
         "you last used; Browse to change it.",
     ).grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(8, 0))
 
