@@ -394,15 +394,19 @@
   }
 
   function downloadLink(jobId, fmt, name) {
+    // name derives from the uploaded / downloaded media filename, which a
+    // non-Windows host can store with characters like "<" intact — escape
+    // it like every other untrusted string that lands in innerHTML.
     var href = "/api/jobs/" + jobId + "/result?fmt=" + encodeURIComponent(fmt) +
       tokenQuery("&");
-    return '<a href="' + href + '" download>' + name + "</a>";
+    return '<a href="' + href + '" download>' + escapeHtml(name) + "</a>";
   }
 
   function renderSubmit(jobId, j) {
     var html = "<p>Status: <b>" + j.status + "</b>" + (j.paused ? " (paused)" : "") + "</p>";
     html += '<div class="bar"><span style="width:' + (j.progress || 0) + '%"></span></div>';
-    if (j.status === "error") { html += '<p class="err">' + (j.error || "failed") + "</p>"; }
+    // j.error routinely embeds the submitted URL / filename — untrusted.
+    if (j.status === "error") { html += '<p class="err">' + escapeHtml(j.error || "failed") + "</p>"; }
     if (j.status === "finished" || j.status === "error" || j.status === "cancelled") {
       clearInterval(submitPollTimer);
       startBtn.disabled = false;
@@ -456,8 +460,9 @@
       }
       var statusTxt = j.status + (j.paused ? " (paused)" : "");
       return "<tr><td class=\"src\" title=\"" + escapeHtml(j.source) + "\">" + escapeHtml(j.source) +
-        "</td><td>" + statusTxt + "</td><td><div class=\"minibar\"><span style=\"width:" +
-        (j.progress || 0) + "%\"></span></div></td><td>" + (j.formats || []).join(", ") +
+        "</td><td>" + escapeHtml(statusTxt) + "</td><td><div class=\"minibar\"><span style=\"width:" +
+        (Number(j.progress) || 0) + "%\"></span></div></td><td>" +
+        (j.formats || []).map(escapeHtml).join(", ") +
         "</td><td>" + ctrls + "</td></tr>";
     });
     jobsBody.innerHTML = rows.join("");
@@ -493,7 +498,7 @@
         if (!res.ok) { throw new Error(res.d.error || "not found"); }
         renderResult(jobId, res.d);
       })
-      .catch(function (e) { resultStatus.innerHTML = '<p class="err">' + e.message + "</p>"; });
+      .catch(function (e) { resultStatus.innerHTML = '<p class="err">' + escapeHtml(e.message) + "</p>"; });
   }
 
   function renderResult(jobId, j) {
