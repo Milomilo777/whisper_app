@@ -5,6 +5,63 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ Fragility triage + 2 fixes (2026-07-18, evening) — backlog list below is now STALE
+
+Owner asked for fragile points to be found and hardened. The
+"REMAINING BACKLOG" list further down (§ Round 2, 2026-06-07) was
+re-triaged item by item against CURRENT code first — **almost all of
+it is already fixed** by the intervening sessions, so do NOT work from
+that list again without re-checking. Verified already-guarded, with
+the current guard located: UNC config `.exists()` hang (skipped for
+UNC drives in `core/config.py`), history `lastrowid` (`or 0` guards),
+server port out-of-range (clamped in both `_save_server_prefs` and
+`_start_server_async`), download slider knob crossing (snap logic in
+`_on_download_scale`), tiling grid size persistence
+(`_save_tiling_prefs`), duplicate concurrent re-run
+(`_active_dup_in_queue`), stale SMTV episode for a different URL
+(page_url match in `download_service`), SMTV CDN filename sanitise
+(`_sanitise_filename`), writers/base time formatting (NaN/negative/
+carry all handled), corrupt `config.json`/`history.db` at launch
+(recover-aside paths), binary file fed to Convert (UnicodeDecodeError
+is a ValueError, wrapped into ConvertError), upload filename traversal
+(sanitised in `core/server/jobs.py`), update check (daemon thread +
+lenient version parse). Checkpoint resume-language validation was
+re-examined and deliberately NOT changed: the resume path always
+forces the checkpoint's own stored language for the tail slice, so the
+mixed-language scenario isn't reachable from any current caller.
+
+Two things were genuinely still fragile, both fixed + tested + pushed:
+
+1. **Dropping a folder onto the window** only hit the generic
+   "Nothing to do with that drop" message. Now a dropped folder's
+   top-level media files are queued like a multi-file drop (no
+   recursion on purpose; empty folder reported by name; media-ness
+   comes from the new public `core.watcher.is_media_file()` so the
+   extension list stays single-sourced). Dead paths / unsupported
+   schemes are itemised in the "Ignored N dropped item(s)" line.
+   Tests in `tests/core/test_dnd_paths.py` (real tmp folders driving
+   `App._on_drop` with the stubbed-Tk pattern) +
+   `test_fixpack_bl_appui.py` updated to the new contract.
+2. **`core/stats.py` imported psutil unconditionally** despite its
+   "stats never break anything" contract, and
+   `transcription_service.py` imported `core.stats` OUTSIDE its try
+   blocks — a missing psutil wheel (source venv predating the 1.5.0
+   requirements bump) would have thrown ImportError inside the
+   task-done handler. psutil is now import-optional (`cpu_count`/
+   `mem_total` degrade to "0"), the imports moved inside the trys.
+   Test: `tests/core/test_stats_optional_psutil.py` (blocks the
+   import via `sys.modules` + reload; fails by construction pre-fix).
+
+Verified: pyright 0/0/0; full hermetic suite green (one run tripped
+the KNOWN Python-3.14 dev-env multi-Tk-root flake in
+`test_hub_setup_dialog.py` — passes in isolation and on the very next
+full run; shipped 3.11 runtime + CI 3.11/3.12 unaffected — same flake
+already documented in the 2026-06-07 entry); real `App()` construction
+smoke OK. Source-only again per the owner's no-rebuild instruction —
+next release folds these in with everything above.
+
+---
+
 ## ⭐ UI readability pass: hover-help everywhere + 2 new reusable tools — NOT built/released yet (2026-07-18)
 
 Owner asked for hover-help icons across the whole UI, then for
@@ -640,7 +697,10 @@ re-verified against CURRENT code). FIXED + tested + pushed:
 Tests in tests/core/test_fixpack_{frontend_edges,cloud,gcloud,worker,server,recorder,proc_ckpt}.py.
 `macos-ci` tip after this round: ~4697e3a. pyright app core 0/0/0.
 
-**REMAINING BACKLOG (lower priority — verified-real but not yet fixed):**
+**REMAINING BACKLOG — ⚠ STALE as of 2026-07-18: re-triaged item by
+item; nearly everything below has since been fixed. See the
+"Fragility triage" entry at the top of this file for the per-item
+disposition before touching any of these. (kept for history):**
 - Frontend mediums/lows from the hunt (full list in the wf_c7cb6f91-7a6 run output): duplicate concurrent
   re-run of the same file; stale SMTV episode reused for a different URL; tiling grid size not persisted;
   server port out-of-range not clamped on Start; directory/empty/non-http/multi-URL drop = silent no-op;
