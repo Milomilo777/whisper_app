@@ -312,7 +312,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # VAD parameters
         vad = ttk.LabelFrame(body, text="Voice Activity Detection")
-        vad.pack(fill="x", pady=(0, 8))
+        vad.pack(fill="x", pady=(0, 14))
         add_section_help(
             vad,
             "Voice Activity Detection skips silent stretches so the model "
@@ -328,7 +328,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # Output formats
         outputs = ttk.LabelFrame(body, text="Output formats")
-        outputs.pack(fill="x", pady=(0, 8))
+        outputs.pack(fill="x", pady=(0, 14))
         add_section_help(
             outputs,
             "Which transcript file types to write for every transcription "
@@ -345,7 +345,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # Whisper extras
         extras = ttk.LabelFrame(body, text="Whisper extras")
-        extras.pack(fill="x", pady=(0, 8))
+        extras.pack(fill="x", pady=(0, 14))
         add_section_help(
             extras,
             "Model choice + lower-level tuning for the offline/local "
@@ -500,7 +500,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
         ai = ttk.LabelFrame(body, text="AI Layer (Phase 2 + 3)")
-        ai.pack(fill="x", pady=(0, 8))
+        ai.pack(fill="x", pady=(0, 14))
         add_section_help(
             ai,
             "Optional local-AI extras layered on top of the transcript: a "
@@ -553,7 +553,7 @@ class AdvancedDialog(tk.Toplevel):
         cloud = ttk.LabelFrame(
             body, text="Cloud Speech-to-Text (Google) — optional, uploads audio"
         )
-        cloud.pack(fill="x", pady=(0, 8))
+        cloud.pack(fill="x", pady=(0, 14))
         ttk.Label(
             cloud,
             text=(
@@ -627,7 +627,7 @@ class AdvancedDialog(tk.Toplevel):
             body,
             text="NVIDIA Parakeet / FastConformer — local, runs offline",
         )
-        nvidia.pack(fill="x", pady=(0, 8))
+        nvidia.pack(fill="x", pady=(0, 14))
         ttk.Label(
             nvidia,
             text=(
@@ -670,7 +670,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # Watched folder
         watch = ttk.LabelFrame(body, text="Watched folder")
-        watch.pack(fill="x", pady=(0, 8))
+        watch.pack(fill="x", pady=(0, 14))
         add_section_help(
             watch,
             "Automatically queues any new audio/video file dropped into "
@@ -693,7 +693,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # Tray + telemetry
         misc = ttk.LabelFrame(body, text="App behaviour")
-        misc.pack(fill="x", pady=(0, 8))
+        misc.pack(fill="x", pady=(0, 14))
         add_section_help(
             misc,
             "General app behaviour: whether closing the window minimises "
@@ -717,7 +717,7 @@ class AdvancedDialog(tk.Toplevel):
 
         # SponsorBlock + auto-transcribe (Phase 3a)
         download = ttk.LabelFrame(body, text="Downloads (yt-dlp)")
-        download.pack(fill="x", pady=(0, 8))
+        download.pack(fill="x", pady=(0, 14))
         add_section_help(
             download,
             "Options for video downloads (Download Videos tab): whether a "
@@ -775,7 +775,7 @@ class AdvancedDialog(tk.Toplevel):
                 "— optional, uploads audio"
             ),
         )
-        gc.pack(fill="x", pady=(0, 8))
+        gc.pack(fill="x", pady=(0, 14))
 
         ttk.Label(
             gc,
