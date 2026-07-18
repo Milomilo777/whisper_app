@@ -5,6 +5,41 @@ this repo. Read this file before anything else.
 
 ---
 
+## ⭐ Colleague-reported round (2026-07-18, night) — 5 fixes + NVIDIA frontend E2E
+
+Colleague reported: (a) add `program_version` to the stats POST,
+(b) stats word count still 0 without a json output, (c) the macOS
+`.dmg` is x64-only and must say so in its filename, (d) does
+`nvidia/nemotron-3.5-asr-streaming-0.6b` work?
+
+Outcomes (details in `docs/CHANGELOG.md` under 1.5.0 Fixed):
+
+- (a) needs NO client change — the app has sent `program_version`
+  since v1.5.0. The DEPLOYED server php on smch.ir is the OLD 7-field
+  version (checked live via its GET banner); the colleague must deploy
+  this repo's `stats/transcription_stats.php` (has the column +
+  migration). WARNING relayed: the colleague's own rewritten php would
+  break ALL recording (inserts into a `program_version` column their
+  `CREATE TABLE` names `version`, and no `ALTER TABLE` migration for
+  the live DB).
+- (b) real residual bug, fixed: worker now reports
+  `word_count`/`audio_duration` in the `done` event (computed from
+  in-memory segments); parent prefers them. Live-verified: a txt-only
+  GUI run reported word_count=25.
+- (c) release asset renamed `WhisperProject-v1.5.0-macOS-x64.dmg`
+  (same bytes), release notes' stale "Windows-only" line fixed.
+- (d) YES with transformers >= 5.14 (5.12 does not know the
+  `nemotron3_5_asr` architecture — that is why it failed on the
+  colleague's machine). Proven END-TO-END through the real GUI
+  (engine combobox → Add → real worker → real model): word-perfect
+  transcript of a TTS clip on CPU. Three real bugs found by that
+  frontend run and fixed: alt-engine startup failure wrongly opened
+  the mandatory Whisper-download modal; the liveness watchdog killed
+  the healthy worker mid-first-download (heartbeat now starts before
+  load); the engine-status probe called `self.after()` off-thread.
+
+---
+
 ## ⭐ Fragility hunt round 2 (2026-07-18, later) — LAN-page HTML injection fixed
 
 A second sweep, focused on the less-audited surfaces (on-demand
@@ -211,14 +246,21 @@ the owner tried them. No repro details were captured — the failure
 mode and root cause are unknown.
 
 A colleague built a working replacement independently and shared it
-as a single universal `.dmg` at a private URL
-(`https://smch.ir/binaries/WhisperProject1.5.0.dmg`, said to cover
-both `arm64` and `x86_64`). Downloaded and uploaded to the v1.5.0
-release:
+as a single `.dmg` at a private URL
+(`https://smch.ir/binaries/WhisperProject1.5.0.dmg`, at the time said
+to cover both `arm64` and `x86_64`). Downloaded and uploaded to the
+v1.5.0 release:
 
 - Added: `WhisperProject-v1.5.0-macOS-universal.dmg` (~400 MB).
 - Removed: `WhisperProject-v1.5.0-macOS-arm64.dmg`,
   `WhisperProject-v1.5.0-macOS-x86_64.dmg`.
+
+**2026-07-18 correction**: the colleague clarified this build is
+Intel/x64-only, NOT universal. The release asset was renamed to
+`WhisperProject-v1.5.0-macOS-x64.dmg` (download → rename → re-upload →
+delete old; same bytes) and the release notes' stale "Windows-only"
+line now describes the x64 `.dmg`. The colleague should rename their
+smch.ir copy likewise.
 
 **Provenance caveat**: this asset was downloaded from a third-party
 URL and published to the public release **without checksum or build

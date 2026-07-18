@@ -50,6 +50,30 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- **Usage-stats `word_count` was STILL 0 for txt/docx/pdf-only runs**
+  (2026-07-18) — the v1.5.0 fallback below only re-parses formats
+  `core.convert` can read back. The worker now computes
+  `word_count`/`audio_duration` from its in-memory segments and reports
+  them in the `done` event; the app prefers those, so the count works for
+  every format selection.
+- **A failed alternative engine (whisper.cpp / cloud / NVIDIA) startup
+  misdiagnosed as a missing Whisper model** (2026-07-18) — the app
+  force-opened the mandatory ~3 GB Whisper download modal and buried the
+  real error in the console. It now shows the engine's own error dialog
+  instead.
+- **Liveness watchdog killed a healthy worker during a first-run engine
+  download** (2026-07-18) — the worker's heartbeat thread only started
+  after the model load, so a multi-GB silent download (NVIDIA HF weights,
+  whisper.cpp ggml) blew the 120 s timeout and restarted the worker in a
+  loop. The heartbeat now starts before the load.
+- **Engine-status probe crashed its thread on Python 3.14**
+  (2026-07-18) — it called `self.after()` off-thread; now routed through
+  `post_to_main()` like every other background-thread callback.
+- **NVIDIA backend: unrecognised-architecture load errors now say the
+  real cause** (2026-07-18) — e.g. `nvidia/nemotron-3.5-asr-streaming-0.6b`
+  needs `transformers >= 5.14`; older versions failed with a generic
+  message. Verified end-to-end: with transformers 5.14.1 that model loads
+  and transcribes correctly through the GUI.
 - **Usage-stats `word_count` was 0 whenever "json" wasn't among the
   chosen output formats** — the payload builder itself was correct, but
   the caller only ever tried to recover the word count from a `.json`
@@ -77,9 +101,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 - **macOS build didn't work** — the `arm64`/`x86_64` `.dmg`s built by
   Claude and uploaded 2026-07-04 were broken (owner-reported, no repro
   details available). A colleague built a working replacement and it
-  was uploaded 2026-07-15 as a single universal `.dmg`, replacing both
-  prior macOS assets. See `docs/SESSION_HANDOFF_NEXT.md` for the
-  provenance caveat on this replacement build.
+  was uploaded 2026-07-15, replacing both prior macOS assets. On
+  2026-07-18 the colleague clarified it is Intel/x64-only (not
+  universal), so the asset was renamed
+  `WhisperProject-v1.5.0-macOS-x64.dmg`. See
+  `docs/SESSION_HANDOFF_NEXT.md` for the provenance caveat.
 
 ### Changed
 
