@@ -542,9 +542,12 @@
   }
 
   function escapeHtml(s) {
+    // Escape the single quote too, so the primitive is safe for a value
+    // placed inside a single-quoted attribute as well as a double-quoted
+    // one - no caller should have to remember which quote style it used.
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   // ---- wire up ----
