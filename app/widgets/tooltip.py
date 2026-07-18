@@ -97,10 +97,14 @@ def help_icon(parent: tk.Widget, text: TextOrGetter, *, wraplength: int = _WRAP)
 def add_section_help(frame: tk.Widget, text: str, *, wraplength: int = _WRAP) -> ttk.Label:
     """Pin a small hover-help badge to the top-right corner of *frame*.
 
-    Works with any existing ``ttk.LabelFrame(text=...)`` (or plain Frame)
-    without touching its internal grid/pack layout — ``place()`` floats
-    independently of the frame's own geometry manager, so this is a
-    drop-in one-liner after the frame already exists.
+    DEPRECATED for LabelFrames — use :func:`section_labelframe` when
+    constructing a new one instead. This place()-based corner badge
+    assumes the frame's top-right corner is empty space, which is only
+    true when the section's own first row doesn't already reach the
+    right edge (a full-width label, a sticky="ew" widget, a value in the
+    last grid column all break that assumption) — confirmed to actually
+    collide with real content in several existing sections. Kept only
+    for any future non-LabelFrame use where labelwidget isn't available.
     """
     icon = ttk.Label(frame, text="ⓘ", foreground="#3a7bd5")
     try:
@@ -110,3 +114,23 @@ def add_section_help(frame: tk.Widget, text: str, *, wraplength: int = _WRAP) ->
     icon.place(relx=1.0, x=-4, y=1, anchor="ne")
     bind_tooltip(icon, text, wraplength=wraplength)
     return icon
+
+
+def section_labelframe(
+    parent: tk.Widget, title: str, help_text: str, *, wraplength: int = _WRAP, **kwargs: object,
+) -> ttk.LabelFrame:
+    """Build a ``ttk.LabelFrame`` whose title bar itself carries the hover
+    help, via ``labelwidget=`` instead of the plain ``text=`` option.
+
+    Tk renders a labelwidget in its own reserved spot, structurally
+    separate from whatever grid/pack content the frame holds — so unlike
+    a place()-based corner badge, there is no coordinate guessing and no
+    way for it to ever overlap real content, regardless of what that
+    section's first row looks like.
+    """
+    frame = ttk.LabelFrame(parent, **kwargs)  # type: ignore[arg-type]
+    header = ttk.Frame(frame)
+    ttk.Label(header, text=title).pack(side="left")
+    help_icon(header, help_text, wraplength=wraplength).pack(side="left", padx=(4, 0))
+    frame.configure(labelwidget=header)
+    return frame

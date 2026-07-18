@@ -20,7 +20,7 @@ from core.model_manager import (
 )
 from core.writers import supported_formats
 
-from app.widgets.tooltip import add_section_help, help_icon
+from app.widgets.tooltip import help_icon, section_labelframe
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,12 @@ class AdvancedDialog(tk.Toplevel):
         y = (screen_h - height) // 2
 
         self.geometry(f"{width}x{height}+{x}+{y}")
+        # resizable(True, True) above with no floor meant a user could drag
+        # this narrower than every section was just verified to fit at
+        # (1100px content-wise) — use the SAME already-screen-clamped
+        # width/height as the minimum, not a bare 1100, so this can't force
+        # the window wider than a genuinely small screen allows either.
+        self.minsize(width, height)
 
         # Auto-verify the Google Cloud key on open so the user can see at a
         # glance that the built-in (or configured) key works — no need to click
@@ -323,11 +329,8 @@ class AdvancedDialog(tk.Toplevel):
         canvas.bind("<Leave>", _unbind_mousewheel)
 
         # VAD parameters
-        vad = ttk.LabelFrame(body, text="Voice Activity Detection (skip silence)")
-        vad.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Voice Activity Detection", vad))
-        add_section_help(
-            vad,
+        vad = section_labelframe(
+            body, "Voice Activity Detection (skip silence)",
             "Voice Activity Detection skips silent stretches so the model "
             "only processes speech — faster, and avoids hallucinated text "
             "on silence. Min silence: how long a gap must be to count as "
@@ -335,21 +338,22 @@ class AdvancedDialog(tk.Toplevel):
             "audio is speech (lower = more sensitive). Speech pad: extra "
             "padding kept around each detected speech chunk.",
         )
+        vad.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Voice Activity Detection", vad))
         self._slider_row(vad, "Min silence (ms)", self._vad_min_silence, 100, 2000, 50, 0)
         self._slider_row(vad, "Threshold", self._vad_threshold, 0.1, 0.9, 0.05, 1, is_float=True)
         self._slider_row(vad, "Speech pad (ms)", self._vad_speech_pad, 0, 1000, 50, 2)
 
         # Output formats
-        outputs = ttk.LabelFrame(body, text="Output formats")
-        outputs.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Output formats", outputs))
-        add_section_help(
-            outputs,
+        outputs = section_labelframe(
+            body, "Output formats",
             "Which transcript file types to write for every transcription "
             "(SRT/VTT subtitles, plain TXT, JSON with timestamps, etc.). "
             "You can check more than one — all checked formats are "
             "written for every job.",
         )
+        outputs.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Output formats", outputs))
         for i, name in enumerate(supported_formats()):
             ttk.Checkbutton(
                 outputs,
@@ -358,16 +362,15 @@ class AdvancedDialog(tk.Toplevel):
             ).grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=4)
 
         # Whisper extras
-        extras = ttk.LabelFrame(body, text="Whisper extras")
-        extras.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Whisper extras", extras))
-        add_section_help(
-            extras,
+        extras = section_labelframe(
+            body, "Whisper extras",
             "Model choice + lower-level tuning for the offline/local "
             "engines: which weights to run, how much to batch on a GPU, "
             "prompt/hotword biasing, the backend engine, word-level "
             "timing refinement, and output naming.",
         )
+        extras.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Whisper extras", extras))
 
         # Model picker (v0.8) — slug → catalog entry. The catalog is the
         # MERGED config catalog (built-in MODEL_REGISTRY + any models the
@@ -514,16 +517,15 @@ class AdvancedDialog(tk.Toplevel):
         extras.columnconfigure(1, weight=1)
 
         # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
-        ai = ttk.LabelFrame(body, text="AI Layer (optional)")
-        ai.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("AI Layer", ai))
-        add_section_help(
-            ai,
+        ai = section_labelframe(
+            body, "AI Layer (optional)",
             "Optional local-AI extras layered on top of the transcript: a "
             "small offline LLM for summaries/chapter titles/Q&A, noise "
             "cleanup before transcribing, and cross-file speaker "
             "recognition. All opt-in and run on this machine.",
         )
+        ai.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("AI Layer", ai))
         ttk.Checkbutton(
             ai, text="Enable local LLM (download Qwen2.5-1.5B ~1 GB on first use)",
             variable=self._ai_enabled,
@@ -688,15 +690,14 @@ class AdvancedDialog(tk.Toplevel):
         nvidia.columnconfigure(1, weight=1)
 
         # Watched folder
-        watch = ttk.LabelFrame(body, text="Watched folder")
-        watch.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Watched folder", watch))
-        add_section_help(
-            watch,
+        watch = section_labelframe(
+            body, "Watched folder",
             "Automatically queues any new audio/video file dropped into "
             "this folder for transcription, using your current Transcribe "
             "settings — no need to open the app and browse for it.",
         )
+        watch.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Watched folder", watch))
         ttk.Checkbutton(
             watch, text="Auto-transcribe new files dropped here",
             variable=self._watched_folder_enabled,
@@ -712,15 +713,14 @@ class AdvancedDialog(tk.Toplevel):
         watch.columnconfigure(1, weight=1)
 
         # Tray + telemetry
-        misc = ttk.LabelFrame(body, text="App behaviour")
-        misc.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("App behaviour", misc))
-        add_section_help(
-            misc,
+        misc = section_labelframe(
+            body, "App behaviour",
             "General app behaviour: whether closing the window minimises "
             "to the system tray instead of exiting, and whether anonymous "
             "usage statistics (no audio or transcript content) are sent.",
         )
+        misc.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("App behaviour", misc))
         tray_check = ttk.Checkbutton(
             misc, text="Minimise to system tray instead of exit",
             variable=self._minimise_to_tray,
@@ -737,15 +737,14 @@ class AdvancedDialog(tk.Toplevel):
         ).pack(anchor="w", padx=8, pady=4)
 
         # SponsorBlock + auto-transcribe (Phase 3a)
-        download = ttk.LabelFrame(body, text="Downloads (yt-dlp)")
-        download.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Downloads (yt-dlp)", download))
-        add_section_help(
-            download,
+        download = section_labelframe(
+            body, "Downloads (yt-dlp)",
             "Options for video downloads (Download Videos tab): whether a "
             "download is auto-queued for transcription, which SponsorBlock "
             "segments get cut, and browser cookies for login-walled sites.",
         )
+        download.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Downloads (yt-dlp)", download))
         ttk.Checkbutton(
             download,
             text="Transcribe after download",

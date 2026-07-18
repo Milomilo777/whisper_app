@@ -13,7 +13,7 @@ from tkinter import ttk
 from typing import TYPE_CHECKING
 
 from app.domain.languages import SUBTITLE_LANGUAGES
-from app.widgets.tooltip import add_section_help, help_icon
+from app.widgets.tooltip import help_icon, section_labelframe
 
 if TYPE_CHECKING:
     from app.app import App
@@ -270,14 +270,16 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         anchor="center",
         justify="center",
     ).pack(fill="x", pady=(2, 12))
-    ttk.Button(drop_zone, text="Browse files...", command=app.browse).pack()
-    add_section_help(
-        drop_zone,
+    browse_row = ttk.Frame(drop_zone)
+    browse_row.pack()
+    ttk.Button(browse_row, text="Browse files...", command=app.browse).pack(side="left")
+    help_icon(
+        browse_row,
         "Pick an audio or video file to transcribe locally (mp3, wav, mp4, "
         "mkv, and most other common formats). The file is processed on "
         "this machine and never leaves it unless you pick a cloud Engine "
         "below.",
-    )
+    ).pack(side="left", padx=(6, 0))
 
     # ── Row 1: file path display (always visible — shows what's selected) ─
     file_row = ttk.Frame(parent)
@@ -469,16 +471,16 @@ def build_transcribe_tab(app: "App", parent: ttk.Frame) -> None:
         row=5, column=0, columnspan=3, sticky="ew",
         padx=15, pady=(8, 6),
     )
-    app.last_result_frame = ttk.LabelFrame(parent, text="Last result", padding=10)
-    app.last_result_frame.grid(
-        row=6, column=0, columnspan=3, sticky="ew",
-        padx=15, pady=(0, 12),
-    )
-    add_section_help(
-        app.last_result_frame,
+    app.last_result_frame = section_labelframe(
+        parent, "Last result",
         "The output files from the most recently finished transcription, "
         "with quick Open/Reveal actions. Stays empty until a job "
         "completes; see the Transcription Queue tab for jobs in progress.",
+        padding=10,
+    )
+    app.last_result_frame.grid(
+        row=6, column=0, columnspan=3, sticky="ew",
+        padx=15, pady=(0, 12),
     )
     # The card sizes to its content instead of greedily filling the whole
     # lower half of the tab (it previously expanded via rowconfigure
@@ -700,15 +702,15 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     # zero/blank bound as "unset", so leaving both = the full video.
     app.download_start_time_var = tk.StringVar(value="0:00:00")
     app.download_end_time_var = tk.StringVar(value="0:00:00")
-    trim_frame = ttk.LabelFrame(top, text="Time range (optional)", padding=(8, 4))
-    trim_frame.grid(
-        row=5, column=2, sticky="ew", padx=(12, 0), pady=(8, 0)
-    )
-    add_section_help(
-        trim_frame,
+    trim_frame = section_labelframe(
+        top, "Time range (optional)",
         "Download (and optionally transcribe) only this portion of the "
         "video instead of the whole thing. Leave both at 0:00:00 for the "
         "full length.",
+        padding=(8, 4),
+    )
+    trim_frame.grid(
+        row=5, column=2, sticky="ew", padx=(12, 0), pady=(8, 0)
     )
     ttk.Label(trim_frame, text="Start").grid(row=0, column=0, sticky="w")
     start_entry = ttk.Entry(
@@ -1142,14 +1144,14 @@ def build_server_tab(app: "App", parent: ttk.Frame) -> None:
     url_label.pack(anchor="w", pady=(2, 12))
 
     # --- options -------------------------------------------------------------
-    opts = ttk.LabelFrame(frame, text="Options", padding=12)
-    opts.pack(fill="x", pady=(0, 8))
-    add_section_help(
-        opts,
+    opts = section_labelframe(
+        frame, "Options",
         "Port, network sharing, and an optional access password for the "
         "web page this tab starts. Each field also has its own note "
         "below it.",
+        padding=12,
     )
+    opts.pack(fill="x", pady=(0, 8))
 
     # Port.
     port_row = ttk.Frame(opts)

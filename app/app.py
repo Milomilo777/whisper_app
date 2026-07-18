@@ -615,6 +615,14 @@ class App(tk.Tk):
                 self.geometry("960x640")
         else:
             self.geometry("960x640")
+        # Nothing previously stopped the user (or a stale saved
+        # window_geometry from an older, less-crowded layout) from
+        # shrinking the window below the size every tab's layout is
+        # actually laid out for — pack(side="left") rows don't wrap,
+        # they silently clip. 960x640 is the app's own chosen default,
+        # not an arbitrary number; this only stops shrinking below it,
+        # growing is unaffected.
+        self.minsize(960, 640)
         self.protocol("WM_DELETE_WINDOW", self.on_exit)
 
         # Per-instance queues (no more module-globals — AUDIT B3 fix).

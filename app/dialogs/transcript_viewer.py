@@ -387,6 +387,14 @@ class TranscriptViewer(tk.Toplevel):
         super().__init__(master)
         self.title(f"Transcript — {os.path.basename(json_path)}")
         self.geometry("1180x720")
+        # No resizable()/minsize() existed before — Tk's default is
+        # resizable in both directions, so nothing stopped a user from
+        # shrinking below the width the toolbar (media label + search +
+        # Find&Replace + Remove fillers + Save + Open JSON folder, now
+        # plus 2 hover icons) actually needs. Floor it at the window's
+        # own launch size, which was already fixed regardless of screen
+        # size, so this doesn't change anything about small-screen fit.
+        self.minsize(1180, 720)
         self.transient(master)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
