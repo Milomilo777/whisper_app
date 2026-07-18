@@ -154,11 +154,14 @@ jobs:
         run: |
           brew install create-dmg
           bash platform/macos/pyinstaller/builddmg.command
-          # Tag the .dmg with its arch so the two matrix builds don't collide
-          # and users can pick the right one (arm64 vs x86_64/Intel).
+          # builddmg.command now arch-suffixes the name itself (x64/arm64,
+          # from uname -m) so a single-arch build can't masquerade as
+          # universal. Keep this legacy rename as a no-op fallback in case
+          # an older script revision produced the unsuffixed name.
           if [ -f "dist/Whisper Project.dmg" ]; then
             mv "dist/Whisper Project.dmg" "dist/Whisper Project-${{ matrix.arch }}.dmg"
           fi
+          ls -la dist/*.dmg || true
 
       # ---- Method 2: source-venv install.command ----
       - name: "Method 2 - run install.command (source venv -> .app)"

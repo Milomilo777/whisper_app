@@ -14,7 +14,16 @@ rm -rf dist/dmg/
 mkdir dist/dmg
 cp -R "dist/Whisper Project.app" dist/dmg/
 
-rm -f "dist/Whisper Project.dmg"
+# Arch-suffix the .dmg name so a single-arch build is never mistaken for
+# a universal one (a real mixup: an x64-only build shipped under a
+# "universal" name in v1.5.0). x86_64 -> "x64" per the team's convention.
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) SUFFIX="x64" ;;
+  *)      SUFFIX="$ARCH" ;;
+esac
+DMG="dist/Whisper Project-${SUFFIX}.dmg"
+rm -f "$DMG" "dist/Whisper Project.dmg"
 
 create-dmg \
   --volname "Whisper Project" \
@@ -24,7 +33,7 @@ create-dmg \
   --icon "Whisper Project.app" 170 130 \
   --hide-extension "Whisper Project.app" \
   --app-drop-link 430 130 \
-  "dist/Whisper Project.dmg" \
+  "$DMG" \
   "dist/dmg/"
 
-echo "Built: dist/Whisper Project.dmg"
+echo "Built: $DMG"
