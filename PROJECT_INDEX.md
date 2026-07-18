@@ -86,8 +86,8 @@ Tkinter desktop GUI layer of Whisper Project. The App(tk.Tk) root in app/app.py 
 - `app/widgets/tray.py` — TrayController: pystray+Pillow system-tray icon (idle/active colour), minimise-to-tray; explicitly unsupported on macOS.
 - `app/widgets/console.py` — build_console(): the read-only log Text widget + its Copy/Copy all/Clear right-click menu. Theme-aware (apply_console_theme(), matches app.py's Light/Dark/System toggle) and colours likely-failure lines red via insert_log_line()'s word-boundary regex match on "could not"/"failed"/"error" — see Gotchas.
 - `app/widgets/platform.py` — open_folder(): cross-platform 'reveal in file manager' helper (os.startfile / open / xdg-open); routes failures through error_dialog.show_error() when it has a real Tk/Toplevel parent.
-- `app/widgets/tooltip.py` — Shared hover-help helpers, added 2026-07-18: `bind_tooltip(widget, text_or_getter)` (the low-level yellow-popup binder — text may be a callable for dynamic content, e.g. the device badge), `help_icon(parent, text)` (a small "ⓘ" Label for next to an individual control), `section_labelframe(parent, title, help_text, **kwargs)` (builds a ttk.LabelFrame whose *title bar itself* carries the help icon via labelwidget= — the only correct way to add a hover-help icon to a LabelFrame's header; see Gotchas for why a place()-based corner badge is NOT safe).
-- `app/widgets/error_dialog.py` — `show_error(parent, title, message, detail=None)`, added 2026-07-18: the app-wide convention for user-facing error dialogs — a plain-language sentence up front, with str(e)/traceback text (if any) behind a collapsible "Show details" (still copyable). Use this instead of `messagebox.showerror(title, str(e))` for anything a non-technical user might hit.
+- `app/widgets/tooltip.py` — Shared hover-help helpers, added 2026-07-18: `bind_tooltip(widget, text_or_getter)` (the low-level yellow-popup binder — text may be a callable for dynamic content, e.g. the device badge; shows after a ~450ms grace delay and clamps/flips the popup to stay on-screen near the right/bottom edges — clamping is skipped on secondary monitors since winfo_screenwidth/height describe only the primary display), `help_icon(parent, text)` (a small "ⓘ" Label for next to an individual control), `section_labelframe(parent, title, help_text, **kwargs)` (builds a ttk.LabelFrame whose *title bar itself* carries the help icon via labelwidget= — the only correct way to add a hover-help icon to a LabelFrame's header; see Gotchas for why a place()-based corner badge is NOT safe).
+- `app/widgets/error_dialog.py` — `show_error(parent, title, message, detail=None)`, added 2026-07-18: the app-wide convention for user-facing error dialogs — a plain-language sentence up front, with str(e)/traceback text (if any) behind a collapsible "Show details" (still copyable). Matches a native messagebox's contract: Enter/Esc dismiss, focus starts on OK, a red warning glyph + bell on open. Non-blocking (returns immediately, unlike messagebox) — every call site must be fire-and-return. Use this instead of `messagebox.showerror(title, str(e))` for anything a non-technical user might hit.
 
 **Entry points**
 - gui.py (repo root) -> app.run() -> App().mainloop() — default GUI launch
@@ -527,17 +527,17 @@ pip install pyright pytest
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 408
-- **Structure refreshed:** 2026-07-18T11:10:10
+- **Source files tracked:** 410
+- **Structure refreshed:** 2026-07-18T14:58:51
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +1 added · ~6 changed · -1 removed
+- **Drift since semantic build:** +3 added · ~16 changed · -1 removed
 
 | Top-level | Source files |
 |---|---|
 | `tests` | 173 |
 | `docs` | 80 |
 | `core` | 64 |
-| `app` | 24 |
+| `app` | 26 |
 | `.claude` | 20 |
 | `(root)` | 16 |
 | `.github` | 13 |
@@ -546,6 +546,6 @@ pip install pyright pytest
 | `assets` | 1 |
 | `creds` | 1 |
 
-**By type:** `.py`×263  `.md`×93  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×265  `.md`×93  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->

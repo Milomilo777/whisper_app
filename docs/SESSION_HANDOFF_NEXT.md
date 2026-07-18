@@ -84,6 +84,23 @@ all pre-existing; a fresh full re-read of the 3 new files) turned up
 nothing new beyond one dead-code deletion (`add_section_help` itself,
 once nothing called it anymore) — treated as convergence.
 
+**Follow-up polish pass (2026-07-18, later session)** hardened the two
+new tools themselves (3 commits, still source-only, same
+no-rebuild-yet rule as above): `bind_tooltip` now waits a standard
+~450 ms grace delay before showing (cancelled on leave/click/destroy)
+and clamps the popup on-screen near the right/bottom edges, flipping
+above the widget when below would overflow — clamping deliberately
+skipped for widgets on a secondary monitor, where Tk's screen metrics
+describe only the primary display. `show_error` gained the native
+messagebox keyboard contract (Enter/Esc dismiss, focus starts on OK),
+a red warning glyph, and the alert bell — it remains non-blocking,
+which is safe because all 10 call sites are fire-and-return. The LAN
+page's CSS tooltip is now left-anchored with a viewport-capped width
+and becomes a bottom-pinned strip on ≤480px phones (the centred 240px
+bubble used to clip off the left edge). All behaviour verified on a
+real running Tk instance, including the flip branch via the
+simulated-screen-height technique from `PROJECT_INDEX.md`'s Gotchas.
+
 Verified throughout: `pyright` 0/0/0, full hermetic + smoke suite
 green, `gui.py` launches clean, zero badge/content overlaps on a full
 pixel-level sweep, all "Jump to" nav links land correctly.
