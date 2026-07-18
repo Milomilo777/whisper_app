@@ -94,28 +94,6 @@ def help_icon(parent: tk.Widget, text: TextOrGetter, *, wraplength: int = _WRAP)
     return icon
 
 
-def add_section_help(frame: tk.Widget, text: str, *, wraplength: int = _WRAP) -> ttk.Label:
-    """Pin a small hover-help badge to the top-right corner of *frame*.
-
-    DEPRECATED for LabelFrames — use :func:`section_labelframe` when
-    constructing a new one instead. This place()-based corner badge
-    assumes the frame's top-right corner is empty space, which is only
-    true when the section's own first row doesn't already reach the
-    right edge (a full-width label, a sticky="ew" widget, a value in the
-    last grid column all break that assumption) — confirmed to actually
-    collide with real content in several existing sections. Kept only
-    for any future non-LabelFrame use where labelwidget isn't available.
-    """
-    icon = ttk.Label(frame, text="ⓘ", foreground="#3a7bd5")
-    try:
-        icon.configure(cursor=_CURSOR)
-    except tk.TclError:
-        pass
-    icon.place(relx=1.0, x=-4, y=1, anchor="ne")
-    bind_tooltip(icon, text, wraplength=wraplength)
-    return icon
-
-
 def section_labelframe(
     parent: tk.Widget, title: str, help_text: str, *, wraplength: int = _WRAP, **kwargs: object,
 ) -> ttk.LabelFrame:
