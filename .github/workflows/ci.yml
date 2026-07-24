@@ -11,7 +11,7 @@ name: CI
 
 on:
   push:
-    branches: [master, "release/**", "feature/**", "chore/**"]
+    branches: [master]
   pull_request:
     branches: [master, "release/**", "chore/**"]
 
