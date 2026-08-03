@@ -1,223 +1,239 @@
+<div align="center">
+
+<img src="docs/img/hero.png" alt="Whisper Project — transcribe audio and video on your own machine. No cloud, no account, no upload." width="100%">
+
 # Whisper Project
 
-> 📍 **Start at [`PROJECT_INDEX.md`](PROJECT_INDEX.md)** — a generated, tool-neutral repo map for fast, low-token onboarding by any AI agent or human.
+### Drag in an audio or video file. Get back a **timed, formatted transcript** — without it ever leaving your computer.
 
 [![CI](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml/badge.svg)](https://github.com/Milomilo777/whisper_app/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/Milomilo777/whisper_app?label=release)](https://github.com/Milomilo777/whisper_app/releases/latest)
+[![release](https://img.shields.io/github/v/release/Milomilo777/whisper_app?label=release&color=207a80)](https://github.com/Milomilo777/whisper_app/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/Milomilo777/whisper_app/total?color=207a80)](https://github.com/Milomilo777/whisper_app/releases)
 [![codecov](https://codecov.io/gh/Milomilo777/whisper_app/graph/badge.svg)](https://codecov.io/gh/Milomilo777/whisper_app)
+[![License: BSD-3](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](#download)
 
-**A Windows desktop app that transcribes audio and video files locally
-using OpenAI's Whisper model.** Drag a file in, get back `.srt`,
-`.vtt`, `.json`, `.docx`, `.pdf`, and more (a "Convert transcript"
-picker adds oTranscribe/ELAN/InqScribe and other formats on demand).
-No cloud, no account, no upload. Also downloads from any site `yt-dlp`
-supports.
+### [⬇  Download for Windows](https://github.com/Milomilo777/whisper_app/releases/latest)
 
-Two deliverables for two audiences (replace `X.Y.Z` with whatever
-[the latest release](https://github.com/Milomilo777/whisper_app/releases/latest)
-actually is):
+**[Download](#download)** · **[Screenshots](#what-it-looks-like)** ·
+**[Features](#features)** · **[How it works](#how-it-works)** ·
+**[Privacy](#offline-by-default)** · **[Docs](#documentation)** ·
+**[Build from source](#build-from-source)**
 
-| Method | Asset | Size | Best for |
-|---|---|---|---|
-| **Portable** | `WhisperProject-vX.Y.Z-Portable.zip` | ~340 MB | unzip and run, no install, USB-stick friendly |
-| **Standard** | `WhisperProject-vX.Y.Z-Setup-Standard.exe` | ~230 MB | proper installer — Start-menu shortcut, files live on disk, Python visible for debugging |
-
-Download from the latest release:
-**[github.com/Milomilo777/whisper_app/releases/latest](https://github.com/Milomilo777/whisper_app/releases/latest)**
-
-Step-by-step install guide: [docs/INSTALL.md](docs/INSTALL.md).
+</div>
 
 ---
 
-## What it does
+A desktop app that runs OpenAI's Whisper model **locally** — via
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper) — so transcription
+costs nothing per minute, works on a plane, and never uploads your recording to
+anyone. Drop a file in and it writes `.srt`, `.vtt`, `.txt`, `.json`, `.docx`,
+`.pdf` and more, right next to the original. It also downloads from any site
+`yt-dlp` supports, labels speakers, batches a queue of jobs, and can turn itself
+into a transcription page for the other devices on your network.
 
-- **Transcribe** — drag-and-drop one or many files. Optional: Voice
-  Activity Detection, word-level timestamps, speaker diarisation.
-  Outputs land next to your input in `srt`, `vtt`, `tsv`, `txt`,
-  `json`, `lrc`, `md`, `docx`, `pdf` — plus a separate "Convert
-  transcript" picker that re-emits any existing transcript file into
-  those formats or into oTranscribe/ELAN/InqScribe/Express Scribe.
-- **Last-Result card** — every finished transcription opens a card
-  with file sizes, one-click "Open file" buttons, an "Open folder"
-  shortcut, and a "View transcript" button that launches the in-app
-  viewer (split-pane, click-to-seek, embedded VLC playback when
-  available).
-- **Download Videos** — paste any URL `yt-dlp` supports OR any
-  Supreme Master TV episode link, pick a format, save to your
-  folder. Optionally auto-transcribe after the download.
-- **Transcription Queue** — live status of pending + running jobs.
-  An always-visible action bar under the list gives every task a
-  one-click **Pause / Resume / Cancel / Re-run / Remove** (buttons
-  enable for the selected row's state); a single click on a running
-  or paused row's status/progress cell toggles pause/resume. The same
-  actions stay on the right-click menu, and `Esc` still cancels the
-  running job. Double-click a finished row to jump to its folder.
-- **Download Videos action bar** — the same per-task controls under the
-  download list: **Pause / Resume / Cancel / Re-run / Remove / Open**.
-  Because `yt-dlp` has no live pause signal, download **Pause is
-  "stop-and-continue"**: it stops the download but keeps the partial
-  file, and Resume continues from where it left off (via `yt-dlp`'s
-  `-c`/`--continue`) instead of restarting. Pause is unavailable for
-  Supreme Master TV downloads, which have no resume point.
-- **Video Tiling** — play one live stream as a full-screen N×N grid (a
-  "video wall") of identical tiles. One stream is downloaded once and
-  tiled; pick a quality band (Auto/1080p…/144p), mute, and — across
-  several monitors — a **Multi-monitor** wall with one window per screen
-  (use **Monitors…** to choose screens, with **Identify** to flash each
-  monitor's number). Reconnect is automatic with exponential backoff, and
-  yt-dlp self-heals (updates) after repeated drops. Needs `ffplay` on PATH
-  or in the app's `bin/` folder (it is not bundled).
+No account. No API key. No subscription. Your files stay on your disk.
 
-Keyboard: `Ctrl+O` Browse · `Ctrl+Enter` Transcribe · `Esc` Cancel ·
-`Ctrl+Q` Exit.
+## Download
 
-First launch downloads the ~3 GB Whisper model from a CDN mirror.
-Everything after that is fully offline.
+Grab the latest build from the **[releases page](https://github.com/Milomilo777/whisper_app/releases/latest)**:
 
----
+| Asset | Size | Best for |
+|---|---|---|
+| **`WhisperProject-…-Setup-Standard.exe`** | ~215 MB | **Most people.** A normal installer: Start-menu shortcut, upgrades in place over an older version, files visible on disk. |
+| **`WhisperProject-…-Portable.zip`** | ~330 MB | Unzip and run. No installation, no admin rights, happy on a USB stick. |
+| **`WhisperProject-…-macOS-*.dmg`** | ~400 MB | macOS (x64 and arm64 builds are published separately). |
 
-## First-run setup — the Model Hub Folder
+Everything needed is inside — a bundled Python, `ffmpeg`, `ffprobe` and
+`yt-dlp`. The only thing fetched later is the speech model itself
+(**~1–3 GB, once**, on first launch); after that the app is fully offline.
 
-On the first launch, the app asks where to store the Whisper model
-files via a folder-picker dialog. The default suggestion is a private
-per-user cache folder, `%LOCALAPPDATA%\WhisperProject\Cache\models`, which
-is always writable (never the Program Files install dir); the user can
-pick any location (an external drive, a network share, etc.). The
-choice is persisted to `%LOCALAPPDATA%\WhisperProject\config.json`
-under the `hub_folder` key and the dialog never asks again.
+Step-by-step walkthrough, including what to click past on Windows SmartScreen:
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
-If you ever need to reset, run with `--safe-mode`:
+## What it looks like
+
+<div align="center">
+
+<img src="docs/img/screenshot-transcribe.png" alt="The Transcribe tab: a drop target, engine and language pickers, speaker-label and word-timestamp options" width="88%">
+
+<sub>Drop a file, pick your options, press Transcribe. That is the whole workflow.</sub>
+
+</div>
+
+<details>
+<summary><b>The other four tabs</b></summary>
+
+<br>
+
+**Transcription Queue** — batch jobs with live progress; pause, resume, cancel,
+re-run or remove any row.
+
+<img src="docs/img/screenshot-queue.png" alt="Transcription Queue tab" width="100%">
+
+**Download Videos** — any `yt-dlp` site: pick a format, clip a time range, pull
+subtitles, optionally transcribe as soon as the download finishes.
+
+<img src="docs/img/screenshot-download.png" alt="Download Videos tab" width="100%">
+
+**Video Tiling** — play one live stream as a full-screen N×N video wall,
+optionally across several monitors.
+
+<img src="docs/img/screenshot-tiling.png" alt="Video Tiling tab" width="100%">
+
+**Web / LAN access** — one button turns this machine into a transcription page
+for the phones and PCs on your network.
+
+<img src="docs/img/screenshot-web.png" alt="Web / LAN access tab" width="100%">
+
+</details>
+
+## Features
+
+<div align="center">
+
+<img src="docs/img/features.png" alt="Five tabs, one window: Transcribe, Transcription Queue, Download Videos, Video Tiling, Web/LAN access, Convert transcript" width="100%">
+
+</div>
+
+| | |
+|---|---|
+| **Local transcription** | Whisper `large-v3` by default, plus `large-v3-turbo` and `distil-large-v3.5`. Backends: `faster_whisper` (default), `whisper.cpp`, NVIDIA Parakeet. |
+| **Many output formats** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — written next to your input file. |
+| **Convert transcript** | Re-emit an existing transcript into the formats above, or into oTranscribe / ELAN / InqScribe / Express Scribe. |
+| **Speaker diarisation** | Optional "Identify speakers", plus per-word timestamps and time-range clipping. |
+| **Last-Result card** | File sizes, one-click **Open file** / **Open folder**, and an in-app viewer with split-pane click-to-seek playback. |
+| **Batch queue** | Live status for every pending and running job, with **Pause / Resume / Cancel / Re-run / Remove** always one click away. |
+| **Downloads** | Anything `yt-dlp` handles, plus Supreme Master TV episode links. Downloads resume rather than restart. |
+| **Video wall** | Tile one live stream as an N×N grid across one or many monitors. |
+| **Local network mode** | A stdlib-only web server so other devices can transcribe through this machine — optional password, off until you start it. |
+| **Post-processing** | Automatic chapters and hallucination detection, both toggleable. |
+
+Keyboard: `Ctrl+O` browse · `Ctrl+Enter` transcribe · `Esc` cancel ·
+`Ctrl+Q` exit.
+
+## How it works
+
+<div align="center">
+
+<img src="docs/img/how-it-works.png" alt="Drop a file, the Tk GUI queues it, a worker subprocess holds the model in memory and runs faster-whisper, and the transcript lands in your folder" width="100%">
+
+</div>
+
+The Tk GUI runs in the main process. Each transcription job runs in a
+long-lived subprocess worker that keeps the Whisper model in memory and talks
+back over newline-delimited JSON on stdin/stdout; `yt-dlp` gets its own
+subprocess per download. A per-worker UUID token and a 5-second heartbeat keep
+that routing robust against PID recycling and let the GUI detect a wedged
+worker instead of hanging with it.
+
+Deeper: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (prose) ·
+[docs/architecture.svg](docs/architecture.svg) (full diagram) ·
+[docs/DECISIONS.md](docs/DECISIONS.md) (why things are the way they are).
+
+## Offline by default
+
+Every default backend runs on your machine. Nothing is uploaded, no account
+exists, and the app works with the network unplugged once the model is
+downloaded.
+
+> [!IMPORTANT]
+> Two **opt-in** backends break that guarantee, and both are off unless you go
+> into **Advanced → Backend** and choose them. Use them only for content you
+> are willing to send to a third party.
+>
+> - **`cloud_stt`** — Google **Gemini API**, authenticated with a free API key
+>   you paste. Quickest to set up. → [docs/CLOUD_STT.md](docs/CLOUD_STT.md)
+> - **`google_cloud_stt`** — full **Google Cloud Speech-to-Text**, authenticated
+>   with a service-account JSON file. 60 free minutes/month, speaker labels, a
+>   cheaper batch mode. → [docs/CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md)
+
+The optional update check is likewise **notify-only**: it asks GitHub whether a
+newer release exists, at most once a day, and never downloads or installs
+anything by itself. Turn it off with `update_check_enabled`.
+
+<details>
+<summary><b>First run — choosing where the model lives</b></summary>
+
+<br>
+
+On first launch the app asks where to store the Whisper model files. The
+default is a private per-user cache that is always writable —
+`%LOCALAPPDATA%\WhisperProject\Cache\models` — never the Program Files install
+directory. Pick anywhere you like instead: an external drive, a network share.
+
+The choice is saved to `%LOCALAPPDATA%\WhisperProject\config.json` under
+`hub_folder`, and the dialog never appears again. To start over:
 
 ```cmd
 WhisperProject.exe --safe-mode
 ```
 
-This backs up the user config aside and re-fires the first-run
-dialog with the defaults.
+That moves the user config aside and re-fires the first-run dialog with the
+defaults.
 
----
+</details>
 
-## Configuration
+<details>
+<summary><b>Configuration keys</b></summary>
 
-User settings live at:
+<br>
 
-```
-%LOCALAPPDATA%\WhisperProject\config.json
-```
-
-Key fields:
+User settings live at `%LOCALAPPDATA%\WhisperProject\config.json`.
 
 | Key | What it controls |
 |---|---|
-| `hub_folder` | Where Whisper model files are stored (set by first-run dialog) |
+| `hub_folder` | Where Whisper model files are stored (set by the first-run dialog) |
 | `model_path` | Per-model override; derived from `hub_folder + model.name` when unset |
-| `whisper_model` | One of `large-v3` (default), `large-v3-turbo`, `distil-large-v3.5` |
-| `transcribe_backend` | One of `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt`, `google_cloud_stt` |
+| `whisper_model` | `large-v3` (default), `large-v3-turbo`, `distil-large-v3.5` |
+| `transcribe_backend` | `faster_whisper` (default), `whisper_cpp`, `parakeet`, `cloud_stt`, `google_cloud_stt` |
 | `auto_chapters_enabled`, `hallucination_detect_enabled` | Post-process toggles |
-| `update_check_enabled` | Opt-in GitHub "update available" check (on by default; notify-only, never auto-downloads) |
-| `last_update_check` | ISO date of the last quiet update check (once-per-day throttle) |
+| `update_check_enabled` | Opt-in GitHub update check (on by default; notify-only) |
+| `last_update_check` | ISO date of the last check (once-per-day throttle) |
 
 Full reference: [docs/CONFIG.md](docs/CONFIG.md).
 
-### Optional cloud backend (uploads your audio)
+</details>
 
-There are two **opt-in, non-offline** backends, both set in
-**Advanced > Backend**. Each **breaks the offline guarantee** — use them
-only for content you may send to a cloud service. All default backends
-remain fully offline.
+<details>
+<summary><b>Updating to a newer version</b></summary>
 
-- `cloud_stt` — Google **Gemini API**, authenticated with a free API key
-  you paste. Quickest setup. Details:
-  [docs/CLOUD_STT.md](docs/CLOUD_STT.md).
-- `google_cloud_stt` — the full **Google Cloud Speech-to-Text** service,
-  authenticated with a service-account JSON file you download. Gives 60
-  free minutes/month, speaker labels, and a cheaper batch mode. Details:
-  [docs/CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md).
+<br>
 
----
+**No uninstall needed.** The Standard installer uses a stable application ID,
+so you just download the newer `…-Setup-Standard.exe` and run it — it upgrades
+over the existing install and keeps your shortcut and settings. The Portable
+build is self-contained: replace the old folder with the new one.
 
-## Updating to a newer version
+**Help → Check for updates…** runs the check on demand and also tells you when
+you are already current. The quiet daily check stays silent unless something
+newer exists, and fails silently when offline.
 
-**In-place upgrade — no uninstall needed.** The Standard installer uses a
-stable application ID, so to move to a newer version you simply download
-the new `...-Setup-Standard.exe` and run it; it upgrades over the existing
-install (keeping your Start-menu shortcut and settings). You do **not** need
-to uninstall the previous version first. The Portable build is self-contained
-— just replace the old folder/EXE with the new one.
+</details>
 
-**Optional update check.** The app can check GitHub for a newer release.
-It is **opt-in** (on by default, toggle `update_check_enabled`) and
-**notify-only**: it never downloads or installs anything. A quiet check
-runs at most once per day on launch and stays silent unless a newer
-version exists; if one does, it offers to open the download page in your
-browser. **Help → Check for updates...** runs the same check on demand
-and also tells you when you're already up to date. The check fails
-silently when offline (nothing is shown).
+<details>
+<summary><b>Share it on your local network</b></summary>
 
----
+<br>
 
-## Architecture (one paragraph)
+Rather than installing the app on every machine, let people on a trusted
+network transcribe through this one. The **Web / LAN access** tab does it with
+one button, an optional port, a "Share on local network" checkbox and an
+optional access password.
 
-The Tk GUI runs in the main process. Each transcription job runs in
-a long-lived subprocess worker that holds the Whisper model in
-memory and talks back to the GUI via newline-delimited JSON over
-stdin/stdout. yt-dlp runs as its own subprocess per download. A
-per-worker UUID token and 5-second heartbeat keep IPC routing
-robust against PID recycling and wedge-detection.
-
-```
-Tk App  ── JSON stdio ──►  Worker subprocess (faster-whisper)
-        ── subprocess  ──►  yt-dlp.exe
-```
-
-Visuals: [docs/architecture.svg](docs/architecture.svg) (full
-diagram) · [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (prose).
-
-### Optional: share it on your local network
-
-Instead of installing the app on every machine, you can let people on a
-trusted network transcribe through a browser. The easiest way is the
-**Web / LAN access** tab in the app: one button turns it on/off, with an
-optional port, a "Share on local network" checkbox, and an optional access
-password — all explained in plain language right on the tab.
-
-For headless / scripted use there is an equivalent command-line server
-(same stdlib-only HTTP engine):
+For headless or scripted use there is an equivalent command line (same
+stdlib-only HTTP engine):
 
 ```cmd
 python gui.py serve          REM loopback only (no firewall prompt)
 python gui.py serve --lan    REM share on the LAN (allow the firewall prompt)
 ```
 
-See [docs/SERVER.md](docs/SERVER.md) for the one-click toggle, routes, the
-upload cap, the optional password / `--token`, and the trusted-network
-security caveats.
+It has no accounts and no encryption — anyone who can reach the address (and
+knows the password, if you set one) can use it. Trusted networks only. Routes,
+the upload cap and the `--token` option: [docs/SERVER.md](docs/SERVER.md).
 
----
-
-## Documentation
-
-| Doc | Audience |
-|---|---|
-| [INSTALL.md](docs/INSTALL.md) | End-user install + troubleshooting |
-| [SERVER.md](docs/SERVER.md) | Optional local-network / web server mode (`gui.py serve`) |
-| [BUILD.md](docs/BUILD.md) | Build the three deliverables yourself |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Process model + threading + protocols |
-| [CONFIG.md](docs/CONFIG.md) | Every config key with defaults |
-| [CLOUD_STT.md](docs/CLOUD_STT.md) | Optional Gemini-API cloud backend (paste a key) |
-| [CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md) | Optional Google Cloud Speech-to-Text backend (service-account JSON, batch mode) |
-| [RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | How to ship a new version |
-| [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
-| [DECISIONS.md](docs/DECISIONS.md) | Non-obvious design choices + why |
-
-Newer audit + roadmap docs:
-
-- [SENIOR_REVIEW_2026-05-21.md](docs/history/SENIOR_REVIEW_2026-05-21.md)
-- [EXECUTION_ROADMAP.md](docs/history/EXECUTION_ROADMAP.md)
-- [FINAL_FREEZE_AUDIT_2026-05-21.md](docs/history/FINAL_FREEZE_AUDIT_2026-05-21.md)
-- [roadmap/](docs/roadmap/) — future-release research
-
----
+</details>
 
 ## Build from source
 
@@ -228,50 +244,75 @@ pip install -r requirements.txt
 python gui.py
 ```
 
-See [docs/BUILD.md](docs/BUILD.md) for the build pipelines (which two
-are actually shipped vs. optional) and
-[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) for the ship
-sequence.
+[docs/BUILD.md](docs/BUILD.md) covers the build pipelines — which two are
+actually shipped and which are kept alive but unpublished —  and
+[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) has the ship sequence.
 
----
+Regenerate the images in this README with `python tools/make_graphics.py`
+(they are drawn by that script, not pasted in from a design tool).
 
-## Status
+## Project status
 
-Actively maintained; see the CI badge above for live build status and
-[docs/CHANGELOG.md](docs/CHANGELOG.md) for what shipped recently.
-Earlier freeze/stability audits are archived under
-[docs/history/](docs/history/) once superseded by newer work.
+Actively maintained. The quality bar enforced on every commit:
 
-Quality bar enforced on every commit:
+- **pyright** on `app/` and `core/` — 0 errors, 0 warnings, 0 informations.
+- The hermetic unit + integration suite (`pytest tests/ --ignore=tests/smoke`)
+  runs on **every push, on Windows and Ubuntu** — see
+  [docs/TESTING.md](docs/TESTING.md). Coverage is reported by the badge above.
 
-- pyright `app/ core/` — 0 errors, 0 warnings, 0 informations
-- the hermetic unit + integration suite (`pytest tests/
-  --ignore=tests/smoke`) runs on every push on both Windows and
-  Ubuntu — see [docs/TESTING.md](docs/TESTING.md)
+[docs/CHANGELOG.md](docs/CHANGELOG.md) has what shipped recently; superseded
+freeze and stability audits are archived under
+[docs/history/](docs/history/).
 
----
+## Documentation
+
+| Doc | Audience |
+|---|---|
+| [INSTALL.md](docs/INSTALL.md) | End-user install + troubleshooting |
+| [SERVER.md](docs/SERVER.md) | Local-network / web server mode (`gui.py serve`) |
+| [BUILD.md](docs/BUILD.md) | Build the deliverables yourself |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Process model, threading, protocols |
+| [CONFIG.md](docs/CONFIG.md) | Every config key with defaults |
+| [CLOUD_STT.md](docs/CLOUD_STT.md) | Optional Gemini-API backend (paste a key) |
+| [CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md) | Optional Google Cloud STT backend (service account, batch mode) |
+| [RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | How to ship a new version |
+| [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
+| [DECISIONS.md](docs/DECISIONS.md) | Non-obvious design choices and why |
+| [ROADMAP.md](docs/ROADMAP.md) · [roadmap/](docs/roadmap/) | What is being considered next |
+
+> **Coding agents:** start at [`PROJECT_INDEX.md`](PROJECT_INDEX.md) — a
+> generated, tool-neutral repo map built for fast, low-token onboarding.
 
 ## Contributing
 
-Issues, PRs, and [Discussions](https://github.com/Milomilo777/whisper_app/discussions)
-are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup,
-quality bar, and PR conventions, and look for issues labeled
+Issues, pull requests and
+[Discussions](https://github.com/Milomilo777/whisper_app/discussions) are all
+welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the dev setup, the quality bar
+and the PR conventions; if you are new here, the
 [`good first issue`](https://github.com/Milomilo777/whisper_app/labels/good%20first%20issue)
-if you're new here. This project follows the
-[Contributor Covenant](.github/CODE_OF_CONDUCT.md).
+label is the place to start.
 
----
+This project follows the [Contributor Covenant](.github/CODE_OF_CONDUCT.md).
+Security reports go through [SECURITY.md](SECURITY.md).
 
-## Author
+## Author and license
 
 Written by **translation-robot** — <https://github.com/translation-robot>.
 
-## License
+This project's own source is licensed under the **BSD 3-Clause License** — see
+[LICENSE](LICENSE). The bundled binaries (`ffmpeg`, `ffprobe`, `yt-dlp`), the
+bundled Python runtime and packages, and the Whisper model itself keep their own
+upstream licenses; [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) summarises
+them and says what to include when redistributing.
 
-This project's own source code is licensed under the **BSD 3-Clause
-License** — see the [LICENSE](LICENSE) file for the full text.
+---
 
-Bundled binaries (`ffmpeg`, `ffprobe`, `yt-dlp`), the bundled Python
-runtime + packages, and the Whisper model keep their own upstream
-licenses — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for a
-summary and what to include when redistributing.
+<div align="center">
+<sub>
+
+**Keywords** — offline speech to text · local Whisper GUI · audio to text ·
+video to text · subtitle generator · SRT VTT generator · transcription software ·
+speaker diarization · faster-whisper desktop app · yt-dlp downloader ·
+private on-device transcription · Windows · macOS
+
+</sub></div>
