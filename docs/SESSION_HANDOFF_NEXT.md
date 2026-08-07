@@ -5,6 +5,46 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-07 — Live tab landed (microphone + system audio)
+
+`core/recorder.py` is no longer unreachable: there is a **Live** tab
+(third, after Transcription Queue). Full design in [LIVE.md](LIVE.md).
+
+New pieces:
+
+```
+core/live.py                     engine (Tk-free): Segmenter + LiveSession
+app/services/live_service.py     dedicated worker subprocess per session
+app/widgets/live_tab.py          the tab
+core/worker.py                   new "transcribe_live" action (add-only)
+core/transcriber.py              transcribe_chunk_to_text()
+core/recorder.py                 optional on_frames sink (additive)
+```
+
+Design points a future session should not undo:
+
+- **Chunks are cut at silence, not on a timer.** A timer splits words in
+  half and half a word transcribes as the wrong word. Forced cuts (long
+  monologue) still prefer the quietest recent moment over the deadline.
+- **Silence is never sent to the model** — Whisper invents text on
+  silence, and that is the main source of junk in a live transcript.
+- **Falling behind is visible.** The bounded queue drops the OLDEST chunk
+  and warns; a live transcript that silently skips audio is worse than
+  one that admits it.
+- **The live session owns its own worker subprocess**, not the
+  `TranscriptionService` pool (they would fight over a worker) and not
+  the GUI process (`app/` must never import faster-whisper).
+- `transcribe_chunk_to_text` deliberately skips writers, checkpointing
+  and the post-pipeline — running diarisation every 6 seconds would make
+  the tab unusable.
+
+Not done: live translation, per-word streaming, speaker labels. macOS and
+Linux get microphone only (system-audio loopback is Windows-only without
+a third-party virtual audio device).
+
+Gate: `pyright app core` 0/0/0; `pytest tests/ --ignore=tests/smoke`
+**1913 passed, 1 skipped**.
+
 ## 🟢 2026-08-07 — adaptive audio denoise landed (opt-in, ffmpeg-only)
 
 New `core/denoise.py`, off by default, enabled in **Advanced > AI Layer**.

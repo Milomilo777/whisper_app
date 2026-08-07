@@ -34,7 +34,7 @@ import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +144,15 @@ class Recorder:
     mode: str = "mic"  # "mic" | "loopback"
     device_index: Optional[int] = None
     sample_rate: int = SAMPLE_RATE
+    #: Optional tap on the live PCM stream, called ``(pcm_bytes, rate)``
+    #: as each block arrives (mono int16). Added for the Live tab, which
+    #: needs the audio *while* it is being captured rather than one WAV
+    #: at the end. The WAV is still written exactly as before, so this is
+    #: purely additive. Exceptions raised by the sink are swallowed and
+    #: logged: a broken consumer must never kill the recording.
+    on_frames: Optional[Callable[[bytes, int], None]] = field(
+        default=None, repr=False
+    )
     # ``_frames`` is retained ONLY as the fallback/empty-file writer path
     # (see _finalize_wav); real capture streams straight to disk so a
     # multi-hour recording no longer buffers the whole take in RAM (OOM).
@@ -222,6 +231,21 @@ class Recorder:
 
     # ---------- internals ------------------------------------------
 
+    def _emit_frames(self, pcm: bytes, rate: int) -> None:
+        """Hand a captured block to the optional live sink.
+
+        Never propagates: the sink is a consumer bolted onto the capture
+        loop, and a bug there must not abort the recording the user is
+        relying on.
+        """
+        sink = self.on_frames
+        if sink is None or not pcm:
+            return
+        try:
+            sink(pcm, rate)
+        except Exception:  # noqa: BLE001
+            logger.exception("Recorder frame sink raised; continuing capture")
+
     def _open_wave(self, rate: int) -> "wave.Wave_write":
         """Open the output WAV for streaming (mono int16 at ``rate``)."""
         Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -249,7 +273,9 @@ class Recorder:
                 wf = self._open_wave(self.sample_rate)
                 while not self._stop_event.is_set():
                     data, _overflow = stream.read(1024)
-                    wf.writeframes(bytes(data))
+                    block = bytes(data)
+                    wf.writeframes(block)
+                    self._emit_frames(block, self.sample_rate)
         except Exception as e:  # noqa: BLE001
             self.last_error = str(e)
             logger.exception("Mic recording failed: %s", e)
@@ -289,7 +315,9 @@ class Recorder:
                 try:
                     while not self._stop_event.is_set():
                         data = stream.read(1024, exception_on_overflow=False)
-                        wf.writeframes(_downmix_to_mono_int16(data, channels))
+                        mono = _downmix_to_mono_int16(data, channels)
+                        wf.writeframes(mono)
+                        self._emit_frames(mono, native_rate)
                 finally:
                     stream.stop_stream()
                     stream.close()

@@ -387,6 +387,38 @@ def main() -> int:
         if action == "shutdown":
             return 0
 
+        # Live tab: transcribe one short chunk and hand the text straight
+        # back, writing no files and taking no checkpoint. A new ACTION
+        # rather than a flag on "transcribe" — the protocol is add-only,
+        # and an older parent that never sends this is unaffected.
+        if action == "transcribe_live":
+            chunk_path = command.get("file_path")
+            chunk_id = command.get("id")
+            if not chunk_path:
+                emit("live_error", id=chunk_id, message="Missing chunk file")
+                continue
+            try:
+                from .transcriber import transcribe_chunk_to_text
+
+                result = transcribe_chunk_to_text(
+                    chunk_path, language=command.get("language") or None
+                )
+                emit(
+                    "live_result",
+                    id=chunk_id,
+                    file_path=chunk_path,
+                    text=result["text"],
+                    segments=result["segments"],
+                    language=result["language"],
+                    language_probability=result["language_probability"],
+                )
+            except Exception as e:  # noqa: BLE001
+                # One bad chunk must not end the session; the parent logs
+                # it and keeps feeding the next one.
+                emit("live_error", id=chunk_id, file_path=chunk_path,
+                     message=str(e))
+            continue
+
         if action != "transcribe":
             emit("error", message=f"Unknown worker command: {action}")
             continue

@@ -29,6 +29,7 @@ from app.dialogs.statistics import show_statistics as _show_stats
 from app.widgets.console import apply_console_theme, build_console, insert_log_line
 from app.widgets.error_dialog import show_error
 from app.widgets.platform import open_folder as _open_folder_helper
+from app.widgets.live_tab import build_live_tab, stop_live_session
 from app.widgets.tabs import (
     build_download_tab,
     build_queue_tab,
@@ -1496,6 +1497,13 @@ class App(tk.Tk):
             self.tiling.stop()
         except Exception:  # noqa: BLE001
             pass
+        # Stop the Live tab BEFORE the transcription workers: it owns its
+        # own worker subprocess plus a capture thread holding the audio
+        # device, and both would outlive the window otherwise.
+        try:
+            stop_live_session(self)
+        except Exception:  # noqa: BLE001
+            pass
         # Stop the in-process web / LAN server so its socket + worker
         # thread don't linger after the window closes.
         self._shutdown_server_on_exit()
@@ -1548,8 +1556,10 @@ class App(tk.Tk):
         self.t3 = ttk.Frame(self.nb)
         self.t4 = ttk.Frame(self.nb)
         self.t5 = ttk.Frame(self.nb)
+        self.t6 = ttk.Frame(self.nb)
         self.nb.add(self.t1, text="Transcribe")
         self.nb.add(self.t2, text="Transcription Queue")
+        self.nb.add(self.t6, text="Live")
         self.nb.add(self.t3, text="Download Videos")
         # Video Tiling is optional: the Standard installer can drop a
         # no_tiling.flag marker into {app} when the user opts out at install
@@ -1564,6 +1574,7 @@ class App(tk.Tk):
         self.nb.add(self.t5, text="Web / LAN access")
         build_transcribe_tab(self, self.t1)
         build_queue_tab(self, self.t2)
+        build_live_tab(self, self.t6)
         build_download_tab(self, self.t3)
         if self._tiling_tab_visible:
             build_tiling_tab(self, self.t4)

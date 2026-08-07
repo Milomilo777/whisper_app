@@ -1,0 +1,458 @@
+"""The Live tab — transcribe a microphone or the system audio as it plays.
+
+Kept out of ``tabs.py`` (already ~1100 lines) but follows the same
+contract: ``build_live_tab(app, parent)`` assigns its widgets and vars
+onto the ``App`` instance.
+
+Threading, which is the whole trick here:
+
+  * ``core.live.LiveSession`` captures on the recorder's thread and
+    transcribes on its own consumer thread. Neither touches a widget.
+  * Everything reaches the UI through ``session.drain_events()``, polled
+    from an ``after()`` loop on the Tk main thread — the same pattern the
+    rest of this app uses for worker/download events.
+  * Start/Stop do subprocess work (spawning a worker, loading a ~3 GB
+    model), so they run off-thread and report back via
+    ``app.post_to_main``. Doing them inline would freeze the window for
+    the entire model load.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import tkinter as tk
+from tkinter import filedialog, ttk
+from typing import Any
+
+from app.widgets.error_dialog import show_error
+from app.widgets.tooltip import help_icon, section_labelframe
+
+logger = logging.getLogger(__name__)
+
+_POLL_MS = 200
+
+_SOURCE_MIC = "Microphone"
+_SOURCE_SYSTEM = "System audio (what you hear)"
+
+
+def build_live_tab(app: Any, parent: Any) -> None:
+    """Construct the Live tab onto ``parent`` and wire it to ``app``."""
+    from core import live as _live
+
+    app.live_session = None
+    app.live_transcriber = None
+    app.live_lines = []
+    app._live_poll_scheduled = False
+
+    app.live_source_var = tk.StringVar(value=_SOURCE_MIC)
+    app.live_device_var = tk.StringVar(value="Default input device")
+    app.live_lang_var = tk.StringVar(value="Auto")
+    app.live_status_var = tk.StringVar(value="Idle.")
+
+    parent.columnconfigure(0, weight=1)
+    parent.rowconfigure(2, weight=1)
+
+    # ── Source ────────────────────────────────────────────────────────
+    src = section_labelframe(
+        parent, "Audio source",
+        "Choose what to listen to. 'Microphone' captures an input device; "
+        "'System audio' captures whatever is currently playing on this "
+        "computer — useful for a meeting, a video, or a call you are "
+        "listening to.",
+    )
+    src.grid(row=0, column=0, sticky="ew", padx=15, pady=(15, 6))
+    src.columnconfigure(1, weight=1)
+
+    ttk.Label(src, text="Source:").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+    sources = [_SOURCE_MIC]
+    if _live.is_available("loopback"):
+        sources.append(_SOURCE_SYSTEM)
+    app.live_source_combo = ttk.Combobox(
+        src, textvariable=app.live_source_var, values=sources,
+        state="readonly", width=32,
+    )
+    app.live_source_combo.grid(row=0, column=1, sticky="w", padx=8, pady=6)
+    app.live_source_combo.bind(
+        "<<ComboboxSelected>>", lambda _e: _sync_device_state(app)
+    )
+
+    ttk.Label(src, text="Device:").grid(row=1, column=0, sticky="e", padx=8, pady=6)
+    app.live_device_combo = ttk.Combobox(
+        src, textvariable=app.live_device_var, state="readonly", width=48,
+    )
+    app.live_device_combo.grid(row=1, column=1, sticky="ew", padx=8, pady=6)
+    ttk.Button(
+        src, text="Refresh", command=lambda: _refresh_devices(app),
+    ).grid(row=1, column=2, sticky="w", padx=(0, 8), pady=6)
+
+    ttk.Label(src, text="Language:").grid(row=2, column=0, sticky="e", padx=8, pady=6)
+    # Same name->code table the Transcribe tab uses, so the two agree.
+    # Entries with an empty code (yt-dlp's "Automatic") are dropped: they
+    # mean auto-detect, which "Auto" above already covers, and listing
+    # both makes the dropdown look like it offers two different things.
+    from app.domain.languages import SUBTITLE_LANGUAGES as _LANGS
+    app.live_lang_combo = ttk.Combobox(
+        src, textvariable=app.live_lang_var, state="readonly", width=32,
+        values=["Auto"] + [name for name, code in _LANGS if code],
+    )
+    app.live_lang_combo.grid(row=2, column=1, sticky="w", padx=8, pady=6)
+    help_icon(
+        src,
+        "Naming the language is more reliable than auto-detect for live "
+        "audio: each chunk is short, and detection on a few seconds of "
+        "speech can guess wrong and switch mid-session.",
+    ).grid(row=2, column=2, sticky="w", padx=(0, 8), pady=6)
+
+    # ── Controls ──────────────────────────────────────────────────────
+    ctl = ttk.Frame(parent)
+    ctl.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 6))
+    app.live_start_btn = ttk.Button(
+        ctl, text="Start listening", command=lambda: _start(app),
+    )
+    app.live_start_btn.pack(side="left")
+    app.live_stop_btn = ttk.Button(
+        ctl, text="Stop", command=lambda: _stop(app), state="disabled",
+    )
+    app.live_stop_btn.pack(side="left", padx=(8, 0))
+    ttk.Label(ctl, textvariable=app.live_status_var, foreground="#666").pack(
+        side="left", padx=(16, 0)
+    )
+
+    # ── Transcript ────────────────────────────────────────────────────
+    out = section_labelframe(
+        parent, "Live transcript",
+        "Text appears a few seconds behind the speech: the app waits for a "
+        "natural pause before transcribing, so words are not cut in half.",
+    )
+    out.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 6))
+    out.columnconfigure(0, weight=1)
+    out.rowconfigure(0, weight=1)
+
+    app.live_text = tk.Text(out, wrap="word", height=14, state="disabled")
+    app.live_text.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+    bar = ttk.Scrollbar(out, orient="vertical", command=app.live_text.yview)
+    bar.grid(row=0, column=1, sticky="ns", padx=(0, 8), pady=8)
+    app.live_text.configure(yscrollcommand=bar.set)
+
+    actions = ttk.Frame(parent)
+    actions.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
+    ttk.Button(actions, text="Save transcript…",
+               command=lambda: _save(app)).pack(side="left")
+    ttk.Button(actions, text="Copy all",
+               command=lambda: _copy(app)).pack(side="left", padx=(8, 0))
+    ttk.Button(actions, text="Clear",
+               command=lambda: _clear(app)).pack(side="left", padx=(8, 0))
+    ttk.Label(
+        actions,
+        text=("Uses its own copy of the speech model while listening, "
+              "separate from the Transcribe queue."),
+        foreground="#666",
+    ).pack(side="right")
+
+    _refresh_devices(app)
+    _sync_device_state(app)
+
+
+# ------------------------------------------------------------- devices
+
+
+def _refresh_devices(app: Any) -> None:
+    from core import live as _live
+
+    names = ["Default input device"]
+    app.live_device_map = {}
+    try:
+        for dev in _live.list_input_devices():
+            label = f"{dev.index}: {dev.name}"
+            names.append(label)
+            app.live_device_map[label] = dev.index
+    except Exception:  # noqa: BLE001
+        logger.exception("Listing input devices failed")
+    try:
+        app.live_device_combo.configure(values=names)
+        if app.live_device_var.get() not in names:
+            app.live_device_var.set(names[0])
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not refresh the device list", exc_info=True)
+
+
+def _sync_device_state(app: Any) -> None:
+    """The device picker only applies to microphone capture."""
+    try:
+        is_mic = app.live_source_var.get() == _SOURCE_MIC
+        app.live_device_combo.configure(
+            state=("readonly" if is_mic else "disabled")
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not sync the device picker", exc_info=True)
+
+
+def _selected_device_index(app: Any) -> int | None:
+    label = app.live_device_var.get()
+    return getattr(app, "live_device_map", {}).get(label)
+
+
+def _selected_language_code(app: Any) -> str | None:
+    """Display name -> language code, or None for auto-detect.
+
+    Mirrors ``App._apply_transcribe_options``: an unknown name or an
+    empty code means "let the model decide" rather than forcing a bad
+    code onto the engine.
+    """
+    name = (app.live_lang_var.get() or "").strip()
+    if not name or name.lower() == "auto":
+        return None
+    from app.domain.languages import SUBTITLE_LANGUAGES as _LANGS
+    code = next((c for display, c in _LANGS if display == name), "")
+    return code or None
+
+
+# ------------------------------------------------------------ start/stop
+
+
+def _set_running(app: Any, running: bool) -> None:
+    try:
+        app.live_start_btn.configure(state=("disabled" if running else "normal"))
+        app.live_stop_btn.configure(state=("normal" if running else "disabled"))
+        for widget in (app.live_source_combo, app.live_lang_combo):
+            widget.configure(state=("disabled" if running else "readonly"))
+        if not running:
+            _sync_device_state(app)
+        else:
+            app.live_device_combo.configure(state="disabled")
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not update live controls", exc_info=True)
+
+
+def _start(app: Any) -> None:
+    from core import live as _live
+
+    mode = "loopback" if app.live_source_var.get() == _SOURCE_SYSTEM else "mic"
+    if not _live.is_available(mode):
+        show_error(
+            app, "Cannot listen yet",
+            "This computer cannot capture that audio source yet.",
+            detail=_live.availability_reason(mode),
+        )
+        return
+
+    app.live_status_var.set("Loading the speech model…")
+    _set_running(app, True)
+
+    language = _selected_language_code(app)
+    device_index = _selected_device_index(app) if mode == "mic" else None
+    work_dir = _live.session_work_dir()
+
+    def worker() -> None:
+        # Spawning a worker and loading a ~3 GB model takes tens of
+        # seconds; doing it on the Tk thread would freeze the window.
+        from app.services.live_service import LiveTranscriber
+
+        try:
+            transcriber = LiveTranscriber(
+                app.entry_file, language=language, log=app.log
+            )
+            transcriber.start()
+            session = _live.LiveSession(
+                transcribe_chunk=transcriber.transcribe_chunk,
+                work_dir=work_dir,
+                mode=mode,
+                device_index=device_index,
+                language=language,
+            )
+            session.start()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Live session failed to start: %s", e)
+            try:
+                transcriber.stop()  # type: ignore[possibly-unbound]
+            except Exception:  # noqa: BLE001
+                pass
+            app.post_to_main(lambda: _start_failed(app, e))
+            return
+        app.post_to_main(lambda: _started(app, transcriber, session))
+
+    app.post_to_main  # touch attr early so a missing bridge fails loudly
+    import threading
+
+    threading.Thread(target=worker, name="live-start", daemon=True).start()
+
+
+def _started(app: Any, transcriber: Any, session: Any) -> None:
+    app.live_transcriber = transcriber
+    app.live_session = session
+    app.live_status_var.set("Listening…")
+    app.log("Live transcription started.")
+    _schedule_poll(app)
+
+
+def _start_failed(app: Any, error: Exception) -> None:
+    app.live_session = None
+    app.live_transcriber = None
+    _set_running(app, False)
+    app.live_status_var.set("Idle.")
+    show_error(
+        app, "Could not start listening",
+        "The live session could not be started.", detail=str(error),
+    )
+
+
+def _stop(app: Any) -> None:
+    session = app.live_session
+    transcriber = app.live_transcriber
+    if session is None:
+        _set_running(app, False)
+        return
+    app.live_status_var.set("Finishing the last few seconds…")
+    app.live_stop_btn.configure(state="disabled")
+
+    def worker() -> None:
+        try:
+            session.stop()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Stopping the live session failed: %s", e)
+        try:
+            if transcriber is not None:
+                transcriber.stop()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Stopping the live worker failed: %s", e)
+        app.post_to_main(lambda: _stopped(app))
+
+    import threading
+
+    threading.Thread(target=worker, name="live-stop", daemon=True).start()
+
+
+def _stopped(app: Any) -> None:
+    # Drain whatever the tail produced before dropping the session.
+    _poll_once(app)
+    app.live_session = None
+    app.live_transcriber = None
+    _set_running(app, False)
+    app.live_status_var.set("Stopped.")
+    app.log("Live transcription stopped.")
+
+
+def stop_live_session(app: Any) -> None:
+    """Tear the session down on app exit. Safe when nothing is running."""
+    session = getattr(app, "live_session", None)
+    transcriber = getattr(app, "live_transcriber", None)
+    if session is not None:
+        try:
+            session.stop(timeout=3.0)
+        except Exception:  # noqa: BLE001
+            logger.exception("Live session teardown failed")
+    if transcriber is not None:
+        try:
+            transcriber.stop()
+        except Exception:  # noqa: BLE001
+            logger.exception("Live worker teardown failed")
+    app.live_session = None
+    app.live_transcriber = None
+
+
+# --------------------------------------------------------------- polling
+
+
+def _schedule_poll(app: Any) -> None:
+    if getattr(app, "_live_poll_scheduled", False):
+        return
+    app._live_poll_scheduled = True
+    app.after(_POLL_MS, lambda: _poll(app))
+
+
+def _poll(app: Any) -> None:
+    app._live_poll_scheduled = False
+    _poll_once(app)
+    if app.live_session is not None and not getattr(app, "_closing", False):
+        _schedule_poll(app)
+
+
+def _poll_once(app: Any) -> None:
+    session = app.live_session
+    if session is None:
+        return
+    try:
+        events = session.drain_events()
+    except Exception:  # noqa: BLE001
+        logger.exception("Draining live events failed")
+        return
+    for ev in events:
+        if ev.kind == "text":
+            _append_line(app, ev.text)
+        elif ev.kind == "warning":
+            app.live_status_var.set(ev.detail)
+            app.log(f"Live: {ev.detail}")
+        elif ev.kind == "error":
+            app.log(f"Live error: {ev.detail}")
+        elif ev.kind == "state" and ev.detail == "started":
+            app.live_status_var.set("Listening…")
+
+
+def _append_line(app: Any, text: str) -> None:
+    if not text:
+        return
+    app.live_lines.append(text)
+    try:
+        widget = app.live_text
+        at_bottom = widget.yview()[1] >= 0.999
+        widget.configure(state="normal")
+        widget.insert("end", text + "\n")
+        widget.configure(state="disabled")
+        # Only follow the tail when the user has not scrolled up to read
+        # something earlier — yanking the view is worse than lagging it.
+        if at_bottom:
+            widget.see("end")
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not append live text", exc_info=True)
+
+
+# --------------------------------------------------------------- actions
+
+
+def _transcript_text(app: Any) -> str:
+    return "\n".join(getattr(app, "live_lines", []) or []).strip()
+
+
+def _save(app: Any) -> None:
+    body = _transcript_text(app)
+    if not body:
+        show_error(app, "Nothing to save",
+                   "The live transcript is empty.")
+        return
+    path = filedialog.asksaveasfilename(
+        parent=app, title="Save live transcript",
+        defaultextension=".txt",
+        filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
+        initialfile="live-transcript.txt",
+    )
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(body + "\n")
+    except OSError as e:
+        show_error(app, "Could not save the transcript",
+                   f"Writing {os.path.basename(path)} failed.", detail=str(e))
+        return
+    app.log(f"Live transcript saved to {path}")
+
+
+def _copy(app: Any) -> None:
+    body = _transcript_text(app)
+    if not body:
+        return
+    try:
+        app.clipboard_clear()
+        app.clipboard_append(body)
+    except Exception:  # noqa: BLE001
+        logger.debug("Clipboard copy failed", exc_info=True)
+
+
+def _clear(app: Any) -> None:
+    app.live_lines = []
+    try:
+        app.live_text.configure(state="normal")
+        app.live_text.delete("1.0", "end")
+        app.live_text.configure(state="disabled")
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not clear the live transcript", exc_info=True)

@@ -1306,6 +1306,71 @@ def _build_transcribe_kwargs(task: "TranscriptionTask") -> dict[str, Any]:
     return kwargs
 
 
+def transcribe_chunk_to_text(
+    audio_path: str,
+    *,
+    language: str | None = None,
+    timeout_wait_model_s: float = 120.0,
+) -> dict[str, Any]:
+    """Transcribe one short chunk and return its text — nothing else.
+
+    The Live tab's hot path. Deliberately NOT :func:`transcribe`: that
+    writes up to 13 output files, takes a resume checkpoint, and runs the
+    post-pipeline (diarisation, alignment, chapters). Doing all that
+    every few seconds for a 6-second chunk would be wasteful, would spray
+    files across the disk, and — if the user happens to have diarisation
+    enabled — would make live transcription unusably slow.
+
+    Returns ``{"text", "segments", "language", "language_probability"}``.
+    ``segments`` are chunk-relative (the caller shifts them onto the
+    session timeline; the chunk has no idea when it was recorded).
+
+    Raises ``RuntimeError`` if the model never becomes ready — the caller
+    surfaces that once rather than per chunk.
+    """
+    deadline = time.time() + max(0.0, timeout_wait_model_s)
+    while not MODEL_READY:
+        if MODEL_ERROR:
+            raise RuntimeError(MODEL_ERROR)
+        if time.time() >= deadline:
+            raise RuntimeError("Model is still loading; live transcription "
+                               "cannot start yet.")
+        time.sleep(0.1)
+    if MODEL is None:
+        raise RuntimeError("Model is not loaded.")
+
+    task = TranscriptionTask(audio_path)
+    if language:
+        task.language = language
+    kwargs = _build_transcribe_kwargs(task)
+    # A live chunk is already a bounded utterance; word timestamps and
+    # batching only add latency here.
+    kwargs.pop("batch_size", None)
+    kwargs["word_timestamps"] = False
+
+    segments_iter, info = MODEL.transcribe(audio_path, **kwargs)
+    out: list[dict[str, Any]] = []
+    parts: list[str] = []
+    for seg in segments_iter:
+        text = str(getattr(seg, "text", "") or "").strip()
+        if not text:
+            continue
+        out.append({
+            "start": float(getattr(seg, "start", 0.0) or 0.0),
+            "end": float(getattr(seg, "end", 0.0) or 0.0),
+            "text": text,
+        })
+        parts.append(text)
+    return {
+        "text": " ".join(parts).strip(),
+        "segments": out,
+        "language": str(getattr(info, "language", "") or ""),
+        "language_probability": float(
+            getattr(info, "language_probability", 0.0) or 0.0
+        ),
+    }
+
+
 def _clip_timestamps_arg(task: TranscriptionTask) -> str | None:
     """faster-whisper ``clip_timestamps`` value for a Transcribe-tab time
     slice, or None for the whole file.

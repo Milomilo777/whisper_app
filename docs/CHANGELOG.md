@@ -15,6 +15,12 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
+- **New Live tab: transcribe a microphone or the system audio as it
+  happens.** Text appears as you speak instead of after a file finishes.
+  Chunks are cut at natural pauses so words are not split in half,
+  silence is never sent to the model, and the tab says so when the
+  machine cannot keep up rather than skipping audio silently. System-audio
+  capture is Windows-only. See [LIVE.md](LIVE.md).
 - **Adaptive audio denoise before transcription** (**Advanced > AI Layer**,
   off by default). Cuts hallucinated lines and misheard words on noisy
   recordings. It measures each file first and leaves already-clean audio
