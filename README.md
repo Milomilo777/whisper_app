@@ -1,3 +1,14 @@
+<!--
+    title: Whisper Project — offline audio & video transcription for Windows and macOS
+    description: Desktop app that runs OpenAI Whisper locally via faster-whisper. Transcribe audio and video to SRT, VTT, DOCX and PDF with no cloud, no account and no upload. Speaker diarisation, batch queue, yt-dlp downloads, live microphone transcription and a local-network mode.
+    keywords: offline speech to text, local whisper GUI, faster-whisper desktop app, audio to text, video to text, subtitle generator, SRT VTT generator, transcription software, speaker diarization, private on-device transcription, yt-dlp downloader, live microphone transcription
+    author: translation-robot
+    product-type: Desktop transcription software
+    platforms: Windows, macOS, Linux
+    technology-stack: faster-whisper, CTranslate2, whisper.cpp, NVIDIA Parakeet, Tkinter, yt-dlp, ffmpeg, sherpa-onnx, stable-ts
+    license: BSD-3-Clause
+-->
+
 <div align="center">
 
 <img src="docs/img/hero.png" alt="Whisper Project — transcribe audio and video on your own machine. No cloud, no account, no upload." width="100%">
@@ -12,6 +23,7 @@
 [![codecov](https://codecov.io/gh/Milomilo777/whisper_app/graph/badge.svg)](https://codecov.io/gh/Milomilo777/whisper_app)
 [![License: BSD-3](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](#download)
+[![Stars](https://img.shields.io/github/stars/Milomilo777/whisper_app?style=flat&color=207a80)](https://github.com/Milomilo777/whisper_app/stargazers)
 
 ### [⬇  Download for Windows](https://github.com/Milomilo777/whisper_app/releases/latest)
 
@@ -19,6 +31,21 @@
 **[Features](#features)** · **[How it works](#how-it-works)** ·
 **[Privacy](#offline-by-default)** · **[Docs](#documentation)** ·
 **[Build from source](#build-from-source)**
+
+<!-- Language switcher. Flag images rather than flag emoji on purpose:
+     Windows does not render regional-indicator emoji as flags, so 🇰🇷
+     shows up as the letters "KR" for a large share of readers. -->
+<p>
+  <img src="https://flagcdn.com/16x12/us.png" alt="" width="16" height="12">
+  <b>English</b> ∙
+  <a href="docs/i18n/README.zh-CN.md"><img src="https://flagcdn.com/16x12/cn.png" alt="" width="16" height="12"> 简体中文</a> ∙
+  <a href="docs/i18n/README.ja.md"><img src="https://flagcdn.com/16x12/jp.png" alt="" width="16" height="12"> 日本語</a> ∙
+  <a href="docs/i18n/README.ko.md"><img src="https://flagcdn.com/16x12/kr.png" alt="" width="16" height="12"> 한국어</a> ∙
+  <a href="docs/i18n/README.de.md"><img src="https://flagcdn.com/16x12/de.png" alt="" width="16" height="12"> Deutsch</a> ∙
+  <a href="docs/i18n/README.es.md"><img src="https://flagcdn.com/16x12/es.png" alt="" width="16" height="12"> Español</a> ∙
+  <a href="docs/i18n/README.fr.md"><img src="https://flagcdn.com/16x12/fr.png" alt="" width="16" height="12"> Français</a> ∙
+  <a href="docs/i18n/README.pt.md"><img src="https://flagcdn.com/16x12/pt.png" alt="" width="16" height="12"> Português</a>
+</p>
 
 </div>
 
@@ -33,6 +60,15 @@ anyone. Drop a file in and it writes `.srt`, `.vtt`, `.txt`, `.json`, `.docx`,
 into a transcription page for the other devices on your network.
 
 No account. No API key. No subscription. Your files stay on your disk.
+
+- 🔒 **Runs on your machine** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) by default, plus **whisper.cpp** and **NVIDIA Parakeet**
+- 📝 **13 output formats** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe
+- 🎙️ **Live transcription** — a microphone or the system audio, transcribed as it happens → [docs/LIVE.md](docs/LIVE.md)
+- 🗣️ **Speaker labels** — offline diarisation, per-word timestamps, time-range clipping
+- 🎬 **Downloads** — any `yt-dlp` site, with optional transcribe-on-finish
+- 🧹 **Adaptive denoise** — measures the audio and only cleans it when that helps → [docs/DENOISE.md](docs/DENOISE.md)
+- 🌐 **Local-network mode** — turn this machine into a transcription page for your other devices
+- 💸 **Free and BSD-3 licensed** — no per-minute cost, no subscription, no telemetry by default
 
 ## Download
 
@@ -101,7 +137,9 @@ for the phones and PCs on your network.
 | **Local transcription** | Whisper `large-v3` by default, plus `large-v3-turbo` and `distil-large-v3.5`. Backends: `faster_whisper` (default), `whisper.cpp`, NVIDIA Parakeet. |
 | **Many output formats** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — written next to your input file. |
 | **Convert transcript** | Re-emit an existing transcript into the formats above, or into oTranscribe / ELAN / InqScribe / Express Scribe. |
+| **Live transcription** | Transcribe a microphone — or whatever this machine is playing — as it happens. Chunks are cut at natural pauses so words are never split in half. |
 | **Speaker diarisation** | Optional "Identify speakers", plus per-word timestamps and time-range clipping. |
+| **Adaptive denoise** | Measures each recording first and only cleans it when the measurement says that helps; verifies its own output and reverts if it removed speech. |
 | **Last-Result card** | File sizes, one-click **Open file** / **Open folder**, and an in-app viewer with split-pane click-to-seek playback. |
 | **Batch queue** | Live status for every pending and running job, with **Pause / Resume / Cancel / Re-run / Remove** always one click away. |
 | **Downloads** | Anything `yt-dlp` handles, plus Supreme Master TV episode links. Downloads resume rather than restart. |
@@ -275,6 +313,8 @@ freeze and stability audits are archived under
 | [CONFIG.md](docs/CONFIG.md) | Every config key with defaults |
 | [CLOUD_STT.md](docs/CLOUD_STT.md) | Optional Gemini-API backend (paste a key) |
 | [CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md) | Optional Google Cloud STT backend (service account, batch mode) |
+| [LIVE.md](docs/LIVE.md) | The Live tab: microphone / system-audio transcription |
+| [DENOISE.md](docs/DENOISE.md) | The adaptive denoise pre-process |
 | [RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | How to ship a new version |
 | [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [DECISIONS.md](docs/DECISIONS.md) | Non-obvious design choices and why |
