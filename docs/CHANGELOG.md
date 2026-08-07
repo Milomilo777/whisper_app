@@ -15,6 +15,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
+- **`platform\windows\update.bat`** — a one-command updater for a source
+  (git clone) install on Windows, matching what Linux already had. It
+  refuses to run against an installed build, and verifies the app still
+  imports afterwards. The installed app's own update check stays
+  notify-only on purpose.
 - **ASS / SSA subtitle support** — a new `ass` output format, and `.ass`
   / `.ssa` files can now be converted *from* as well. ASS is what video
   editors and karaoke tools expect, and it is the first format that

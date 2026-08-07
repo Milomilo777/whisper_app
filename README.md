@@ -282,6 +282,10 @@ pip install -r requirements.txt
 python gui.py
 ```
 
+Updating a source checkout later: `platform\windows\update.bat` on Windows,
+`platform/linux/update.sh` on Linux — both pull the latest source and
+refresh the dependencies ([platform/windows/README.md](platform/windows/README.md)).
+
 [docs/BUILD.md](docs/BUILD.md) covers the build pipelines — which two are
 actually shipped and which are kept alive but unpublished —  and
 [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) has the ship sequence.
