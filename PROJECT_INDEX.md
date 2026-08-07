@@ -528,25 +528,28 @@ pip install pyright pytest
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 410
-- **Structure refreshed:** 2026-07-18T14:58:51
+- **Source files tracked:** 412
+- **Structure refreshed:** 2026-08-07T18:19:54
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +3 added · ~16 changed · -1 removed
+- **Drift since semantic build:** +6 added · ~38 changed · -2 removed
+
+> ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
+>
+> Notable: `.github/workflows/ci.yml`, `.github/workflows/macos-app.yml`, `CLAUDE.md`, `README.md`, `SECURITY.md`, `app/app.py`, `app/dialogs/advanced.py`, `app/dialogs/statistics.py`
 
 | Top-level | Source files |
 |---|---|
-| `tests` | 173 |
+| `tests` | 174 |
 | `docs` | 80 |
 | `core` | 64 |
 | `app` | 26 |
 | `.claude` | 20 |
-| `(root)` | 16 |
+| `(root)` | 17 |
 | `.github` | 13 |
 | `platform` | 10 |
-| `tools` | 6 |
+| `tools` | 7 |
 | `assets` | 1 |
-| `creds` | 1 |
 
-**By type:** `.py`×265  `.md`×93  `.json`×17  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×267  `.md`×94  `.json`×16  `.yml`×11  `.bat`×4  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.ps1`×2  `.toml`×1  `.txt`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
