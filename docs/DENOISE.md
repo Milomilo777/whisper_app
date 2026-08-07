@@ -58,6 +58,14 @@ each) rather than scanned end to end, and the **median** window is used.
 Analysis therefore costs the same on a 3-hour file as on a 10-minute one,
 and a music intro or one silent gap cannot steer the decision.
 
+The chosen window is recorded on the profile, and **verification
+re-measures that exact window**. This is not a detail: on a 5-minute
+test file the sampled windows differed by **13.5 dB** of speech-band
+energy, against a verdict tolerance of about 1 dB. Sampling afresh for
+the "after" pass would pick the median window of the *denoised* file,
+which need not be the same span, and comparing two different spans
+yields a verdict that is pure noise.
+
 ### Decide
 
 | Measured SNR | Level |
@@ -167,6 +175,24 @@ against it being reintroduced by accident.
 (ffmpeg dying on a signal is handled anyway — a non-zero exit falls back
 to the original audio — but a random crash on the user's noisiest files
 is not something to rely on a fallback for.)
+
+## Adversarial review (2026-08-07)
+
+The feature was reviewed hostilely after it landed. Five defects were
+found and fixed; each has a named regression test.
+
+| # | Defect | Why it mattered |
+|---|---|---|
+| 1 | Verification sampled its own windows instead of re-measuring the baseline's | Windows differ by up to 13.5 dB vs a ~1 dB tolerance, so a median-window shift produces a false revert (or a false keep) on any long file |
+| 2 | Staging file had a deterministic name | Two workers on the same file derive the same cache key; they could interleave writes and publish the mess as a valid cache entry |
+| 3 | `cache=False` with no `work_dir` wrote next to the source | The source folder may be read-only, or a media library the user does not want littered |
+| 4 | An explicit `off` still ran a full measurement pass when uncached | Pure waste — paying to be told to do nothing |
+| 5 | `analyze()` had no liveness tick | Each window is a separate silent subprocess; the parent declares a worker wedged after 120 s of silence and restarts it |
+
+Also confirmed working during the review, and worth not re-testing by
+hand: video containers (`.mp4`) analyse and denoise correctly, and a file
+with **no audio stream** degrades to "leave it alone" rather than
+failing the transcription.
 
 ## Cost
 

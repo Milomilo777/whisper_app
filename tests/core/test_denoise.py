@@ -9,6 +9,8 @@ re-justify itself against real material.
 from __future__ import annotations
 
 import math
+import os
+import threading
 
 import pytest
 
@@ -643,6 +645,160 @@ def test_config_defaults_are_conservative():
     assert DEFAULT_CONFIG["denoise_enabled"] is False
     assert DEFAULT_CONFIG["denoise_level"] == "auto"
     assert DEFAULT_CONFIG["denoise_level"] in dn.LEVEL_CHOICES
+
+
+# ----------------------------------- adversarial-review regressions (2026-08-07)
+
+
+def test_verification_remeasures_the_same_window(monkeypatch, tmp_path, src):
+    """The 'after' pass must re-measure the window 'before' came from.
+
+    Loudness varies enormously along a real recording — 13.5 dB between
+    sampled windows on the calibration file, against a ~1 dB verdict
+    tolerance. Sampling afresh picks the median window of the *denoised*
+    file, which need not be the same span, and comparing two different
+    spans makes the verdict meaningless.
+    """
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(dn, "cache_dir", lambda: cache)
+
+    seen: list = []
+
+    def fake_analyze(path, *, duration_s=0.0, window=None, log=None):
+        seen.append(window)
+        if len(seen) == 1:
+            p = _profile(12.0, -22.0, 0.700)
+            return dn.NoiseProfile(
+                full=p.full, speech_band=p.speech_band, snr_db=p.snr_db,
+                windows=3, window=(135.0, 30.0),
+            )
+        return _profile(22.0, -22.4, 0.690)
+
+    def fake_apply(_src, dst, _chain, **kw):
+        cache.mkdir(parents=True, exist_ok=True)
+        with open(dst, "wb") as fp:
+            fp.write(b"\x00" * 4096)
+        return True
+
+    monkeypatch.setattr(dn, "analyze", fake_analyze)
+    monkeypatch.setattr(dn, "_apply_chain", fake_apply)
+    dn.denoise_audio(src, duration_s=300.0)
+
+    assert seen[0] is None, "the first pass should sample, not pin"
+    assert seen[1] == (135.0, 30.0), (
+        "verification measured a different span than the baseline"
+    )
+
+
+def test_analyze_honours_a_pinned_window(monkeypatch, tmp_path):
+    measured: list = []
+
+    def fake_measure(path, *, start_s=0.0, length_s=0.0):
+        measured.append((start_s, length_s))
+        return dn.AudioStats(rms_level=-20.0, rms_peak=-18.0,
+                             noise_floor=-40.0, entropy=0.5), None
+
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(dn, "_measure", fake_measure)
+    profile = dn.analyze("x.wav", duration_s=3600.0, window=(42.0, 30.0))
+    assert measured == [(42.0, 30.0)], "a pinned window must not be re-sampled"
+    assert profile is not None
+    assert profile.window == (42.0, 30.0)
+
+
+def test_analyze_records_which_window_it_chose(monkeypatch):
+    """Without this the verification pass has nothing to pin to."""
+    windows_seen: list = []
+
+    def fake_measure(path, *, start_s=0.0, length_s=0.0):
+        windows_seen.append(start_s)
+        # Make the middle window the median SNR.
+        floor = {0: -30.0, 1: -40.0, 2: -50.0}[len(windows_seen) - 1]
+        return dn.AudioStats(rms_level=-20.0, rms_peak=-18.0,
+                             noise_floor=floor, entropy=0.5), None
+
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(dn, "_measure", fake_measure)
+    profile = dn.analyze("x.wav", duration_s=3600.0)
+    assert profile is not None
+    assert profile.window in set(dn.sample_windows(3600.0))
+    assert profile.window[0] == pytest.approx(windows_seen[1])
+
+
+def test_explicit_off_skips_the_measurement_pass_even_when_uncached(
+    src, monkeypatch
+):
+    """A transient 'off' used to pay for a full analysis to learn nothing."""
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(
+        dn, "analyze", lambda *a, **kw: pytest.fail("analysed with level=off")
+    )
+    assert dn.denoise_audio(src, level="off", cache=False) == src
+
+
+def test_transient_without_work_dir_never_writes_beside_the_source(
+    src, monkeypatch, tmp_path
+):
+    """The source folder may be read-only, or a library not to be littered."""
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(dn, "cache_dir", lambda: cache)
+
+    calls: list[str] = []
+
+    def fake_analyze(path, **kw):
+        calls.append(path)
+        return (_profile(12.0, -22.0, 0.700) if len(calls) == 1
+                else _profile(22.0, -22.4, 0.690))
+
+    def fake_apply(_src, dst, _chain, **kw):
+        with open(dst, "wb") as fp:
+            fp.write(b"\x00" * 4096)
+        return True
+
+    monkeypatch.setattr(dn, "analyze", fake_analyze)
+    monkeypatch.setattr(dn, "_apply_chain", fake_apply)
+    out = dn.denoise_audio(src, cache=False, work_dir=None)
+    assert out != src
+    from pathlib import Path as _P
+    # The render must not land in the SAME directory as the source.
+    assert _P(out).parent != _P(src).parent
+    assert _P(out).parent == cache
+
+
+def test_staging_path_is_unique_per_process_and_thread(src, monkeypatch,
+                                                       tmp_path):
+    """Two workers on the SAME file derive the same cache key.
+
+    A shared staging path would let them interleave writes and then
+    publish the interleaved mess as a valid cache entry.
+    """
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(dn, "is_available", lambda: True)
+    monkeypatch.setattr(dn, "cache_dir", lambda: cache)
+
+    staged: list[str] = []
+    calls: list[str] = []
+
+    def fake_analyze(path, **kw):
+        calls.append(path)
+        return (_profile(12.0, -22.0, 0.700) if len(calls) == 1
+                else _profile(22.0, -22.4, 0.690))
+
+    def fake_apply(_src, dst, _chain, **kw):
+        staged.append(dst)
+        cache.mkdir(parents=True, exist_ok=True)
+        with open(dst, "wb") as fp:
+            fp.write(b"\x00" * 4096)
+        return True
+
+    monkeypatch.setattr(dn, "analyze", fake_analyze)
+    monkeypatch.setattr(dn, "_apply_chain", fake_apply)
+    dn.denoise_audio(src, level="medium")
+    assert staged, "no staging file was written"
+    assert str(os.getpid()) in staged[0]
+    assert str(threading.get_ident()) in staged[0]
 
 
 # ------------------------------------------------- real ffmpeg (skipped w/o it)

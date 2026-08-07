@@ -40,8 +40,15 @@ Things a future session should not re-litigate:
   class as the new denoise keys: resuming with different pre-processing
   spliced differently-conditioned halves). Fixed alongside.
 
+A hostile review after it landed found and fixed five more defects — the
+worst being that verification sampled its own measurement windows instead
+of re-measuring the baseline's, which on any long file compares two
+different spans of audio (13.5 dB apart on the test file, against a ~1 dB
+tolerance). Table in [DENOISE.md](DENOISE.md#adversarial-review-2026-08-07);
+each has a named regression test.
+
 Gate at hand-off: `pyright app core` 0/0/0; `pytest tests/ --ignore=tests/smoke`
-**1828 passed, 1 skipped**. One-off flake seen once in
+**1834 passed, 1 skipped**. One-off flake seen once in
 `test_transcript_viewer.py::test_viewer_remove_fillers_button` (a Tk timing
 test, unrelated to denoise) — passes in isolation and in two subsequent full
 runs; consistent with the order-dependent flakes already documented here.

@@ -62,6 +62,7 @@ import re
 import shutil
 import statistics
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -160,6 +161,12 @@ class NoiseProfile:
     speech_band: AudioStats | None
     snr_db: float
     windows: int = 1
+    #: The ``(start_s, length_s)`` these numbers were measured over.
+    #: Verification MUST re-measure this exact window on the render:
+    #: loudness varies hugely along a real recording (13.5 dB between
+    #: sampled windows on a test file, against a ~1 dB tolerance), so
+    #: comparing two different windows produces a meaningless verdict.
+    window: tuple[float, float] = (0.0, 0.0)
 
     @property
     def noise_floor_db(self) -> float:
@@ -598,9 +605,14 @@ def analyze(
     path: str,
     *,
     duration_s: float = 0.0,
+    window: tuple[float, float] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> NoiseProfile | None:
     """Measure the source and estimate its speech-to-noise ratio.
+
+    ``window`` forces a single ``(start_s, length_s)`` measurement
+    instead of sampling. Verification uses it to re-measure the exact
+    span the "before" profile came from — see :attr:`NoiseProfile.window`.
 
     Returns ``None`` when ffmpeg is unavailable or every window failed to
     measure — the caller then leaves the audio alone.
@@ -610,13 +622,19 @@ def analyze(
             log(f"Denoise skipped: {availability_reason()}")
         return None
 
-    windows = sample_windows(duration_s)
-    measured: list[tuple[float, AudioStats, AudioStats | None]] = []
-    for start_s, length_s in windows:
-        full, band = _measure(path, start_s=start_s, length_s=length_s)
-        if full is None:
-            continue
-        measured.append((estimate_snr_db(full), full, band))
+    windows = [window] if window is not None else sample_windows(duration_s)
+    measured: list[tuple[float, AudioStats, AudioStats | None, tuple[float, float]]] = []
+    # Each window is a separate short-lived ffmpeg; nothing is emitted
+    # between them, so on a slow disk / network mount the parent's
+    # 120 s liveness watchdog could declare the worker wedged mid-scan.
+    with liveness_tick(log, "Audio analysis"):
+        for start_s, length_s in windows:
+            full, band = _measure(path, start_s=start_s, length_s=length_s)
+            if full is None:
+                continue
+            measured.append(
+                (estimate_snr_db(full), full, band, (start_s, length_s))
+            )
 
     usable = [m for m in measured if m[0] == m[0]]  # drop NaN measurements
     if not usable:
@@ -634,6 +652,7 @@ def analyze(
         speech_band=chosen[2],
         snr_db=chosen[0],
         windows=len(usable),
+        window=chosen[3],
     )
 
 
@@ -746,12 +765,16 @@ def _denoise_audio_inner(
 
     requested = (level or "auto").strip().lower()
 
+    # An explicit "off" means off — do not pay for a measurement pass to
+    # be told so. (This used to be reachable only on the cached path, so
+    # a transient off still analysed the audio for nothing.)
+    if requested == "off":
+        return audio_path
+
     # A cache hit short-circuits the analysis pass too, but only for an
     # explicit level: under "auto" the level is not known until after the
     # measurement, so there is nothing to look up yet.
     if cache and requested in LEVELS:
-        if requested == "off":
-            return audio_path
         hit = _cached_path(audio_path, requested)
         if hit.exists() and hit.stat().st_size >= _MIN_OUTPUT_BYTES:
             if log:
@@ -780,7 +803,9 @@ def _denoise_audio_inner(
             return str(target)
         target.parent.mkdir(parents=True, exist_ok=True)
     else:
-        base = Path(work_dir) if work_dir else Path(audio_path).parent
+        # Never default to the source's own folder: it may be read-only,
+        # or a media library the user does not want littered.
+        base = Path(work_dir) if work_dir else cache_dir()
         base.mkdir(parents=True, exist_ok=True)
         target = base / (
             f"{Path(audio_path).stem}.{os.getpid()}."
@@ -793,7 +818,12 @@ def _denoise_audio_inner(
 
     # Render to a sibling temp then move into place, so a crash mid-write
     # can never leave a truncated file looking like a valid cache entry.
-    staging = target.with_suffix(".part")
+    # pid+thread in the name: two workers transcribing the SAME file
+    # derive the same cache key, and a shared staging path would let them
+    # interleave writes and then publish the mess as a valid entry.
+    staging = target.with_suffix(
+        f".{os.getpid()}-{threading.get_ident()}.part"
+    )
     if not _apply_chain(audio_path, str(staging), chain,
                         duration_s=duration_s, log=log):
         _unlink(staging)
@@ -802,7 +832,17 @@ def _denoise_audio_inner(
                 "using the original.")
         return audio_path
 
-    after = analyze(str(staging), duration_s=duration_s, log=log)
+    # Re-measure the SAME window the "before" profile came from. Sampling
+    # afresh would pick the median window of the *denoised* file, which
+    # need not be the same span — and loudness varies far more along a
+    # recording than the verdict's tolerance, so a mismatched pair
+    # produces a meaningless verdict.
+    after = analyze(
+        str(staging),
+        duration_s=duration_s,
+        window=before.window,
+        log=log,
+    )
     if after is None:
         _unlink(staging)
         if log:
