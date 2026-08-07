@@ -27,6 +27,7 @@ fits into one of five buckets.
 - [SERVER.md](SERVER.md) — optional local-network / web server mode (`gui.py serve`)
 - [COMPETITIVE_ANALYSIS_2026.md](COMPETITIVE_ANALYSIS_2026.md) — ecosystem survey (ASR models, cloud APIs, CJK specifics)
 - [GAPS_AGAINST_PEERS_2026.md](GAPS_AGAINST_PEERS_2026.md) — companion product gap-analysis vs. peer apps
+- [GAPS_VS_VOICE_PRO_2026.md](GAPS_VS_VOICE_PRO_2026.md) — gap-analysis vs. Voice-Pro (TTS / translation / dubbing)
 - [integrations/](integrations/) — third-party service integrations (SMTV, oTranscribe)
 - [evaluations/](evaluations/) — model / backend evaluation writeups
 - [tutorial/](tutorial/) — end-user install-and-use walkthrough + video script
