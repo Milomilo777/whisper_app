@@ -25,6 +25,7 @@ fits into one of five buckets.
 - [CLOUD_STT.md](CLOUD_STT.md) — optional Gemini-API cloud backend (paste a key)
 - [CLOUD_STT_GOOGLE.md](CLOUD_STT_GOOGLE.md) — optional Google Cloud Speech-to-Text backend (service-account JSON, batch mode)
 - [SERVER.md](SERVER.md) — optional local-network / web server mode (`gui.py serve`)
+- [DENOISE.md](DENOISE.md) — optional adaptive audio denoise pre-process (ffmpeg-only, measures before it filters)
 - [COMPETITIVE_ANALYSIS_2026.md](COMPETITIVE_ANALYSIS_2026.md) — ecosystem survey (ASR models, cloud APIs, CJK specifics)
 - [GAPS_AGAINST_PEERS_2026.md](GAPS_AGAINST_PEERS_2026.md) — companion product gap-analysis vs. peer apps
 - [GAPS_VS_VOICE_PRO_2026.md](GAPS_VS_VOICE_PRO_2026.md) — gap-analysis vs. Voice-Pro (TTS / translation / dubbing)

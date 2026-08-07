@@ -187,6 +187,12 @@ class AdvancedDialog(tk.Toplevel):
         self._demucs_enabled = tk.BooleanVar(
             value=bool(cfg.get("demucs_enabled", False))
         )
+        self._denoise_enabled = tk.BooleanVar(
+            value=bool(cfg.get("denoise_enabled", False))
+        )
+        self._denoise_level = tk.StringVar(
+            value=str(cfg.get("denoise_level", "auto") or "auto")
+        )
         self._ai_enabled = tk.BooleanVar(
             value=bool(cfg.get("ai_enabled", False))
         )
@@ -549,19 +555,58 @@ class AdvancedDialog(tk.Toplevel):
             "adds processing time.",
         ).grid(row=2, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Checkbutton(
+            ai, text="Reduce background noise before transcribing",
+            variable=self._denoise_enabled,
+            command=self._sync_denoise_level_state,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 2))
+        help_icon(
+            ai,
+            "Cleans hiss, hum and rumble out of the audio before the "
+            "speech model hears it, which cuts hallucinated lines on "
+            "noisy recordings.\n\n"
+            "The audio is measured first: recordings that are already "
+            "clean are left completely untouched, because over-cleaning "
+            "makes transcripts worse, not better. The result is checked "
+            "afterwards too — if the filter removed speech instead of "
+            "noise, the original audio is used.\n\n"
+            "Uses the bundled ffmpeg only: no download, no extra "
+            "install, works offline. Costs roughly 20-40 seconds per "
+            "hour of audio.",
+        ).grid(row=3, column=3, sticky="w", padx=(0, 8), pady=(10, 2))
+        self._denoise_level_label = ttk.Label(ai, text="Strength:")
+        self._denoise_level_label.grid(
+            row=4, column=0, sticky="e", padx=(24, 4), pady=(0, 6)
+        )
+        self._denoise_level_combo = ttk.Combobox(
+            ai, textvariable=self._denoise_level, state="readonly", width=12,
+            values=("auto", "light", "medium", "strong"),
+        )
+        self._denoise_level_combo.grid(
+            row=4, column=1, sticky="w", padx=4, pady=(0, 6)
+        )
+        help_icon(
+            ai,
+            "Auto (recommended) measures each recording and picks the "
+            "gentlest setting that helps — including doing nothing at "
+            "all. Pick a fixed strength only to override that "
+            "measurement on material you know well; a fixed strength is "
+            "applied even to clean audio.",
+        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=(0, 6))
+        self._sync_denoise_level_state()
+        ttk.Checkbutton(
             ai, text="Generate auto-chapter markers (writes <name>.chapters.json)",
             variable=self._auto_chapters_enabled,
-        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         ttk.Checkbutton(
             ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
             variable=self._voiceprint_enabled,
-        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         help_icon(
             ai,
             "Matches speakers across different files against voice "
             "profiles you've enrolled, so e.g. 'SPEAKER_00' becomes the "
             "person's actual name instead of a generic label.",
-        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=6, column=3, sticky="w", padx=(0, 8), pady=4)
 
         gc_frame = self._build_gcloud_frame(body)
         self._nav_targets.append(("Google Cloud STT", gc_frame))
@@ -1117,6 +1162,8 @@ class AdvancedDialog(tk.Toplevel):
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
         cfg["demucs_enabled"] = bool(self._demucs_enabled.get())
+        cfg["denoise_enabled"] = bool(self._denoise_enabled.get())
+        cfg["denoise_level"] = (self._denoise_level.get() or "auto").strip().lower()
         cfg["ai_enabled"] = bool(self._ai_enabled.get())
         cfg["auto_chapters_enabled"] = bool(self._auto_chapters_enabled.get())
         cfg["voiceprint_enabled"] = bool(self._voiceprint_enabled.get())
@@ -1244,6 +1291,25 @@ class AdvancedDialog(tk.Toplevel):
             HardwareWizard(self, app=self.app)
         except Exception as e:  # noqa: BLE001
             self.app.log(f"Hardware wizard failed to launch: {e}")
+
+    def _sync_denoise_level_state(self) -> None:
+        """Grey out the strength picker while denoise is off.
+
+        A live control under an unchecked toggle reads as "this applies",
+        which is exactly the confusion the measurement-first design is
+        trying to avoid. Never raises: it runs from a Tk callback, where
+        an exception surfaces as a cryptic background-error dialog.
+        """
+        try:
+            on = bool(self._denoise_enabled.get())
+            self._denoise_level_combo.configure(
+                state=("readonly" if on else "disabled")
+            )
+            self._denoise_level_label.configure(
+                state=("normal" if on else "disabled")
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not sync denoise level state", exc_info=True)
 
     def _install_ai_model(self) -> None:
         """Download the local LLM model in a background thread.

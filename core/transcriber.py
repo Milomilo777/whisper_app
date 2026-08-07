@@ -1475,14 +1475,26 @@ def transcribe(
             audio_path = _clip_slice_path
             _ts_offset = _clip_start_s
 
+        # Adaptive denoise, after any clip slice so a time range only pays
+        # for the span it actually transcribes. A clipped run denoises the
+        # slice (transient, uncached); a full run denoises + caches the file.
+        audio_path, _denoise_tmp = _maybe_denoise(
+            audio_path,
+            duration=progress_span or duration,
+            transient=bool(_clip_slice_path),
+            log_cb=log_cb,
+        )
+
         try:
             segments, info = runner.transcribe(audio_path, **transcribe_kwargs)
         finally:
             # The slice is only read during transcribe(); remove it whether the
             # call succeeded or raised, so an error mid-transcribe never leaks it.
-            if _clip_slice_path:
+            for _tmp in (_clip_slice_path, _denoise_tmp):
+                if not _tmp:
+                    continue
                 try:
-                    os.remove(_clip_slice_path)
+                    os.remove(_tmp)
                 except OSError:
                     pass
         if _ts_offset:
@@ -1664,6 +1676,15 @@ def _transcribe_via_alt_backend(
             else max(0.0, duration - clip_start_s)
         )
 
+    # Noise hurts every engine, not just faster-whisper — whisper.cpp and
+    # the cloud backends get the same pre-process.
+    transcribe_path, denoise_to_clean = _maybe_denoise(
+        transcribe_path,
+        duration=duration,
+        transient=bool(slice_to_clean),
+        log_cb=log_cb,
+    )
+
     try:
         segments_data, lang_info = backend.transcribe_to_segments(
             transcribe_path,
@@ -1683,9 +1704,11 @@ def _transcribe_via_alt_backend(
         if is_clipped:
             _offset_segments(segments_data, clip_start_s)
     finally:
-        if slice_to_clean:
+        for _tmp in (slice_to_clean, denoise_to_clean):
+            if not _tmp:
+                continue
             try:
-                os.unlink(slice_to_clean)
+                os.unlink(_tmp)
             except OSError:
                 pass
 
@@ -1799,6 +1822,50 @@ def _accumulate_cloud_minutes(
             f"(total {new_total:.1f}).", log_cb)
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not persist cloud_stt_minutes_used: %s", e)
+
+
+def _maybe_denoise(
+    audio_path: str,
+    *,
+    duration: float = 0.0,
+    transient: bool = False,
+    log_cb: Callable[[str], None] | None = None,
+) -> tuple[str, str]:
+    """Optional adaptive denoise pre-process. Returns ``(path, temp_to_delete)``.
+
+    ``core.denoise`` measures the audio first and returns the input
+    untouched whenever denoising would not help (already clean) or could
+    not be verified as safe, so this is safe to call unconditionally.
+
+    ``transient=True`` is for an input that is itself a temp file (a
+    pre-sliced clip / resume tail): caching a render keyed to a path
+    that will not exist next run is pure waste, so the render is written
+    beside the slice and handed back as the second element for the
+    caller to delete.
+
+    The second element is ``""`` whenever nothing needs cleaning up —
+    including the cached case, where the cache owns the file.
+    """
+    if not config.get("denoise_enabled", False):
+        return audio_path, ""
+    try:
+        from . import denoise as _dn
+
+        out = _dn.denoise_audio(
+            audio_path,
+            enabled=True,
+            level=str(config.get("denoise_level", "auto") or "auto"),
+            duration_s=duration,
+            cache=not transient,
+            work_dir=_checkpoint.partials_dir() if transient else None,
+            log=log_cb,
+        )
+    except Exception as e:  # noqa: BLE001
+        log(f"Denoise pre-process failed (using original audio): {e}", log_cb)
+        return audio_path, ""
+    if out == audio_path:
+        return audio_path, ""
+    return out, (out if transient else "")
 
 
 def _slice_audio_from(
@@ -1967,8 +2034,28 @@ def resume_transcription(
             # overwrite the partial as it progresses anyway.
             return False
 
+        # Denoise the tail exactly like the first half was denoised, or
+        # the two halves of one transcript come from differently
+        # conditioned audio. The checkpoint fingerprint covers the
+        # denoise settings, so a mid-job settings change invalidates the
+        # partial instead of producing a mismatched merge.
+        #
+        # NOTE: kept in its own variable — rebinding ``slice_path`` would
+        # make the cleanup below unlink the denoised copy and leak the
+        # original slice.
+        try:
+            _tail_dur = max(0.0, get_duration(task.file_path) - last_end_time)
+        except Exception:  # noqa: BLE001
+            _tail_dur = 0.0
+        transcribe_slice, denoise_tmp = _maybe_denoise(
+            slice_path,
+            duration=_tail_dur,
+            transient=True,
+            log_cb=log_cb,
+        )
+
         start = time.time()
-        log(f"Resume: transcribing tail slice {slice_path}", log_cb)
+        log(f"Resume: transcribing tail slice {transcribe_slice}", log_cb)
 
         try:
             assert MODEL is not None
@@ -1988,7 +2075,7 @@ def resume_transcription(
                 transcribe_kwargs["batch_size"] = int(config.get("batch_size", 16))
 
             new_segments_iter, info = runner.transcribe(
-                slice_path, **transcribe_kwargs
+                transcribe_slice, **transcribe_kwargs
             )
 
             # Offset each new segment back into the original timeline
@@ -2047,11 +2134,15 @@ def resume_transcription(
         finally:
             # Always clean the slice file — the resume either
             # succeeded (final outputs written) or fell back, in both
-            # cases the slice is disposable.
-            try:
-                os.unlink(slice_path)
-            except OSError:
-                pass
+            # cases the slice is disposable. Same for any denoised copy
+            # of it (empty string when denoise was off / reverted).
+            for _tmp in (slice_path, denoise_tmp):
+                if not _tmp:
+                    continue
+                try:
+                    os.unlink(_tmp)
+                except OSError:
+                    pass
 
         final_segments = prior_segments + new_segments_data
         detected_lang = cp_language or str(getattr(info, "language", "") or "")

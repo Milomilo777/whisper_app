@@ -5,6 +5,116 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-07 — adaptive audio denoise landed (opt-in, ffmpeg-only)
+
+New `core/denoise.py`, off by default, enabled in **Advanced > AI Layer**.
+Full design + calibration data: [DENOISE.md](DENOISE.md).
+
+Shape is **measure -> decide -> apply -> verify**, not a strength knob:
+the audio is measured with ffmpeg `astats`, already-clean audio is left
+completely untouched (over-denoising makes Whisper *worse*), the filter
+chain is parameterised by the *measured* noise floor, and the result is
+re-measured and discarded if it removed speech instead of noise. Every
+failure path returns the original audio; the module never raises.
+
+Wired into all three transcription paths — default faster-whisper, alt
+backends (`_transcribe_via_alt_backend`), and resume — through one seam,
+`transcriber._maybe_denoise`. Diarization/alignment/chapters still read
+the original file, unchanged.
+
+Things a future session should not re-litigate:
+
+- **`anlmdn` is banned.** It measurably helped but **segfaults
+  non-deterministically** in the bundled ffmpeg build (identical args
+  crashed one run, succeeded the next; 0/20 failures once removed).
+  `test_chain_never_contains_anlmdn` guards it.
+- **SNR alone cannot grade the output.** An over-aggressive filter drives
+  the noise floor to digital silence and scores "infinite SNR" while
+  gutting the signal. Verification watches speech-band energy + entropy.
+  Both are needed: a hard gate slips past the energy guard, and spectral
+  over-suppression slips past a naive entropy check.
+- **The band-drop allowance must scale with input SNR.** A fixed
+  threshold false-rejected legitimate work at 1.2 and −2.2 dB SNR — the
+  heavy-noise cases the feature exists for.
+- `demucs_enabled` was missing from `_CONFIG_FINGERPRINT_KEYS` (same bug
+  class as the new denoise keys: resuming with different pre-processing
+  spliced differently-conditioned halves). Fixed alongside.
+
+Gate at hand-off: `pyright app core` 0/0/0; `pytest tests/ --ignore=tests/smoke`
+**1828 passed, 1 skipped**. One-off flake seen once in
+`test_transcript_viewer.py::test_viewer_remove_fillers_button` (a Tk timing
+test, unrelated to denoise) — passes in isolation and in two subsequent full
+runs; consistent with the order-dependent flakes already documented here.
+
+**Not done / next up (owner request, 2026-08-07):** the live / real-time
+transcription tab. `core/recorder.py` (mic + Windows WASAPI loopback) is
+written and tested but **nothing under `app/` imports it** — same situation
+as `core/llm.py`, `core/chapters.py`, `core/search.py`. It needs a tab and a
+streaming chunk loop. Rated the cheapest big win in
+[GAPS_VS_VOICE_PRO_2026.md](GAPS_VS_VOICE_PRO_2026.md) (gap 8).
+
+## 🔴 2026-08-04 — bundled cloud key removed; default engine is offline again
+
+Supersedes every earlier note in this file that says Google Cloud STT is the
+default engine or that a build bundles `creds/gcloud_stt.json` (see the
+v1.3.9 round further down — that description is now history, not current
+behaviour).
+
+The maintainer revoked the Google Cloud service-account key some time ago.
+This session deleted both local copies (`creds/`, `embed_build/creds/`),
+removed the copy step from `build_embed_installer.bat` (it now errors if a key
+is present), emptied `creds_datas` in both PyInstaller specs, and made the
+default engine unconditionally `faster_whisper` in BOTH places that resolved
+it (`core/config._default_transcribe_backend`,
+`core/backends/availability.default_engine` — the latter still honours a key
+the *user* configured, just never a bundled one). Regression tests updated in
+`tests/core/test_engine_selector.py`; rationale in `SECURITY.md`.
+
+Still open, from the same review of the stats endpoint (nothing done yet):
+
+- `stats/transcription_stats.php` takes **unauthenticated** POSTs with no rate
+  limit and no length cap, so anyone can write arbitrary text into the public
+  stats page as a `file_name`.
+- That page publishes users' raw file names, and `telemetry_opt_in` defaults
+  to `True` (`core/config.py`) while `core/stats.py`'s docstring claims the
+  default is OFF — one of the two is wrong.
+- A filter that rejects adult-content file names on ingest was researched but
+  not implemented.
+
+## 🟡 TODO — ship the word-count / audio-duration stats fix (found 2026-08-04)
+
+**41% of the live stats rows report nothing.** Read off the deployed page:
+**77 of 188 rows** show `word_count = 0` together with `audio_duration = 0:00`.
+This is not a content or server problem — it is the known client bug, and the
+zeros are meaningless, not "nothing was transcribed". One of the affected rows
+had a 5m53s `transcription_time`, so the run clearly did produce a transcript.
+
+**The fix is already in source and was never released.** `core/worker.py`
+(~line 445) now reports `word_count` / `audio_duration` from its in-memory
+segments in the `done` event, and `app/services/transcription_service.py`
+prefers those over the old JSON-sidecar lookup — so it no longer matters which
+output formats the user picked. Both entries are written up under 1.5.0
+"Fixed" in `docs/CHANGELOG.md` (dated 2026-07-18, i.e. after the 1.5.0 release
+date of 2026-07-03). `core/__init__.py` still reads `1.5.0`, so the published
+v1.5.0 assets predate the fix and every install out there keeps sending zeros.
+
+What is left to do:
+
+1. Rebuild and re-upload the release assets so users actually get the fix —
+   this is the standing "release assets must track every bug fix" rule in
+   `CLAUDE.md` (`docs/BUILD.md` → "Rebuild without bumping the version";
+   rebuild macOS too, the change is in cross-platform `core/` + `app/`).
+   Batch it with the bundled-key removal from the same day rather than cutting
+   a release for either one alone.
+2. After the rebuild is out, re-read the stats page and confirm NEW rows carry
+   non-zero `word_count` / `audio_duration`. Old rows stay zero forever; decide
+   whether the viewer should render a zero as "n/a" so the two cases are
+   distinguishable at a glance.
+3. Optional: have the recorder reject (or flag) a row that claims a non-zero
+   `transcription_time` with a zero `word_count` AND a zero `audio_duration` —
+   that combination is only ever produced by this bug, so it is a cheap
+   regression alarm for the next time something similar breaks.
+
 ## ⭐ Colleague-reported round (2026-07-18, night) — 5 fixes + NVIDIA frontend E2E
 
 Colleague reported: (a) add `program_version` to the stats POST,

@@ -13,12 +13,25 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   by the maintainer; the build steps that copied it are removed. See
   [SECURITY.md](../SECURITY.md).
 
+### Added
+
+- **Adaptive audio denoise before transcription** (**Advanced > AI Layer**,
+  off by default). Cuts hallucinated lines and misheard words on noisy
+  recordings. It measures each file first and leaves already-clean audio
+  untouched, then checks its own output and falls back to the original if
+  the filter removed speech instead of noise. Bundled ffmpeg only — no
+  extra download or dependency. See [DENOISE.md](DENOISE.md).
+
 ### Changed
 
 - **The default engine is always offline faster-whisper.** It no longer flips
   to Google Cloud STT because a key file exists next to the app. Cloud STT is
   now reached only by an explicit pick in **Advanced > Backend** with your own
   service-account JSON.
+- **Resuming a cancelled job now re-checks the pre-processing settings.**
+  Changing vocal separation or denoise between cancel and resume used to
+  splice differently-conditioned halves into one transcript; the partial is
+  now invalidated and re-run instead.
 
 ## [1.5.0] — 2026-07-03
 

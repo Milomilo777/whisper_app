@@ -75,6 +75,8 @@ def _advanced_fake(app, *, batch_size_var) -> types.SimpleNamespace:
         _alignment=_V("none"),
         _hallucination_detect=_V(True),
         _demucs_enabled=_V(False),
+        _denoise_enabled=_V(False),
+        _denoise_level=_V("auto"),
         _ai_enabled=_V(False),
         _auto_chapters_enabled=_V(False),
         _voiceprint_enabled=_V(False),

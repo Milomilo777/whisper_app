@@ -46,6 +46,13 @@ _CONFIG_FINGERPRINT_KEYS: tuple[str, ...] = (
     "backend",  # alias seen in some configs; tolerated below
     "batch_size",
     "compute_type",
+    # Pre-processing changes the audio the model sees, so resuming with
+    # a different setting would splice two differently-conditioned halves
+    # into one transcript. ``demucs_enabled`` had the same hole and is
+    # fixed here alongside the denoise keys.
+    "demucs_enabled",
+    "denoise_enabled",
+    "denoise_level",
     "device",
     "hotwords",
     "initial_prompt",

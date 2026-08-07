@@ -201,6 +201,7 @@ a = Analysis(
         'core.llm',
         'core.recorder',
         'core.search',
+        'core.denoise',
         'core.separator',
         'core.tiling',
         'core.voiceprint',

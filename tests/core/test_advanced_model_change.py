@@ -49,6 +49,8 @@ def _advanced_fake(app, *, chosen_label, slug_map):
         _alignment=_V("none"),
         _hallucination_detect=_V(True),
         _demucs_enabled=_V(False),
+        _denoise_enabled=_V(False),
+        _denoise_level=_V("auto"),
         _ai_enabled=_V(False),
         _auto_chapters_enabled=_V(False),
         _voiceprint_enabled=_V(False),

@@ -215,6 +215,18 @@ DEFAULT_CONFIG = {
     # Cap (MB) on the demucs vocals-separation cache; oldest stems are
     # evicted past this. 0 disables eviction. See core.separator.prune_cache.
     "demucs_cache_mb": 2048,
+    # v1.6 — adaptive audio denoise pre-process (ffmpeg only, no extra
+    # dependency). Off by default: it costs one measurement pass plus one
+    # filter pass per file, which nobody asked for on already-clean audio.
+    # When on, core.denoise MEASURES the source first and leaves clean
+    # audio completely untouched — over-denoising makes Whisper worse.
+    "denoise_enabled": False,
+    # "auto" picks off/light/medium/strong from the measured speech-to-
+    # noise ratio; naming a level forces it regardless of measurement.
+    "denoise_level": "auto",
+    # Cap (MB) on the denoised-render cache; oldest are evicted past this.
+    # 0 disables eviction. See core.denoise.prune_cache.
+    "denoise_cache_mb": 1024,
     # v0.8 Phase 2 — AI Layer. ``ai_enabled`` is the global on/off; the
     # actual model file lives at ``ai_model_path`` (empty = use the
     # default cache path under ``user_cache_dir()/llm/``).
