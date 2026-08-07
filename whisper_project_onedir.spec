@@ -198,6 +198,7 @@ a = Analysis(
         'core.server.jobs',
         'core.writers',
         'core.writers.base',
+        'core.writers.ass',
         'core.writers.srt',
         'core.writers.vtt',
         'core.writers.tsv',

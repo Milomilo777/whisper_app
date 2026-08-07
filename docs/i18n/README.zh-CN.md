@@ -35,7 +35,7 @@
 无需账号，无需 API 密钥，无需订阅。文件始终留在你的磁盘上。
 
 - 🔒 **在本机运行** —— 默认 faster-whisper（CTranslate2），另有 whisper.cpp 与 NVIDIA Parakeet
-- 📝 **13 种输出格式** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`，以及 oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14 种输出格式** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`，以及 oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **实时转写** —— 麦克风或系统声音，边说边出字 → [LIVE.md](../LIVE.md)
 - 🗣️ **说话人标注** —— 离线声纹分离、逐词时间戳、时间段裁剪
 - 🎬 **视频下载** —— 支持 `yt-dlp` 的所有站点，可下载完成后自动转写
@@ -66,7 +66,7 @@
 | | |
 |---|---|
 | **本地转写** | 默认 Whisper `large-v3`，另有 `large-v3-turbo` 与 `distil-large-v3.5`。 |
-| **多种输出格式** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 直接写在源文件旁边。 |
+| **多种输出格式** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 直接写在源文件旁边。 |
 | **实时转写** | 转写麦克风或本机正在播放的声音。切分点落在自然停顿处，不会把词切成两半。 |
 | **说话人分离** | 可选的「识别说话人」，另有逐词时间戳与时间段裁剪。 |
 | **自适应降噪** | 先测量每段录音，只在测量结果表明有效时才降噪；并会复核自身输出，若削掉了语音则自动还原。 |

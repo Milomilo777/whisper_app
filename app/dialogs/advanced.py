@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 # is the transcription team's templated Word export.
 _FORMAT_LABELS: dict[str, str] = {
     "smtv_docx": "SMTV transcription",
+    # Bare "ASS" is opaque, and the acronym reads badly on its own.
+    "ass": "ASS (styled subtitles / karaoke)",
 }
 
 

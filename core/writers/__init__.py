@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Callable
 
 from . import (
+    ass,
     docx_writer,
     elan,
     express_scribe,
@@ -45,6 +46,7 @@ BinaryWriterFn = Callable[[list[dict], str], bytes]
 
 WRITERS: dict[str, WriterFn] = {
     "srt": srt.write,
+    "ass": ass.write,
     "vtt": vtt.write,
     "tsv": tsv.write,
     "txt": txt.write,

@@ -35,7 +35,7 @@ Eine Desktop-Anwendung, die OpenAI's Whisper-Modell **lokal** ausführt — übe
 Kein Konto. Kein API-Schlüssel. Kein Abonnement. Ihre Dateien bleiben auf Ihrer Festplatte.
 
 - 🔒 **Läuft auf Ihrem Rechner** — standardmäßig faster-whisper (CTranslate2), dazu whisper.cpp und NVIDIA Parakeet
-- 📝 **13 Ausgabeformate** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, dazu oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14 Ausgabeformate** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, dazu oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **Live-Transkription** — Mikrofon oder Systemton, während gesprochen wird → [LIVE.md](../LIVE.md)
 - 🗣️ **Sprecherkennung** — offline, dazu wortgenaue Zeitstempel und Zeitbereichs-Zuschnitt
 - 🎬 **Downloads** — alles, was `yt-dlp` kann, auf Wunsch mit Transkription direkt danach
@@ -66,7 +66,7 @@ Alles Nötige ist enthalten — ein mitgeliefertes Python, `ffmpeg`, `ffprobe` u
 | | |
 |---|---|
 | **Lokale Transkription** | Standardmäßig Whisper `large-v3`, dazu `large-v3-turbo` und `distil-large-v3.5`. |
-| **Viele Ausgabeformate** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — direkt neben der Eingabedatei. |
+| **Viele Ausgabeformate** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — direkt neben der Eingabedatei. |
 | **Live-Transkription** | Transkribiert ein Mikrofon — oder was dieser Rechner gerade abspielt — während es passiert. Geschnitten wird in natürlichen Pausen, damit keine Wörter zerteilt werden. |
 | **Sprechertrennung** | Optionales „Sprecher erkennen“, dazu wortgenaue Zeitstempel und Zeitbereichs-Zuschnitt. |
 | **Adaptive Rauschreduktion** | Misst jede Aufnahme zuerst und bereinigt nur, wenn die Messung das nahelegt; prüft das eigene Ergebnis und verwirft es, wenn Sprache entfernt wurde. |

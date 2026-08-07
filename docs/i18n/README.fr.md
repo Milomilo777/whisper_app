@@ -35,7 +35,7 @@ Une application de bureau qui exécute le modèle Whisper d'OpenAI **en local**,
 Pas de compte. Pas de clé d'API. Pas d'abonnement. Vos fichiers restent sur votre disque.
 
 - 🔒 **S'exécute sur votre machine** — faster-whisper (CTranslate2) par défaut, plus whisper.cpp et NVIDIA Parakeet
-- 📝 **13 formats de sortie** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14 formats de sortie** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **Transcription en direct** — micro ou son du système, pendant que ça se dit → [LIVE.md](../LIVE.md)
 - 🗣️ **Étiquettes de locuteur** — diarisation hors ligne, horodatage par mot, découpe par intervalle
 - 🎬 **Téléchargements** — tous les sites gérés par `yt-dlp`, avec transcription automatique à la fin si vous le souhaitez
@@ -66,7 +66,7 @@ Tout le nécessaire est inclus : un Python embarqué, `ffmpeg`, `ffprobe` et `yt
 | | |
 |---|---|
 | **Transcription locale** | Whisper `large-v3` par défaut, plus `large-v3-turbo` et `distil-large-v3.5`. |
-| **De nombreux formats** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — écrits à côté du fichier d'entrée. |
+| **De nombreux formats** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — écrits à côté du fichier d'entrée. |
 | **Transcription en direct** | Transcrit un micro — ou ce que cette machine est en train de jouer — au fil de l'eau. Les coupures tombent dans les pauses naturelles, les mots ne sont donc jamais coupés en deux. |
 | **Diarisation des locuteurs** | « Identifier les locuteurs » en option, plus l'horodatage par mot et la découpe par intervalle. |
 | **Débruitage adaptatif** | Mesure chaque enregistrement d'abord et ne le nettoie que si la mesure le justifie ; vérifie son propre résultat et l'abandonne s'il a supprimé de la parole. |

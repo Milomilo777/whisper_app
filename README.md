@@ -55,14 +55,14 @@ A desktop app that runs OpenAI's Whisper model **locally** — via
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — so transcription
 costs nothing per minute, works on a plane, and never uploads your recording to
 anyone. Drop a file in and it writes `.srt`, `.vtt`, `.txt`, `.json`, `.docx`,
-`.pdf` and more, right next to the original. It also downloads from any site
+`.pdf`, `.ass` and more, right next to the original. It also downloads from any site
 `yt-dlp` supports, labels speakers, batches a queue of jobs, and can turn itself
 into a transcription page for the other devices on your network.
 
 No account. No API key. No subscription. Your files stay on your disk.
 
 - 🔒 **Runs on your machine** — [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) by default, plus **whisper.cpp** and **NVIDIA Parakeet**
-- 📝 **13 output formats** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14 output formats** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **Live transcription** — a microphone or the system audio, transcribed as it happens → [docs/LIVE.md](docs/LIVE.md)
 - 🗣️ **Speaker labels** — offline diarisation, per-word timestamps, time-range clipping
 - 🎬 **Downloads** — any `yt-dlp` site, with optional transcribe-on-finish
@@ -135,8 +135,8 @@ for the phones and PCs on your network.
 | | |
 |---|---|
 | **Local transcription** | Whisper `large-v3` by default, plus `large-v3-turbo` and `distil-large-v3.5`. Backends: `faster_whisper` (default), `whisper.cpp`, NVIDIA Parakeet. |
-| **Many output formats** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — written next to your input file. |
-| **Convert transcript** | Re-emit an existing transcript into the formats above, or into oTranscribe / ELAN / InqScribe / Express Scribe. |
+| **Many output formats** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — written next to your input file. |
+| **Convert transcript** | Re-emit an existing transcript into the formats above, or into oTranscribe / ELAN / InqScribe / Express Scribe. Reads `.ass` / `.ssa` too. |
 | **Live transcription** | Transcribe a microphone — or whatever this machine is playing — as it happens. Chunks are cut at natural pauses so words are never split in half. |
 | **Speaker diarisation** | Optional "Identify speakers", plus per-word timestamps and time-range clipping. |
 | **Adaptive denoise** | Measures each recording first and only cleans it when the measurement says that helps; verifies its own output and reverts if it removed speech. |

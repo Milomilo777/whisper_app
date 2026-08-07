@@ -10,6 +10,11 @@ PARSE (input) formats, auto-detected by extension then content:
   * ``.json`` — this app's JSON output (a list of segment dicts).
   * ``.srt``  — SubRip.
   * ``.vtt``  — WebVTT.
+  * ``.ass`` / ``.ssa`` — Advanced SubStation Alpha (and legacy SSA):
+    ``[Events]`` ``Dialogue:`` lines, with the column order read from the
+    section's own ``Format:`` header. Override blocks (``{\\k42}``,
+    ``{\\an8}``) are styling and are stripped; the ``Name`` column is
+    carried through as the speaker.
   * ``.tsv``  — the ``start<TAB>end<TAB>text`` table this app's TSV writer emits
     (start/end in MILLISECONDS), tolerant of a header row.
   * ``.otr``  — oTranscribe (imported via
@@ -75,7 +80,9 @@ class ConvertError(ValueError):
 # whole-second cues are too lossy to round-trip). "elan" / "inqscribe" match
 # the OUTPUT_FORMATS writer-registry keys for the same formats, even though
 # their on-disk extensions (.eaf / .inqscr) differ from the registry key.
-PARSE_FORMATS: tuple[str, ...] = ("json", "srt", "vtt", "tsv", "otr", "elan", "inqscribe")
+PARSE_FORMATS: tuple[str, ...] = (
+    "json", "srt", "vtt", "ass", "tsv", "otr", "elan", "inqscribe",
+)
 
 # Formats we can EMIT — the text writers in the registry (output side).
 OUTPUT_FORMATS: tuple[str, ...] = tuple(sorted(_writers.WRITERS.keys()))
@@ -351,7 +358,113 @@ def _parse_inqscribe(text: str, path: str) -> list[dict]:
 _EXT_TO_PARSE_FORMAT: dict[str, str] = {
     "eaf": "elan",
     "inqscr": "inqscribe",
+    # Legacy SubStation Alpha. We only WRITE v4.00+ (.ass), but old .ssa
+    # files exist in the wild and parse through the same Dialogue lines.
+    "ssa": "ass",
 }
+
+
+# ``Dialogue: 0,0:00:01.00,0:00:03.50,Default,Speaker,0,0,0,,text``
+# Only the first nine commas are field separators; everything after them
+# is the payload, which is allowed to contain commas of its own.
+_ASS_DIALOGUE = re.compile(r"^\s*Dialogue\s*:\s*(.*)$", re.IGNORECASE)
+_ASS_TIME = re.compile(r"^(\d+):(\d{1,2}):(\d{1,2})[.,](\d{1,3})$")
+# ``{\k42}`` / ``{\an8\i1}`` — override blocks are styling, not content.
+_ASS_OVERRIDE = re.compile(r"\{[^}]*\}")
+
+
+def _ass_time_to_seconds(value: str) -> float | None:
+    m = _ASS_TIME.match((value or "").strip())
+    if not m:
+        return None
+    h, mm, ss, frac = m.groups()
+    # ASS centiseconds are 2 digits; pad so ".5" reads as 0.50s, and a
+    # 3-digit millisecond value from a non-standard writer still works.
+    scale = 10 ** len(frac)
+    return int(h) * 3600 + int(mm) * 60 + int(ss) + int(frac) / scale
+
+
+def _strip_ass_markup(text: str) -> str:
+    """Turn a Dialogue payload back into plain text.
+
+    Drops override blocks (including the ``\\k`` karaoke tags this app
+    writes), unescapes the literal brace/backslash escapes, and turns
+    ``\\N``/``\\n`` line breaks and ``\\h`` hard spaces back into
+    ordinary whitespace.
+    """
+    if not text:
+        return ""
+    out = _ASS_OVERRIDE.sub("", text)
+    out = re.sub(r"\\[Nn]", " ", out)
+    out = out.replace("\\h", " ")
+    out = out.replace("\\{", "{").replace("\\}", "}")
+    out = out.replace("\\\\", "\\")
+    return " ".join(out.split())
+
+
+def _looks_like_ass(sniff: str) -> bool:
+    """True for an ASS/SSA script.
+
+    Must be tested BEFORE the JSON check: an ASS file opens with
+    ``[Script Info]``, so the bare "starts with [" heuristic would hand
+    it to the JSON parser and report it as malformed JSON.
+    """
+    head = (sniff or "")[:400].lower()
+    return "[script info]" in head or "scripttype:" in head
+
+
+def _parse_ass(text: str, path: str) -> list[dict]:
+    """Parse ASS (v4.00+) or legacy SSA (v4.00) Dialogue lines.
+
+    Reads the ``[Events]`` ``Format:`` header rather than assuming column
+    order: SSA and ASS differ (SSA leads with ``Marked``, ASS with
+    ``Layer``), and a file may legitimately declare its own order. Falls
+    back to the ASS default when no header is present.
+
+    Comment lines are skipped — they are editor notes, not subtitles.
+    """
+    fields = ["Layer", "Start", "End", "Style", "Name",
+              "MarginL", "MarginR", "MarginV", "Effect", "Text"]
+    segments: list[dict] = []
+    in_events = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            in_events = line.lower().startswith("[events")
+            continue
+        if not in_events:
+            continue
+        if line.lower().startswith("format:"):
+            declared = [p.strip() for p in line.split(":", 1)[1].split(",")]
+            if declared:
+                fields = declared
+            continue
+        m = _ASS_DIALOGUE.match(line)
+        if not m:
+            continue
+        # Split on the first len(fields)-1 commas only; the Text field is
+        # last and keeps every comma it contains.
+        parts = m.group(1).split(",", max(0, len(fields) - 1))
+        if len(parts) < len(fields):
+            continue
+        row = dict(zip(fields, parts))
+        start = _ass_time_to_seconds(row.get("Start", ""))
+        end = _ass_time_to_seconds(row.get("End", ""))
+        if start is None:
+            continue
+        if end is None or end < start:
+            end = start
+        body = _strip_ass_markup(row.get("Text", ""))
+        if not body:
+            continue
+        seg: dict[str, Any] = {"start": start, "end": end, "text": body}
+        speaker = (row.get("Name") or "").strip()
+        if speaker:
+            seg["speaker"] = speaker
+        segments.append(seg)
+    return segments
 
 
 def _detect_format(path: str, text: str | None) -> str:
@@ -386,6 +499,8 @@ def _detect_format(path: str, text: str | None) -> str:
     sniff = (text or "").lstrip()
     if not sniff:
         raise ConvertError(f"{path}: empty or unreadable input.")
+    if _looks_like_ass(sniff):
+        return "ass"
     if sniff[0] in "[{":
         return "json"
     if sniff.startswith("<?xml") or sniff.lstrip("<").startswith("ANNOTATION_DOCUMENT"):
@@ -436,6 +551,8 @@ def parse_to_segments(path: str) -> list[dict]:
         return _parse_json(text, path)
     if fmt in ("srt", "vtt"):
         return _parse_cue_format(text, path)
+    if fmt == "ass":
+        return _parse_ass(text, path)
     if fmt == "tsv":
         return _parse_tsv(text, path)
     if fmt == "elan":

@@ -35,7 +35,7 @@ OpenAI の Whisper モデルを**ローカルで**動かすデスクトップア
 アカウント不要。API キー不要。サブスクリプション不要。ファイルはあなたのディスクに留まります。
 
 - 🔒 **自分のマシンで動作** —— 既定は faster-whisper（CTranslate2）、ほかに whisper.cpp と NVIDIA Parakeet
-- 📝 **13 の出力形式** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`、さらに oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14 の出力形式** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`、さらに oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **リアルタイム文字起こし** —— マイクやシステム音声をその場で → [LIVE.md](../LIVE.md)
 - 🗣️ **話者ラベル** —— オフラインの話者分離、単語単位のタイムスタンプ、時間範囲の切り出し
 - 🎬 **ダウンロード** —— `yt-dlp` 対応サイト全般、完了後の自動文字起こしも可能
@@ -66,7 +66,7 @@ OpenAI の Whisper モデルを**ローカルで**動かすデスクトップア
 | | |
 |---|---|
 | **ローカル文字起こし** | 既定は Whisper `large-v3`、ほかに `large-v3-turbo` と `distil-large-v3.5`。 |
-| **豊富な出力形式** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 入力ファイルの隣に書き出します。 |
+| **豊富な出力形式** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 入力ファイルの隣に書き出します。 |
 | **リアルタイム文字起こし** | マイク、またはこのマシンが再生している音声をその場で文字起こし。自然な間で区切るため、単語が途中で切れません。 |
 | **話者分離** | 任意の「話者を識別」機能、単語単位のタイムスタンプ、時間範囲の切り出し。 |
 | **適応型ノイズ除去** | まず録音を計測し、効果があると判断したときだけ処理します。処理結果も検証し、音声を削ってしまった場合は元に戻します。 |

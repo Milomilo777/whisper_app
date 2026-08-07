@@ -35,7 +35,7 @@ OpenAI Whisper 모델을 **로컬에서** 실행하는 데스크톱 앱입니다
 계정 불필요. API 키 불필요. 구독 불필요. 파일은 내 디스크에 그대로 남습니다.
 
 - 🔒 **내 컴퓨터에서 실행** —— 기본은 faster-whisper(CTranslate2), 그 외 whisper.cpp와 NVIDIA Parakeet
-- 📝 **13가지 출력 형식** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, 그리고 oTranscribe / ELAN / InqScribe / Express Scribe
+- 📝 **14가지 출력 형식** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, 그리고 oTranscribe / ELAN / InqScribe / Express Scribe
 - 🎙️ **실시간 전사** —— 마이크나 시스템 소리를 말하는 즉시 → [LIVE.md](../LIVE.md)
 - 🗣️ **화자 구분** —— 오프라인 화자 분리, 단어 단위 타임스탬프, 구간 자르기
 - 🎬 **다운로드** —— `yt-dlp`가 지원하는 모든 사이트, 완료 후 자동 전사 선택 가능
@@ -66,7 +66,7 @@ OpenAI Whisper 모델을 **로컬에서** 실행하는 데스크톱 앱입니다
 | | |
 |---|---|
 | **로컬 전사** | 기본값은 Whisper `large-v3`, 그 외 `large-v3-turbo`와 `distil-large-v3.5`. |
-| **다양한 출력 형식** | `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 입력 파일 옆에 저장됩니다. |
+| **다양한 출력 형식** | `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 입력 파일 옆에 저장됩니다. |
 | **실시간 전사** | 마이크 또는 이 컴퓨터가 재생 중인 소리를 실시간으로 전사합니다. 자연스러운 쉼에서 끊기 때문에 단어가 반으로 잘리지 않습니다. |
 | **화자 분리** | 선택적 '화자 식별' 기능과 단어 단위 타임스탬프, 구간 자르기. |
 | **적응형 노이즈 제거** | 녹음을 먼저 측정해 도움이 될 때만 처리하고, 결과를 다시 검사해 음성을 깎아냈다면 원본으로 되돌립니다. |

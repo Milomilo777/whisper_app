@@ -183,7 +183,7 @@ T["zh-CN"] = dict(
     ),
     bullets=(
         "- 🔒 **在本机运行** —— 默认 faster-whisper（CTranslate2），另有 whisper.cpp 与 NVIDIA Parakeet\n"
-        "- 📝 **13 种输出格式** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`，以及 oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 种输出格式** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`，以及 oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **实时转写** —— 麦克风或系统声音，边说边出字 → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **说话人标注** —— 离线声纹分离、逐词时间戳、时间段裁剪\n"
         "- 🎬 **视频下载** —— 支持 `yt-dlp` 的所有站点，可下载完成后自动转写\n"
@@ -204,7 +204,7 @@ T["zh-CN"] = dict(
         "此后应用完全离线运行。"
     ),
     f_local="本地转写", f_local_d="默认 Whisper `large-v3`，另有 `large-v3-turbo` 与 `distil-large-v3.5`。",
-    f_formats="多种输出格式", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 直接写在源文件旁边。",
+    f_formats="多种输出格式", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 直接写在源文件旁边。",
     f_live="实时转写", f_live_d="转写麦克风或本机正在播放的声音。切分点落在自然停顿处，不会把词切成两半。",
     f_speakers="说话人分离", f_speakers_d="可选的「识别说话人」，另有逐词时间戳与时间段裁剪。",
     f_denoise="自适应降噪", f_denoise_d="先测量每段录音，只在测量结果表明有效时才降噪；并会复核自身输出，若削掉了语音则自动还原。",
@@ -255,7 +255,7 @@ T["ja"] = dict(
     ),
     bullets=(
         "- 🔒 **自分のマシンで動作** —— 既定は faster-whisper（CTranslate2）、ほかに whisper.cpp と NVIDIA Parakeet\n"
-        "- 📝 **13 の出力形式** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`、さらに oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 の出力形式** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`、さらに oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **リアルタイム文字起こし** —— マイクやシステム音声をその場で → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **話者ラベル** —— オフラインの話者分離、単語単位のタイムスタンプ、時間範囲の切り出し\n"
         "- 🎬 **ダウンロード** —— `yt-dlp` 対応サイト全般、完了後の自動文字起こしも可能\n"
@@ -277,7 +277,7 @@ T["ja"] = dict(
         "それ以降はアプリは完全にオフラインで動作します。"
     ),
     f_local="ローカル文字起こし", f_local_d="既定は Whisper `large-v3`、ほかに `large-v3-turbo` と `distil-large-v3.5`。",
-    f_formats="豊富な出力形式", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 入力ファイルの隣に書き出します。",
+    f_formats="豊富な出力形式", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 入力ファイルの隣に書き出します。",
     f_live="リアルタイム文字起こし", f_live_d="マイク、またはこのマシンが再生している音声をその場で文字起こし。自然な間で区切るため、単語が途中で切れません。",
     f_speakers="話者分離", f_speakers_d="任意の「話者を識別」機能、単語単位のタイムスタンプ、時間範囲の切り出し。",
     f_denoise="適応型ノイズ除去", f_denoise_d="まず録音を計測し、効果があると判断したときだけ処理します。処理結果も検証し、音声を削ってしまった場合は元に戻します。",
@@ -329,7 +329,7 @@ T["ko"] = dict(
     ),
     bullets=(
         "- 🔒 **내 컴퓨터에서 실행** —— 기본은 faster-whisper(CTranslate2), 그 외 whisper.cpp와 NVIDIA Parakeet\n"
-        "- 📝 **13가지 출력 형식** —— `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, 그리고 oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14가지 출력 형식** —— `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, 그리고 oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **실시간 전사** —— 마이크나 시스템 소리를 말하는 즉시 → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **화자 구분** —— 오프라인 화자 분리, 단어 단위 타임스탬프, 구간 자르기\n"
         "- 🎬 **다운로드** —— `yt-dlp`가 지원하는 모든 사이트, 완료 후 자동 전사 선택 가능\n"
@@ -351,7 +351,7 @@ T["ko"] = dict(
         "그 이후로는 완전히 오프라인으로 동작합니다."
     ),
     f_local="로컬 전사", f_local_d="기본값은 Whisper `large-v3`, 그 외 `large-v3-turbo`와 `distil-large-v3.5`.",
-    f_formats="다양한 출력 형식", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 입력 파일 옆에 저장됩니다.",
+    f_formats="다양한 출력 형식", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` —— 입력 파일 옆에 저장됩니다.",
     f_live="실시간 전사", f_live_d="마이크 또는 이 컴퓨터가 재생 중인 소리를 실시간으로 전사합니다. 자연스러운 쉼에서 끊기 때문에 단어가 반으로 잘리지 않습니다.",
     f_speakers="화자 분리", f_speakers_d="선택적 '화자 식별' 기능과 단어 단위 타임스탬프, 구간 자르기.",
     f_denoise="적응형 노이즈 제거", f_denoise_d="녹음을 먼저 측정해 도움이 될 때만 처리하고, 결과를 다시 검사해 음성을 깎아냈다면 원본으로 되돌립니다.",
@@ -404,7 +404,7 @@ T["de"] = dict(
     ),
     bullets=(
         "- 🔒 **Läuft auf Ihrem Rechner** — standardmäßig faster-whisper (CTranslate2), dazu whisper.cpp und NVIDIA Parakeet\n"
-        "- 📝 **13 Ausgabeformate** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, dazu oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 Ausgabeformate** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, dazu oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **Live-Transkription** — Mikrofon oder Systemton, während gesprochen wird → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **Sprecherkennung** — offline, dazu wortgenaue Zeitstempel und Zeitbereichs-Zuschnitt\n"
         "- 🎬 **Downloads** — alles, was `yt-dlp` kann, auf Wunsch mit Transkription direkt danach\n"
@@ -426,7 +426,7 @@ T["de"] = dict(
         "danach arbeitet die Anwendung vollständig offline."
     ),
     f_local="Lokale Transkription", f_local_d="Standardmäßig Whisper `large-v3`, dazu `large-v3-turbo` und `distil-large-v3.5`.",
-    f_formats="Viele Ausgabeformate", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — direkt neben der Eingabedatei.",
+    f_formats="Viele Ausgabeformate", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — direkt neben der Eingabedatei.",
     f_live="Live-Transkription", f_live_d="Transkribiert ein Mikrofon — oder was dieser Rechner gerade abspielt — während es passiert. Geschnitten wird in natürlichen Pausen, damit keine Wörter zerteilt werden.",
     f_speakers="Sprechertrennung", f_speakers_d="Optionales „Sprecher erkennen“, dazu wortgenaue Zeitstempel und Zeitbereichs-Zuschnitt.",
     f_denoise="Adaptive Rauschreduktion", f_denoise_d="Misst jede Aufnahme zuerst und bereinigt nur, wenn die Messung das nahelegt; prüft das eigene Ergebnis und verwirft es, wenn Sprache entfernt wurde.",
@@ -481,7 +481,7 @@ T["es"] = dict(
     ),
     bullets=(
         "- 🔒 **Se ejecuta en su equipo** — faster-whisper (CTranslate2) por defecto, además de whisper.cpp y NVIDIA Parakeet\n"
-        "- 📝 **13 formatos de salida** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, más oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 formatos de salida** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, más oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **Transcripción en directo** — micrófono o sonido del sistema, mientras se habla → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **Etiquetas de hablante** — diarización sin conexión, marcas de tiempo por palabra y recorte por intervalos\n"
         "- 🎬 **Descargas** — cualquier sitio compatible con `yt-dlp`, con transcripción automática al terminar si lo desea\n"
@@ -503,7 +503,7 @@ T["es"] = dict(
         "en el primer inicio); a partir de ahí la aplicación funciona totalmente sin conexión."
     ),
     f_local="Transcripción local", f_local_d="Whisper `large-v3` por defecto, además de `large-v3-turbo` y `distil-large-v3.5`.",
-    f_formats="Muchos formatos de salida", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — escritos junto al archivo de entrada.",
+    f_formats="Muchos formatos de salida", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — escritos junto al archivo de entrada.",
     f_live="Transcripción en directo", f_live_d="Transcribe un micrófono —o lo que este equipo esté reproduciendo— en el momento. Los cortes caen en pausas naturales, así que las palabras nunca se parten.",
     f_speakers="Diarización de hablantes", f_speakers_d="«Identificar hablantes» opcional, además de marcas de tiempo por palabra y recorte por intervalos.",
     f_denoise="Reducción de ruido adaptativa", f_denoise_d="Mide cada grabación antes de actuar y solo la limpia cuando la medición lo justifica; comprueba su propio resultado y lo descarta si ha eliminado voz.",
@@ -558,7 +558,7 @@ T["fr"] = dict(
     ),
     bullets=(
         "- 🔒 **S'exécute sur votre machine** — faster-whisper (CTranslate2) par défaut, plus whisper.cpp et NVIDIA Parakeet\n"
-        "- 📝 **13 formats de sortie** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 formats de sortie** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, plus oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **Transcription en direct** — micro ou son du système, pendant que ça se dit → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **Étiquettes de locuteur** — diarisation hors ligne, horodatage par mot, découpe par intervalle\n"
         "- 🎬 **Téléchargements** — tous les sites gérés par `yt-dlp`, avec transcription automatique à la fin si vous le souhaitez\n"
@@ -580,7 +580,7 @@ T["fr"] = dict(
         "fois**, au premier lancement) ; après quoi l'application fonctionne entièrement hors ligne."
     ),
     f_local="Transcription locale", f_local_d="Whisper `large-v3` par défaut, plus `large-v3-turbo` et `distil-large-v3.5`.",
-    f_formats="De nombreux formats", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — écrits à côté du fichier d'entrée.",
+    f_formats="De nombreux formats", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — écrits à côté du fichier d'entrée.",
     f_live="Transcription en direct", f_live_d="Transcrit un micro — ou ce que cette machine est en train de jouer — au fil de l'eau. Les coupures tombent dans les pauses naturelles, les mots ne sont donc jamais coupés en deux.",
     f_speakers="Diarisation des locuteurs", f_speakers_d="« Identifier les locuteurs » en option, plus l'horodatage par mot et la découpe par intervalle.",
     f_denoise="Débruitage adaptatif", f_denoise_d="Mesure chaque enregistrement d'abord et ne le nettoie que si la mesure le justifie ; vérifie son propre résultat et l'abandonne s'il a supprimé de la parole.",
@@ -636,7 +636,7 @@ T["pt"] = dict(
     ),
     bullets=(
         "- 🔒 **Corre na sua máquina** — faster-whisper (CTranslate2) por omissão, mais whisper.cpp e NVIDIA Parakeet\n"
-        "- 📝 **13 formatos de saída** — `srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, mais oTranscribe / ELAN / InqScribe / Express Scribe\n"
+        "- 📝 **14 formatos de saída** — `srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf`, mais oTranscribe / ELAN / InqScribe / Express Scribe\n"
         "- 🎙️ **Transcrição em direto** — microfone ou som do sistema, enquanto se fala → [LIVE.md](../LIVE.md)\n"
         "- 🗣️ **Identificação de oradores** — diarização offline, marcação de tempo por palavra e corte por intervalo\n"
         "- 🎬 **Descargas** — qualquer site suportado pelo `yt-dlp`, com transcrição automática no fim se quiser\n"
@@ -658,7 +658,7 @@ T["pt"] = dict(
         "no primeiro arranque); a partir daí a aplicação funciona totalmente offline."
     ),
     f_local="Transcrição local", f_local_d="Whisper `large-v3` por omissão, mais `large-v3-turbo` e `distil-large-v3.5`.",
-    f_formats="Muitos formatos de saída", f_formats_d="`srt` `vtt` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — escritos ao lado do ficheiro de entrada.",
+    f_formats="Muitos formatos de saída", f_formats_d="`srt` `vtt` `ass` `tsv` `txt` `json` `lrc` `md` `docx` `pdf` — escritos ao lado do ficheiro de entrada.",
     f_live="Transcrição em direto", f_live_d="Transcreve um microfone — ou o que esta máquina estiver a reproduzir — em tempo real. Os cortes caem em pausas naturais, pelo que as palavras nunca ficam partidas ao meio.",
     f_speakers="Diarização de oradores", f_speakers_d="«Identificar oradores» opcional, mais marcação de tempo por palavra e corte por intervalo.",
     f_denoise="Redução de ruído adaptativa", f_denoise_d="Mede cada gravação primeiro e só a limpa quando a medição o justifica; verifica o próprio resultado e descarta-o se tiver removido voz.",
