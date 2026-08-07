@@ -61,20 +61,17 @@ for _name in ('stable_whisper', 'whisper', 'tiktoken'):
     except Exception:
         pass
 
-# Optional Google Cloud service-account key (gitignored — only present in a
-# trusted local build tree, never in a source/CI checkout). Bundled under
-# creds/ so core.backends.google_cloud_stt.bundled_credentials_path() finds
-# it at <resource_base>/creds/gcloud_stt.json. Skipped cleanly when absent —
-# the cloud backend just falls back to user-supplied credentials.
-import os as _os
-creds_datas = (
-    [('creds/gcloud_stt.json', 'creds')]
-    if _os.path.isfile('creds/gcloud_stt.json')
-    else []
-)
+# NO credentials are bundled. This used to ship a maintainer-owned Google
+# Cloud service-account key at creds/gcloud_stt.json inside the package —
+# one shared credential handed to everyone who downloaded a build, billed to
+# the maintainer's project. The key is revoked and the bundling is removed
+# for good; cloud STT now requires the user's OWN service-account JSON.
+# See SECURITY.md. Do not re-add a credential entry to `datas`.
+creds_datas = []
 
 # google-cloud-speech + google-cloud-storage + grpcio are now REQUIRED
-# runtime deps — the Google Cloud STT backend is the default engine.
+# runtime deps — the Google Cloud STT backend is an opt-in engine (the
+# default is offline faster-whisper) but must import cleanly when selected.
 # collect_all gathers datas + binaries (the native grpc .pyd!) + every
 # submodule of these namespace-package stacks, which PyInstaller's static
 # analysis cannot fully discover on its own.

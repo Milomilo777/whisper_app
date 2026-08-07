@@ -28,33 +28,24 @@ APP_NAME = "WhisperProject"
 APP_AUTHOR = False  # platformdirs: omit author segment on Windows
 
 
-def _bundled_gcloud_key_present() -> bool:
-    """True iff a trusted build ships a Google Cloud service-account key.
-
-    The key lives at ``<resource_base>/creds/gcloud_stt.json`` — only ever
-    inside a build tree, never in the repo (gitignored). Pure filesystem
-    check; imports nothing from google. Kept inline (rather than importing
-    core.backends) to avoid an import cycle at config load time.
-    """
-    try:
-        from .paths import resource_base
-
-        return os.path.isfile(
-            os.path.join(resource_base(), "creds", "gcloud_stt.json")
-        )
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _default_transcribe_backend() -> str:
-    """Default engine: Google Cloud STT when a build ships a key, else offline.
+    """Default engine: always the offline one (faster-whisper).
 
-    A trusted distribution drops a service-account key into the build so cloud
-    STT works out of the box; a plain source checkout has no key and stays on
-    faster-whisper. A user's explicit choice (saved in config.json) always
-    overrides this default via the local-config merge layer.
+    Until 2026-08 a build could drop a maintainer-owned Google Cloud
+    service-account key at ``<resource_base>/creds/gcloud_stt.json``, and this
+    function flipped the default engine to ``google_cloud_stt`` whenever that
+    file existed. That shipped one shared credential inside a public
+    distribution — extractable by anyone who downloaded it, billed to the
+    maintainer's project, and answerable for whatever it was used to
+    transcribe. The key is revoked and is no longer bundled (see
+    ``docs/CLOUD_STT_GOOGLE.md`` and ``SECURITY.md``), so the default is now
+    unconditional: the app starts offline and a cloud backend is only ever
+    reached by an explicit user choice with the user's own credentials.
+
+    A user's saved choice in ``config.json`` still overrides this via the
+    local-config merge layer.
     """
-    return "google_cloud_stt" if _bundled_gcloud_key_present() else "faster_whisper"
+    return "faster_whisper"
 
 
 DEFAULT_CONFIG = {
@@ -121,11 +112,11 @@ DEFAULT_CONFIG = {
     # v0.7.1 — watched folder (off by default)
     "watched_folder": "",
     "watched_folder_enabled": False,
-    # v0.7.1 — backend selection. The default is resolved dynamically: a
-    # trusted build that ships a Google Cloud key defaults to cloud STT so it
-    # works out of the box; a plain source checkout (no key) stays offline on
-    # faster_whisper. whisper_cpp/nvidia_asr are opt-in; a user's saved choice
-    # always wins via the local-config merge layer.
+    # v0.7.1 — backend selection. Always offline faster_whisper by default;
+    # a bundled key can no longer flip it (see _default_transcribe_backend
+    # and SECURITY.md). cloud_stt/google_cloud_stt/whisper_cpp/nvidia_asr are
+    # opt-in; a user's saved choice always wins via the local-config merge
+    # layer.
     "transcribe_backend": _default_transcribe_backend(),
     # OPTIONAL cloud Speech-to-Text backend (Google Gemini API). Off
     # unless the user selects transcribe_backend="cloud_stt". The API

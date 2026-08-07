@@ -2,10 +2,9 @@
 
 Single source of truth shared by the Transcribe-tab engine picker and the
 Advanced dialog's backend combobox, so the two never drift. Also resolves the
-*effective default* engine: a trusted build that ships a Google Cloud
-service-account key (``creds/gcloud_stt.json``) defaults to cloud STT so it
-works out of the box, while a plain source checkout stays fully offline on
-faster-whisper.
+*effective default* engine: cloud STT only when the user has configured their
+own service-account JSON, otherwise fully offline on faster-whisper. No build
+ships a credential any more — see :func:`default_engine` and ``SECURITY.md``.
 
 Pure: no Tkinter, no network. The import-based runtime probes are cheap when a
 dependency is missing (ImportError fires immediately) but can be slow when a
@@ -82,11 +81,18 @@ def has_gcloud_key(cfg: Mapping[str, Any]) -> bool:
 def default_engine(cfg: Mapping[str, Any] | None = None) -> str:
     """The engine to use when the user has not chosen one.
 
-    A trusted build that ships (or a user who has configured) a Google Cloud
-    key defaults to ``google_cloud_stt`` so cloud STT works immediately;
-    otherwise stay offline on faster-whisper.
+    Cloud STT is the default ONLY when the user has configured their own
+    service-account JSON. A key merely sitting next to the app is explicitly
+    NOT enough: builds used to bundle a maintainer-owned key, and honouring it
+    here meant a fresh install silently transcribed through one shared cloud
+    account nobody opted into. That bundling is removed and revoked (see
+    ``SECURITY.md``); this function stays deliberately blind to it so
+    re-introducing a key file can never flip anyone's default again.
+
+    Everything else stays offline on faster-whisper.
     """
-    if has_gcloud_key(cfg or {}):
+    explicit = str((cfg or {}).get("gcloud_stt_credentials_json") or "").strip()
+    if explicit and os.path.isfile(explicit):
         return "google_cloud_stt"
     return FALLBACK_ENGINE
 

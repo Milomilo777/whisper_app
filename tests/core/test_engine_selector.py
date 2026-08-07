@@ -15,9 +15,9 @@ Covered:
      else "".
   4. engine_status(deep=False) — the cheap Transcribe-tab probe for each
      engine.
-  5. core.config defaults — _bundled_gcloud_key_present /
-     _default_transcribe_backend react to a creds/gcloud_stt.json under
-     resource_base().
+  5. core.config defaults — _default_transcribe_backend stays offline even
+     when a creds/gcloud_stt.json sits under resource_base() (the removed
+     shared-credential default must not come back).
   6. App._on_engine_selected — persists the pick, restarts the worker exactly
      once on a real change, and is a no-op restart on a repeat selection.
   7. App._refresh_engine_status — the always-ready faster-whisper engine
@@ -114,11 +114,18 @@ def test_default_engine_explicit_cfg_key(monkeypatch, tmp_path):
     assert eng.default_engine(cfg) == "google_cloud_stt"
 
 
-def test_default_engine_bundled_key_present(monkeypatch, tmp_path):
+def test_default_engine_ignores_a_bundled_key(monkeypatch, tmp_path):
+    """A key next to the app must NOT make cloud STT the default.
+
+    Builds used to bundle a maintainer-owned service-account key and this
+    default honoured it, so a fresh install transcribed through one shared
+    cloud account without anyone opting in. The bundling is removed and the
+    key revoked; the default must stay offline even if a key file reappears.
+    """
     bundled = tmp_path / "bundled.json"
     bundled.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(eng, "bundled_gcloud_key_path", lambda: str(bundled))
-    assert eng.default_engine({}) == "google_cloud_stt"
+    assert eng.default_engine({}) == "faster_whisper"
 
 
 # ------------------------------------------------- 3. has_gcloud_key / path
@@ -197,23 +204,37 @@ def test_engine_status_shallow_cloud_stt_key_present_and_absent():
 # --------------------------------------------------------- 5. config defaults
 
 
-def test_config_defaults_react_to_bundled_key(monkeypatch, tmp_path):
+def test_default_backend_never_flips_to_cloud_for_a_bundled_key(
+    monkeypatch, tmp_path
+):
+    """The default engine is offline, key on disk or not.
+
+    Regression guard for the removed shared-credential default: a build used
+    to ship a maintainer-owned creds/gcloud_stt.json and this default flipped
+    to google_cloud_stt whenever that file existed, so every install silently
+    transcribed through one shared cloud account. Even if a key reappears
+    next to the app, the default must stay faster_whisper — a cloud backend
+    is only ever reached by an explicit user choice.
+    """
     import core.config as cfgmod
     import core.paths as pathsmod
 
     monkeypatch.setattr(pathsmod, "resource_base", lambda: str(tmp_path))
 
-    # No creds/gcloud_stt.json yet -> stay offline.
-    assert cfgmod._bundled_gcloud_key_present() is False
+    # No creds/gcloud_stt.json -> offline.
     assert cfgmod._default_transcribe_backend() == "faster_whisper"
 
-    # Drop the bundled key -> defaults flip to cloud STT.
+    # A key sitting next to the app must NOT change the default.
     creds_dir = tmp_path / "creds"
     creds_dir.mkdir(parents=True, exist_ok=True)
     (creds_dir / "gcloud_stt.json").write_text("{}", encoding="utf-8")
 
-    assert cfgmod._bundled_gcloud_key_present() is True
-    assert cfgmod._default_transcribe_backend() == "google_cloud_stt"
+    assert cfgmod._default_transcribe_backend() == "faster_whisper"
+    assert cfgmod.DEFAULT_CONFIG["transcribe_backend"] == "faster_whisper"
+
+    # The key-sniffing helper is gone; its return value must never again
+    # be wired into the default.
+    assert not hasattr(cfgmod, "_bundled_gcloud_key_present")
 
 
 # --------------------------------------------------- 6. App._on_engine_selected

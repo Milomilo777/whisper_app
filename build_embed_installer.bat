@@ -84,17 +84,18 @@ xcopy /E /I /Y "%ROOT%core" "%BUILD%\core" >nul
 xcopy /E /I /Y "%ROOT%bin" "%BUILD%\bin" >nul
 copy "%ROOT%gui.py" "%BUILD%\" >nul
 
-REM Bundle the Google Cloud service-account key when present so cloud STT
-REM works out of the box (and becomes the default engine). The key is NEVER
-REM committed (gitignored: creds\ + gcloud_stt.json); it lives only in this
-REM local build tree. A source build without it stays fully offline on
-REM faster-whisper, so a missing key is a warning, not a build failure.
+REM NO credentials are bundled. Until 2026-08 this step copied a
+REM maintainer-owned Google Cloud service-account key into the build so cloud
+REM STT worked out of the box; that shipped one shared credential to every
+REM person who downloaded the installer. It was extractable from the package,
+REM billed to the maintainer's project, and answerable for whatever anyone
+REM used it to transcribe. The key is revoked and the step is gone for good.
+REM Cloud STT is now opt-in with the user's OWN service-account JSON, picked
+REM in Advanced ^> Backend. See SECURITY.md and docs/CLOUD_STT_GOOGLE.md.
+REM Do not re-add a credential copy here.
 if exist "%ROOT%creds\gcloud_stt.json" (
-    if not exist "%BUILD%\creds" mkdir "%BUILD%\creds"
-    copy /Y "%ROOT%creds\gcloud_stt.json" "%BUILD%\creds\gcloud_stt.json" >nul
-    echo [embed] bundled Google Cloud key at creds\gcloud_stt.json
-) else (
-    echo [embed] WARNING: creds\gcloud_stt.json not found - cloud STT needs a key
+    echo [embed] ERROR: creds\gcloud_stt.json exists but is deliberately NOT bundled.
+    echo [embed]        Shipping a shared cloud key is banned - see SECURITY.md.
 )
 
 REM The xcopy /E above already brings core\server\ (incl. static\) along.

@@ -10,6 +10,12 @@ This page covers the **full Google Cloud Speech-to-Text** service
 (`google_cloud_stt`). It is **not** the same as the simpler **Gemini cloud**
 option — see the table below.
 
+> **You need your own key.** Nothing ships with one. Builds v1.3.9–v1.5.0 did
+> bundle a maintainer-owned service-account key, which also made this the
+> default engine; that key is **revoked** and the bundling is gone, so on
+> those older builds cloud STT now fails until you supply your own JSON.
+> Background: [SECURITY.md](../SECURITY.md).
+
 ## Which cloud option do I want?
 
 | | Gemini cloud (`cloud_stt`) | Google Cloud Speech-to-Text (`google_cloud_stt`) |

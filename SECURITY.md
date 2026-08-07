@@ -14,6 +14,43 @@ Please use GitHub's private reporting —
 Helpful to include: the version, the OS, what an attacker would gain, and the
 smallest file, URL or configuration that reproduces it.
 
+## Retired: the bundled Google Cloud key (fixed 2026-08-04)
+
+Windows builds from **v1.3.9 through v1.5.0** shipped a maintainer-owned
+Google Cloud service-account key at `creds/gcloud_stt.json` inside the
+package, so that Google Cloud Speech-to-Text worked without any setup. Because
+a key was present, it also became the **default** engine — a fresh install
+transcribed through the maintainer's cloud account unless the user changed it.
+
+Why that was wrong: a credential inside a public download is a credential
+handed to everyone who downloads it. It could be extracted from the package
+and used outside the app entirely; all usage was billed to one project; and
+that project's owner was answerable, under Google's terms, for whatever
+anyone chose to transcribe with it.
+
+What was done:
+
+- The key was **revoked** by the maintainer. Any copy extracted from an old
+  build is dead.
+- Both local copies were deleted, and the build steps that copied a key into
+  the package are removed — `build_embed_installer.bat` now **errors** if a
+  key is sitting there, and neither PyInstaller spec adds one to `datas`.
+- The default engine is unconditionally offline faster-whisper. Neither
+  `core.config._default_transcribe_backend` nor
+  `core.backends.availability.default_engine` looks at a bundled key any more,
+  so dropping a key next to the app cannot change anyone's default.
+- Regression tests in `tests/core/test_engine_selector.py` fail if either
+  behaviour comes back.
+
+If you run **v1.5.0 or older**, cloud STT will stop working; pick your own
+service-account JSON in **Advanced > Backend**
+([docs/CLOUD_STT_GOOGLE.md](docs/CLOUD_STT_GOOGLE.md)). Nothing else in the
+app is affected — offline transcription never used the key.
+
+**Do not re-introduce a shared credential.** If a hosted service is ever
+wanted, put it behind a server the project controls, with per-user quota,
+rather than a key inside the download.
+
 ## Threat model in one paragraph
 
 This is a desktop app that reads local media files, shells out to `ffmpeg`,

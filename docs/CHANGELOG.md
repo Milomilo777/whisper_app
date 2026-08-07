@@ -2,6 +2,24 @@
 
 All notable changes to this project. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+- **No cloud credential is bundled any more, and the old one is revoked.**
+  Builds since v1.3.9 shipped a maintainer-owned Google Cloud service-account
+  key inside the package, which also made Google Cloud STT the default engine
+  — every install transcribed through one shared account. The key was revoked
+  by the maintainer; the build steps that copied it are removed. See
+  [SECURITY.md](../SECURITY.md).
+
+### Changed
+
+- **The default engine is always offline faster-whisper.** It no longer flips
+  to Google Cloud STT because a key file exists next to the app. Cloud STT is
+  now reached only by an explicit pick in **Advanced > Backend** with your own
+  service-account JSON.
+
 ## [1.5.0] — 2026-07-03
 
 > SMTV + usage-stats release. The SMTV docx header now shows the detected
