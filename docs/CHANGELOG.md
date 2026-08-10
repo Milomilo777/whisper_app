@@ -43,6 +43,15 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   the filter removed speech instead of noise. Bundled ffmpeg only — no
   extra download or dependency. See [DENOISE.md](DENOISE.md).
 
+### Docs
+
+- **26-way STT model comparison** across all 8 Google Cloud STT v2 models
+  and all 18 local faster-whisper models on a hard real-world clip (weak
+  audio, overlapping speakers). Found a real hallucination bug in the
+  Whisper Large-v3-Turbo family (fabricates unrelated text on ambiguous
+  audio) — confirms the app's `large-v3` default over Turbo. See
+  [STT_MODEL_COMPARISON_2026-08.md](evaluations/STT_MODEL_COMPARISON_2026-08.md).
+
 ### Changed
 
 - **The default engine is always offline faster-whisper.** It no longer flips

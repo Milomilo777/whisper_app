@@ -103,6 +103,12 @@ for a different model or region — an unavailable model surfaces a clear
 error rather than crashing. Word-level time offsets are always requested, so
 subtitle segments are timed from Google's word timings (not one flat block).
 
+For a real-world quality comparison across all 8 selectable models (plus
+every local model this app ships), see
+[evaluations/STT_MODEL_COMPARISON_2026-08.md](evaluations/STT_MODEL_COMPARISON_2026-08.md) —
+on a hard (weak audio, overlapping speakers) test clip, `chirp_3` and
+`telephony` held up best; `short` and `chirp_telephony` returned nothing.
+
 ## The usage / cost figure is a LOCAL estimate
 
 The box shows a line like:
