@@ -4,6 +4,15 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-08-12
+
+> Live tab + adaptive denoise release. Real-time microphone/system-audio
+> transcription, an opt-in noise filter that measures before it acts, ASS/SSA
+> subtitle output with real karaoke timing, a Windows source-install updater,
+> and a fix for an `nvidia_asr` dependency clash that broke every build since
+> whenever `tokenizers` last shipped a release newer than `transformers`
+> accepts. pyright `app/ core/` 0/0/0; hermetic suite green.
+
 ### Security
 
 - **No cloud credential is bundled any more, and the old one is revoked.**
@@ -62,6 +71,24 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   Changing vocal separation or denoise between cancel and resume used to
   splice differently-conditioned halves into one transcript; the partial is
   now invalidated and re-run instead.
+
+### Fixed
+
+- **The `nvidia_asr` (Parakeet) backend could fail to import on a freshly
+  built installer with a `tokenizers>=X,<=Y is required` error.** The
+  bundled `faster-whisper` pinned `tokenizers` only loosely, so a build done
+  on the wrong day could bundle a `tokenizers` release newer than
+  `transformers` accepts, and the on-demand `nvidia_asr` install could never
+  override it. `tokenizers` and `transformers` are now pinned to a verified
+  matching pair, `docs/BUILD.md` has a re-check step before every release
+  build, and the backend's error message and status probe both report the
+  real cause instead of a generic import failure.
+- **Usage-stats rows could show `word_count = 0` and `audio_duration = 0:00`
+  even when the transcript was complete.** This was the same class of bug
+  fixed for the local history view in v1.5.0, but the usage-stats POST had
+  its own separate code path that still read the old value. The worker now
+  reports both fields from its in-memory segments, so neither depends on
+  which output formats were selected.
 
 ## [1.5.0] — 2026-07-03
 
