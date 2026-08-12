@@ -993,7 +993,14 @@ class TranscriptionService:
                 app.log(f"history record update failed: {e}")
         # P4-4 — opt-in usage stats POST (best-effort, daemon thread, swallows
         # all errors). post_stats_async re-checks telemetry_opt_in + stats_url.
-        self._post_usage_stats(task, word_count, audio_duration)
+        # Only for a genuine successful completion: an error/cancelled task
+        # never has a real word_count/audio_duration, so posting here used to
+        # send a "0 words, 0:00" row indistinguishable from a real empty
+        # transcription — e.g. every job that failed because the configured
+        # backend had no valid key. history.finish_transcription() above
+        # still records the real status locally regardless.
+        if newly_finished:
+            self._post_usage_stats(task, word_count, audio_duration)
         # If this task was auto-spawned from a download, the Download row
         # mirrored "transcribing" + live progress while it ran. It's
         # terminal now (finished / error / cancelled) — restore that row to

@@ -234,3 +234,66 @@ def test_post_usage_stats_is_a_genuine_noop_when_telemetry_is_off(monkeypatch):
 def test_post_usage_stats_never_raises_even_if_task_is_missing_fields():
     task = SimpleNamespace()  # no file_path / start_time / detected_language / status
     _service({"telemetry_opt_in": False})._post_usage_stats(task, word_count=0, audio_duration=0.0)
+
+
+# ---------------------------------------------------------------- finish_task / stats gating
+
+
+def test_finish_task_skips_usage_stats_post_for_an_errored_task(monkeypatch):
+    """The real bug found live in the deployed stats: a task that failed
+    (e.g. the configured backend had no valid key) never produced a real
+    transcript, but finish_task used to POST usage stats for it anyway --
+    a fake "0 words, 0:00" row indistinguishable from a genuine empty
+    transcription. history.finish_transcription() still records the real
+    status locally; only the external usage-stats POST must be skipped."""
+    app = SimpleNamespace(app_config={}, update_overall_progress=lambda: None)
+    svc = TranscriptionService(app)  # type: ignore[arg-type]
+    posted: list = []
+    monkeypatch.setattr(svc, "_post_usage_stats", lambda *a, **k: posted.append(a))
+    task = SimpleNamespace(
+        status="error", cancelled=False, end_time=None, start_time=time.time(),
+        output_paths=[], file_path="clip.mp4", history_id=0, source_download=None,
+    )
+    worker = {"task": task, "temporary": False}
+
+    svc.finish_task(worker, keep_status=True)
+
+    assert posted == [], "an errored task must not post usage stats"
+    assert task.status == "error", "keep_status=True must not overwrite the real status"
+
+
+def test_finish_task_posts_usage_stats_for_a_genuine_successful_completion(monkeypatch):
+    app = SimpleNamespace(
+        app_config={},
+        update_overall_progress=lambda: None,
+        show_last_result=lambda task: None,
+    )
+    svc = TranscriptionService(app)  # type: ignore[arg-type]
+    posted: list = []
+    monkeypatch.setattr(svc, "_post_usage_stats", lambda *a, **k: posted.append(a))
+    task = SimpleNamespace(
+        status="running", cancelled=False, end_time=None, start_time=time.time(),
+        output_paths=[], file_path="clip.mp4", history_id=0, source_download=None,
+    )
+    worker = {"task": task, "temporary": False}
+
+    svc.finish_task(worker, keep_status=False)
+
+    assert len(posted) == 1, "a genuine completion must still post usage stats"
+    assert task.status == "finished"
+
+
+def test_finish_task_skips_usage_stats_post_for_a_cancelled_task(monkeypatch):
+    app = SimpleNamespace(app_config={}, update_overall_progress=lambda: None)
+    svc = TranscriptionService(app)  # type: ignore[arg-type]
+    posted: list = []
+    monkeypatch.setattr(svc, "_post_usage_stats", lambda *a, **k: posted.append(a))
+    task = SimpleNamespace(
+        status="cancelled", cancelled=True, end_time=None, start_time=time.time(),
+        output_paths=[], file_path="clip.mp4", history_id=0, source_download=None,
+    )
+    worker = {"task": task, "temporary": False}
+
+    svc.finish_task(worker, keep_status=False)
+
+    assert posted == [], "a user-cancelled task has no real transcript to report"
