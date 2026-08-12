@@ -5,6 +5,60 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟡 2026-08-12 — nvidia_asr tokenizers/transformers version clash fixed (committed, NOT released yet)
+
+A colleague hit `transformers / torch not available: tokenizers>=0.22.0,
+<=0.23.0 is required ... but found tokenizers==0.23.1` testing Parakeet.
+Root cause is structural, not a one-off: `faster-whisper` (core, bundled)
+pins `tokenizers` only loosely (`>=0.13,<1`), so `build_embed_installer.bat`
+bundles whatever is newest on build day into the tree's prepended
+`Lib\site-packages\`; `nvidia_asr`'s on-demand `transformers` install lands
+in the APPENDED pylibs dir, so the bundled `tokenizers` always wins the
+import regardless of what the on-demand install resolves. Retrying the
+on-demand install can never fix it. Verified live that day: `tokenizers`
+0.23.1 was already newer than the newest `transformers` (5.15.0) accepts,
+so any build done that day breaks `nvidia_asr` for every user.
+
+Fixed in commit `17d4023`: pinned both sides to a verified pair
+(`tokenizers>=0.22.0,<=0.23.0` in `requirements.txt`,
+`transformers>=4.40,<=5.15.0` in `core/optional_deps.py` +
+`pyproject.toml`'s `nvidia_asr` extra), added a `docs/BUILD.md` re-check
+step before each release build, fixed `friendly_load_error()`'s new
+branch actually being wired into `load()` (it was dead code before —
+`load()`'s except-block built its own raw string), and made
+`availability._nvidia_asr_status()`'s deep probe do a real import (not
+just `find_spec`) so this surfaces in the status line before a
+transcription attempt. 4 new tests, `tests/core/test_nvidia_asr.py` 32
+passed, `pyright app core` 0/0/0.
+
+**Not done yet — needs an explicit decision:** this fix only changes what
+a FUTURE build bundles. Every already-shipped release still has the old,
+unpinned, already-broken `tokenizers` baked in and stays broken until
+rebuilt + re-uploaded (see CLAUDE.md's "Release assets must track every
+bug fix"). Committed locally, NOT pushed, NOT released. Next session:
+ask whether to push + cut a rebuild now or batch it with other pending
+work.
+
+**Unrelated finding, not chased down:** while verifying the above with
+the full suite, `pytest tests/ --ignore=tests/smoke -q` hit a Windows
+fatal exception (`code 0x80000003`) around 91% through and died with no
+final summary — twice in a row. The dumped stack is entirely in
+PRE-EXISTING code, nothing this session touched: one background `_probe`
+thread (`app.py`'s `_refresh_engine_status`) was importing
+`google.cloud.speech_v2` via `availability._google_cloud_stt_status` /
+`google_cloud_stt.runtime_available()` while a SECOND `_probe` thread was
+concurrently importing the same module chain — looks like a concurrent-
+import race, likely made worse by the pile of other live threads still
+running late in the suite (`worker-heartbeat`, `live-worker-reader`,
+`tqdm` monitors) that do not look joined between tests. Confirmed the
+nvidia_asr fix itself is clean regardless: `tests/core/test_nvidia_asr.py`
+alone passed 32/32, twice. If this reproduces again: check whether
+`_probe` threads in `app.py` need serialising (a lock around the deep
+engine-status probe), or `google_cloud_stt.runtime_available()` needs to
+cache/guard its import instead of re-importing per call.
+
+---
+
 ## 🟢 2026-08-07 — Live tab landed (microphone + system audio)
 
 `core/recorder.py` is no longer unreachable: there is a **Live** tab
