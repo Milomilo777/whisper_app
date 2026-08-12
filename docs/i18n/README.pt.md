@@ -23,7 +23,8 @@
   <a href="README.es.md"><img src="https://flagcdn.com/16x12/es.png" alt="" width="16" height="12"> Español</a> ∙
   <a href="README.fr.md"><img src="https://flagcdn.com/16x12/fr.png" alt="" width="16" height="12"> Français</a> ∙
   <img src="https://flagcdn.com/16x12/pt.png" alt="" width="16" height="12">
-  <b>Português</b>
+  <b>Português</b> ∙
+  <a href="README.fa.md"><img src="https://flagcdn.com/16x12/ir.png" alt="" width="16" height="12"> فارسی</a>
 </p>
 
 </div>

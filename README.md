@@ -1,5 +1,5 @@
 <!--
-    title: Whisper Project — offline audio & video transcription for Windows and macOS
+    title: Whisper Project — offline audio & video transcription for Windows, macOS and Linux
     description: Desktop app that runs OpenAI Whisper locally via faster-whisper. Transcribe audio and video to SRT, VTT, DOCX and PDF with no cloud, no account and no upload. Speaker diarisation, batch queue, yt-dlp downloads, live microphone transcription and a local-network mode.
     keywords: offline speech to text, local whisper GUI, faster-whisper desktop app, audio to text, video to text, subtitle generator, SRT VTT generator, transcription software, speaker diarization, private on-device transcription, yt-dlp downloader, live microphone transcription
     author: translation-robot
@@ -22,7 +22,7 @@
 [![downloads](https://img.shields.io/github/downloads/Milomilo777/whisper_app/total?color=207a80)](https://github.com/Milomilo777/whisper_app/releases)
 [![codecov](https://codecov.io/gh/Milomilo777/whisper_app/graph/badge.svg)](https://codecov.io/gh/Milomilo777/whisper_app)
 [![License: BSD-3](https://img.shields.io/badge/license-BSD--3--Clause-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](#download)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#download)
 [![Stars](https://img.shields.io/github/stars/Milomilo777/whisper_app?style=flat&color=207a80)](https://github.com/Milomilo777/whisper_app/stargazers)
 
 ### [⬇  Download for Windows](https://github.com/Milomilo777/whisper_app/releases/latest)
@@ -44,7 +44,8 @@
   <a href="docs/i18n/README.de.md"><img src="https://flagcdn.com/16x12/de.png" alt="" width="16" height="12"> Deutsch</a> ∙
   <a href="docs/i18n/README.es.md"><img src="https://flagcdn.com/16x12/es.png" alt="" width="16" height="12"> Español</a> ∙
   <a href="docs/i18n/README.fr.md"><img src="https://flagcdn.com/16x12/fr.png" alt="" width="16" height="12"> Français</a> ∙
-  <a href="docs/i18n/README.pt.md"><img src="https://flagcdn.com/16x12/pt.png" alt="" width="16" height="12"> Português</a>
+  <a href="docs/i18n/README.pt.md"><img src="https://flagcdn.com/16x12/pt.png" alt="" width="16" height="12"> Português</a> ∙
+  <a href="docs/i18n/README.fa.md"><img src="https://flagcdn.com/16x12/ir.png" alt="" width="16" height="12"> فارسی</a>
 </p>
 
 </div>
@@ -357,6 +358,6 @@ them and says what to include when redistributing.
 **Keywords** — offline speech to text · local Whisper GUI · audio to text ·
 video to text · subtitle generator · SRT VTT generator · transcription software ·
 speaker diarization · faster-whisper desktop app · yt-dlp downloader ·
-private on-device transcription · Windows · macOS
+private on-device transcription · Windows · macOS · Linux
 
 </sub></div>
