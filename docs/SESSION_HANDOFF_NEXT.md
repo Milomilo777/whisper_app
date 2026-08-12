@@ -5,6 +5,44 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-12 (latest) — v1.6.0 Windows assets rebuilt in place (no version bump) for the usage-stats fix
+
+Three commits landed on `master` after `v1.6.0` shipped (docs-only
+except one): a real fix (`db077a6`) gating `_post_usage_stats()` behind
+`newly_finished` so an errored/cancelled task no longer POSTs a fake
+"0 words, 0:00" stats row (root cause: any job against a backend with
+no valid key, e.g. Google Cloud STT after the bundled key was revoked,
+polluted the public stats endpoint). Per `CLAUDE.md`'s "release assets
+must track every bug fix" rule, rebuilt and re-uploaded rather than
+leaving the fix source-only.
+
+Gate: `pyright app core` 0/0/0. `pytest tests/ --ignore=tests/smoke`
+first run hit the same pre-existing Windows fatal-exception crash near
+91% documented in the entry below (background `_probe` thread import
+race, unrelated to this fix); a clean rerun passed 100% with only the
+one known skip, exit code 0. Confirmed via `git diff v1.6.0..HEAD
+--stat` that `requirements.txt`/`core/optional_deps.py`/`pyproject.toml`
+were untouched since the v1.6.0 build, so the tokenizers/transformers
+pin re-check in `docs/BUILD.md` did not need re-running.
+
+Followed `docs/BUILD.md` → "Rebuild without bumping the version"
+exactly: version confirmed unchanged (`1.6.0` in `core/__init__.py`,
+`pyproject.toml`, `installer_embed.iss`), `build_embed_installer.bat` →
+ISCC `installer_embed.iss` → portable zip, then `gh release upload
+v1.6.0 ... --clobber`. Same tag, no new tag, no version bump.
+`db077a6` was pushed to `origin/master` first so the release matches
+public source. Updated:
+
+- `WhisperProject-v1.6.0-Setup-Standard.exe` (~226 MB)
+- `WhisperProject-v1.6.0-Portable.zip` (~345 MB)
+
+**Not done, same scope limit as the original v1.6.0 build**: macOS was
+NOT rebuilt (this fix is in cross-platform `app/`, so a future session
+should still fold it in next time macOS gets rebuilt — see the "Not
+done" note in the entry below, still open).
+
+---
+
 ## 🟢 2026-08-12 (later) — v1.6.0 shipped: Live tab + denoise + ASS/SSA + the tokenizers fix, Windows only
 
 Version bumped 1.5.0 → 1.6.0 (`core/__init__.py`, `pyproject.toml`,

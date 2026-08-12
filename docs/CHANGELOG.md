@@ -71,6 +71,11 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   Changing vocal separation or denoise between cancel and resume used to
   splice differently-conditioned halves into one transcript; the partial is
   now invalidated and re-run instead.
+- **A failed or cancelled transcription no longer posts opt-in usage
+  stats.** It used to send a fake "0 words, 0:00" row indistinguishable
+  from a genuine empty transcription — e.g. every job against a backend
+  with no valid key. The local history record is unaffected; only the
+  external stats POST is now skipped for a non-success.
 
 ### Fixed
 
