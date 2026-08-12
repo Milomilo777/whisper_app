@@ -14,7 +14,7 @@ A hardening + feature release on top of v1.3.7.
 - **SMTV team `.docx`** — the team's 4-column transcription/translation table.
 - **Multi-monitor Video Tiling** — one live stream as an N×N wall across
   monitors, with auto-reconnect and clean teardown; grid size is remembered.
-- **Three-level config, multi-model picker, usage stats, ffplay auto-download.**
+- **Three-level config, multi-model picker, ffplay auto-download.**
 - **macOS support** (build from source / `.app`) — see `platform/macos/`.
 
 ## Reliability (this release)

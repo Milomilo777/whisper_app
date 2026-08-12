@@ -33,10 +33,6 @@ A Live-transcription + denoise release on top of v1.5.0.
   `tokenizers` and `transformers` are now pinned to a verified matching
   pair, and the backend's error message and status probe both report the
   real cause.
-- **Usage-stats rows could show `word_count = 0` and `audio_duration =
-  0:00`** even when the transcript was complete, whenever the output
-  format list did not include a machine-readable format. The worker now
-  reports both fields directly from its in-memory segments.
 - **The default engine is always offline faster-whisper again.** It no
   longer flips to Google Cloud STT because a key file exists next to the
   app — that bundled key was revoked; see `SECURITY.md`.

@@ -297,7 +297,7 @@ Outcomes (details in `docs/CHANGELOG.md` under 1.5.0 Fixed):
   the healthy worker mid-first-download (heartbeat now starts before
   load); the engine-status probe called `self.after()` off-thread.
 
-Bonus finds in the follow-up hunt (also fixed): usage-stats rows
+Bonus finds in the follow-up hunt (also fixed): telemetry-stats rows
 claimed the Whisper model name for alt-engine runs (now the backend
 name + HF id); the alt-engine error dialog stacked once per restart
 attempt (debounced); the macOS dmg build scripts now arch-suffix the
@@ -792,7 +792,7 @@ session to pick up — it can start fresh on whatever's next.
 - **Fixed a real bug**: `app/services/transcription_service.py`'s
   `_derive_transcript_stats` only recovered `word_count` from a `.json`
   sidecar. Anyone whose `output_formats` didn't include `"json"` always
-  got `word_count=0` in both history and the opt-in usage-stats POST,
+  got `word_count=0` in both history and the opt-in telemetry-stats POST,
   no matter how much was actually transcribed. It now falls back to
   `core.convert.parse_to_segments` on whatever else was produced.
 - **`core/stats.py`** `build_stats_payload` gained `program_version`
@@ -1284,14 +1284,14 @@ New requests from
 planned for a future session; nothing below is built yet.
 
 - **P4-1 — three-level merged configuration** (hard-coded → online-URL →
-  local-file) so model URLs / the usage-stats URL / latest-version /
+  local-file) so model URLs / the telemetry-stats URL / latest-version /
   ffplay links can change **without redistributing** the app.
 - **P4-2 — config-driven multi-model + an Advanced model selector** — add
   `faster-whisper-medium`, `large-v3-turbo`, `distil-large-v3.5`;
   `large-v3` stays the default.
 - **P4-3 — transcription format CONVERSION** — JSON ↔ SRT / VTT / TSV / TXT
   (+ `.otr` import), with the faster-whisper JSON as the middle format.
-- **P4-4 — usage stats** — a "word count" column in the sqlite
+- **P4-4 — telemetry stats** — a "word count" column in the sqlite
   transcription table + a PHP online stats tracker (IP / geoip via
   `smch.ir`, filename, model, language, duration, AI time, status) + the
   app POSTing stats.

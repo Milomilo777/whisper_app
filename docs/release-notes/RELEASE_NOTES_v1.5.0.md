@@ -1,6 +1,6 @@
 # Whisper Project v1.5.0
 
-An SMTV + usage-stats release on top of v1.4.0.
+An SMTV release on top of v1.4.0.
 
 ## Highlights
 
@@ -12,17 +12,7 @@ An SMTV + usage-stats release on top of v1.4.0.
 - **SMTV added to File → Convert transcript.** The format picker now offers
   `smtv_docx` alongside the existing text targets, for turning any already
   -produced transcript into the team's SMTV template.
-- **Usage-stats payload is richer.** It now includes the sending app's
-  version and coarse host/hardware facts (OS, machine, CPU count, total
-  RAM) — still sent only when telemetry is opted in.
 - **Project renamed** to `whisper_app` (GitHub repo + local folder).
-
-## Fixed
-
-- **Usage-stats `word_count` was 0 whenever "json" wasn't among the chosen
-  output formats**, even though the transcript itself (e.g. `.srt`/`.docx`)
-  was full of real words. It now falls back to re-parsing whichever other
-  produced transcript format is available.
 
 ## Builds
 

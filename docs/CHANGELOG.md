@@ -83,21 +83,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   matching pair, `docs/BUILD.md` has a re-check step before every release
   build, and the backend's error message and status probe both report the
   real cause instead of a generic import failure.
-- **Usage-stats rows could show `word_count = 0` and `audio_duration = 0:00`
-  even when the transcript was complete.** This was the same class of bug
-  fixed for the local history view in v1.5.0, but the usage-stats POST had
-  its own separate code path that still read the old value. The worker now
-  reports both fields from its in-memory segments, so neither depends on
-  which output formats were selected.
 
 ## [1.5.0] — 2026-07-03
 
-> SMTV + usage-stats release. The SMTV docx header now shows the detected
-> language, SMTV and oTranscribe join the Convert-transcript targets, the
-> format picker shows each target's real file extension in a curated
-> (common-first) order, a real word-count bug in the usage-stats payload
-> is fixed, and the opt-in stats payload gained host/hardware + app-version
-> fields. The project (and its GitHub repo) is renamed to `whisper_app`.
+> SMTV release. The SMTV docx header now shows the detected language, SMTV
+> and oTranscribe join the Convert-transcript targets, and the format
+> picker shows each target's real file extension in a curated
+> (common-first) order. The project (and its GitHub repo) is renamed to
+> `whisper_app`.
 > pyright `app/ core/` 0/0/0; hermetic suite green.
 
 ### Added
@@ -125,16 +118,6 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   four formats almost everyone wants (`srt`/`vtt`/`txt`/`json`) were buried
   among niche ones. It now shows `name (.ext)` for every target (via a new
   `core.convert.output_extension_for()`) and lists the common four first.
-- **Usage-stats payload gained 9 new fields**: `program_version` (the
-  sending app's version) and, from the host machine, `platform_system`,
-  `platform_node`, `platform_release`, `platform_version`,
-  `platform_machine`, `platform_processor` (stdlib `platform`), plus
-  `cpu_count` / `mem_total` (new dependency: `psutil`). Still sent only
-  when the user has opted in to telemetry.
-  `stats/transcription_stats.php` gained matching columns, including a
-  migration path (`PRAGMA table_info` + `ALTER TABLE ADD COLUMN`) so an
-  already-deployed `transcription_stats.db` picks up the new columns
-  instead of silently dropping the values.
 
 ### Fixed
 
@@ -146,12 +129,6 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   `tokenizers` are now pinned to a verified-compatible pair, and both the
   error message and the Advanced-dialog status line now name the real
   cause up front instead of only surfacing it after a failed transcription.
-- **Usage-stats `word_count` was STILL 0 for txt/docx/pdf-only runs**
-  (2026-07-18) — the v1.5.0 fallback below only re-parses formats
-  `core.convert` can read back. The worker now computes
-  `word_count`/`audio_duration` from its in-memory segments and reports
-  them in the `done` event; the app prefers those, so the count works for
-  every format selection.
 - **A failed alternative engine (whisper.cpp / cloud / NVIDIA) startup
   misdiagnosed as a missing Whisper model** (2026-07-18) — the app
   force-opened the mandatory ~3 GB Whisper download modal and buried the
@@ -170,21 +147,10 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   needs `transformers >= 5.14`; older versions failed with a generic
   message. Verified end-to-end: with transformers 5.14.1 that model loads
   and transcribes correctly through the GUI.
-- **Usage-stats rows claimed the Whisper model name for alternative-engine
-  runs** (2026-07-18) — an NVIDIA/cloud/whisper.cpp transcription posted
-  e.g. "faster-whisper-large-v3" as its model. The payload now sends the
-  backend name, plus the concrete HF model id for `nvidia_asr`.
 - **macOS dmg build scripts now arch-suffix the output filename**
   (2026-07-18) — `builddmg.command` / `compileall-whisper-mac.sh` derive
   x64/arm64 from `uname -m`, so a single-arch build can no longer ship
   under an arch-less (or "universal") name.
-- **Usage-stats `word_count` was 0 whenever "json" wasn't among the
-  chosen output formats** — the payload builder itself was correct, but
-  the caller only ever tried to recover the word count from a `.json`
-  sidecar. A user who only exports e.g. `.srt`/`.docx` never had one, so
-  every stats row read `word_count: 0` regardless of how much was
-  actually transcribed. It now falls back to re-parsing whichever other
-  produced transcript `core.convert` can read back into segments.
 - **SMTV docx filename was not actually fixed** — a colleague reported the
   "Convert transcript" / transcription SMTV output "sometimes" landing under
   an unexpected `(1)`/`(2)`-suffixed name. Root cause: `_write_outputs`
@@ -370,7 +336,7 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 > Hardening release on top of v1.3.7: the Phase 1–6 feature work (Google
 > Cloud / Gemini cloud STT, the optional LAN/web server, transcript-format
 > conversion, the SMTV team `.docx`, the multi-monitor Video Tiling rewrite,
-> three-level merged config, multi-model picker, usage stats, ffplay
+> three-level merged config, multi-model picker, ffplay
 > auto-download, and macOS groundwork) **plus a 44-finding adversarial audit
 > fixpack** — every finding independently confirmed by skeptic review and
 > covered by a hermetic regression test. pyright `app/ core/` 0/0/0; hermetic

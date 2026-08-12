@@ -70,21 +70,21 @@ details also in `docs/SESSION_HANDOFF_NEXT.md` + `docs/CHANGELOG.md [Unreleased]
 
 ## NEW-JOBS source files (P4 inputs) — `C:\Users\Owner\Desktop\new jobs\`
 - `claude_request_v1.38.txt` — the P4 spec text (3-level config, multi-model, format
-  conversion, usage stats, ffplay link, + the SMTV docx spec which is DONE).
+  conversion, telemetry stats, ffplay link, + the SMTV docx spec which is DONE).
 - `work title -Transcription in ... – Translation in English.docx` — the SMTV template (already bundled into the repo + writer DONE).
 - `translation-stats-updated-sample.php` — reference for the P4-4 PHP stats tracker.
 
 ## P4 BACKLOG — NOT YET STARTED (tasks #29–#33 in the persistent task list)
 - **P4-1** three-level merged config: hard-coded DEFAULT_CONFIG ← online JSON (from a
   URL, e.g. GitHub) ← local file; priority local > online > hard-coded. App-level keys
-  (model URLs, usage/stats URL, latest version, ffplay links) come from the ONLINE config
+  (model URLs, telemetry-stats URL, latest version, ffplay links) come from the ONLINE config
   so they change without redistributing. Merge in core/config.py, fail-safe offline.
 - **P4-2** config-driven multi-model + Advanced model selector: large-v3 default; add
   faster-whisper-medium, whisper-large-v3-turbo, faster-distil-whisper-large-v3.5
   (find their URLs/MD5). MODEL_REGISTRY + `whisper_model` already exist → make it config-driven.
 - **P4-3** transcription format conversion: JSON↔SRT/VTT/TSV/TXT (faster-whisper JSON as
   the middle format) + import .otr (core/integrations/otranscribe.py exists). UI action.
-- **P4-4** usage stats: add an integer word-count column to the sqlite `transcription`
+- **P4-4** telemetry stats: add an integer word-count column to the sqlite `transcription`
   table (core/history.py); a PHP web service (IP/geoip via https://smch.ir/stats/geoip/
   index.php?ip={ip} → country_name, full geoip JSON, filename, model, language, duration,
   AI time, status); the app POSTs stats (respect telemetry opt-in). PHP is a deliverable file.
