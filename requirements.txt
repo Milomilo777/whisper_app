@@ -11,6 +11,21 @@
 # Core transcription
 faster-whisper>=1.0.3
 
+# faster-whisper pins tokenizers only loosely (>=0.13,<1), so a build done
+# today can bundle whatever tokenizers is newest on that day. The nvidia_asr
+# optional feature (see core/optional_deps.py) installs 'transformers' ON
+# DEMAND, later, into a separate user-writable dir that is APPENDED to
+# sys.path — so this bundled tokenizers (prepended, always wins the import)
+# is the one 'transformers' actually sees, not whatever on-demand pip
+# resolves. If the two drift apart, 'transformers' refuses to import with
+# "tokenizers>=X,<=Y is required ... but found tokenizers==Z". Pin here to
+# stay inside whatever range the pinned transformers below (see
+# core/optional_deps.py's nvidia_asr entry) declares — re-check both
+# together (pip show transformers; python -c "from
+# transformers.dependency_versions_table import deps; print(deps['tokenizers'])")
+# before each release build and bump in lockstep if it no longer matches.
+tokenizers>=0.22.0,<=0.23.0
+
 # HTTP for model + asset downloads
 requests>=2.31.0
 

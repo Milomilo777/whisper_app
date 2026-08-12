@@ -57,7 +57,17 @@ FEATURES: dict[str, tuple[str, list[str]]] = {
     # librosa for its mel front-end). Hundreds of MB to GBs; like the other
     # torch-based features it is NOT bundled and installs on first use. The
     # probe import is the top-level transformers package.
-    "nvidia_asr": ("transformers", ["transformers", "torch", "librosa"]),
+    #
+    # transformers is capped (not just floored) because its tokenizers
+    # requirement must stay inside the tokenizers version pinned in
+    # requirements.txt — that copy is bundled at BUILD time and always
+    # shadows whatever this on-demand install puts in the pylibs dir (see
+    # the requirements.txt comment above the tokenizers pin for why). An
+    # unpinned "latest transformers" here would silently drift past that
+    # bundled tokenizers' ceiling and break every fresh install. Verified
+    # working pair as of 2026-08-12: transformers 5.15.0 + tokenizers
+    # 0.22.0-0.23.0. Re-verify and bump both together before raising this.
+    "nvidia_asr": ("transformers", ["transformers>=4.40,<=5.15.0", "torch", "librosa"]),
 }
 
 

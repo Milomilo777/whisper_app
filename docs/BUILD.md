@@ -127,6 +127,20 @@ The batch script:
 7. Runs a sanity import (`faster_whisper`, `ctranslate2`, `sv_ttk`,
    `platformdirs`, `tkinter`) to confirm the bundle is complete.
 
+**Before running this script for a release**, re-check the `tokenizers`
+pin in `requirements.txt` against the `transformers` pin in
+`core/optional_deps.py` (nvidia_asr entry) and `pyproject.toml`
+(nvidia_asr extra) — they must agree, or the nvidia_asr backend fails to
+import for every user on this build with a "tokenizers>=X,<=Y required"
+error (see the comment above the `tokenizers` line in `requirements.txt`
+for why: this bundled copy always wins over whatever nvidia_asr installs
+on demand later). Quick check:
+
+```
+pip index versions tokenizers
+python -c "from transformers.dependency_versions_table import deps; print(deps['tokenizers'])"
+```
+
 Then wrap the tree in an Inno Setup installer:
 
 ```cmd

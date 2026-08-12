@@ -71,7 +71,10 @@ nvidia_asr = [
     # heavy (GBs with the model weights) and install on first use via
     # core/optional_deps.py for a normal app run; this group just lets a
     # source checkout / dev environment pre-install the same three.
-    "transformers>=4.40",
+    # Keep the transformers upper bound in sync with core/optional_deps.py's
+    # nvidia_asr entry and the tokenizers pin in requirements.txt — see the
+    # comment there for why an unpinned "latest transformers" breaks this.
+    "transformers>=4.40,<=5.15.0",
     "torch>=2.2",
     "librosa>=0.10",
 ]

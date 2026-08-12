@@ -184,11 +184,25 @@ def _cloud_stt_status(cfg: Mapping[str, Any]) -> EngineStatus:
     )
 
 
+def _import_transformers() -> None:
+    """Isolated so tests can monkeypatch the real-import step directly
+    instead of fighting sys.modules / import machinery."""
+    import transformers  # type: ignore  # noqa: F401
+
+
 def _nvidia_asr_status(cfg: Mapping[str, Any]) -> EngineStatus:
     # Local transformers backend: ready once the transformers package is
     # importable (it pulls torch). Both install on first use, so a fresh
     # checkout reports "installs on first use" rather than a hard failure.
     # The model itself downloads on first run (like faster-whisper).
+    #
+    # find_spec only proves the package's files are ON DISK — it does NOT
+    # catch a tokenizers/transformers version clash (find_spec succeeds,
+    # then "import transformers" itself raises from transformers' own
+    # internal dependency_versions_check). So once find_spec says present,
+    # actually try the import too — same honest-probe pattern as
+    # _faster_whisper_status_deep, and it is what lets this clash show up
+    # in the status line BEFORE the user starts a transcription.
     import importlib.util
 
     try:
@@ -201,6 +215,12 @@ def _nvidia_asr_status(cfg: Mapping[str, Any]) -> EngineStatus:
             False,
             "transformers + torch install on first use",
         )
+    try:
+        _import_transformers()
+    except Exception as e:  # noqa: BLE001
+        from .nvidia_asr import friendly_load_error
+
+        return EngineStatus("nvidia_asr", False, friendly_load_error(e))
     return EngineStatus("nvidia_asr", True, "")
 
 

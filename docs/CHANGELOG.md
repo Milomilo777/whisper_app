@@ -111,6 +111,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- **NVIDIA Parakeet could fail to load with a confusing `tokenizers>=X,<=Y
+  required` error** — the `tokenizers` copy bundled at build time (pulled in
+  by faster-whisper) could drift newer than the on-demand `transformers`
+  install accepts, and retrying the on-demand install could never fix it
+  (the bundled copy always wins on `sys.path`). `transformers` and
+  `tokenizers` are now pinned to a verified-compatible pair, and both the
+  error message and the Advanced-dialog status line now name the real
+  cause up front instead of only surfacing it after a failed transcription.
 - **Usage-stats `word_count` was STILL 0 for txt/docx/pdf-only runs**
   (2026-07-18) — the v1.5.0 fallback below only re-parses formats
   `core.convert` can read back. The worker now computes

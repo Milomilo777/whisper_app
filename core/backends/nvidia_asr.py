@@ -192,6 +192,15 @@ def friendly_load_error(exc: Any) -> str:
             "transformers >= 5.14). Update it: pip install -U transformers "
             f"— then try again. [{msg[:200]}]"
         )
+    if "tokenizers" in low and "is required for a normal functioning" in low:
+        return (
+            "This app has a dependency clash: 'transformers' needs a "
+            "'tokenizers' version this build does not have. Use a "
+            "different engine for now (Advanced > Backend). Check for an "
+            "app update — it may already fix this. If you run this from "
+            "source code, try this command: pip install -U transformers "
+            f"— then try again. [{msg[:200]}]"
+        )
     if "librosa" in low:
         return (
             "The local NVIDIA ASR model needs the 'librosa' package, which "
@@ -302,10 +311,9 @@ class NvidiaAsrBackend(Backend):
                 return False
 
         try:
-            import torch  # type: ignore
-            from transformers import pipeline  # type: ignore
+            torch, pipeline = _import_torch_and_transformers()
         except Exception as e:  # noqa: BLE001
-            self._error = f"transformers / torch not available: {e}"
+            self._error = friendly_load_error(e)
             if status_cb:
                 status_cb(self._error)
             return False
@@ -499,6 +507,18 @@ def _transformers_available() -> bool:
         return importlib.util.find_spec("transformers") is not None
     except Exception:  # noqa: BLE001
         return False
+
+
+def _import_torch_and_transformers() -> tuple[Any, Any]:
+    """The real (possibly-failing) import, isolated so tests can monkeypatch
+    this one seam instead of faking a torch/transformers install. A
+    tokenizers/transformers version clash raises here, not at find_spec
+    time — see the ``friendly_load_error`` branch that reads this
+    exception's text."""
+    import torch  # type: ignore
+    from transformers import pipeline  # type: ignore
+
+    return torch, pipeline
 
 
 def _build_pipeline(

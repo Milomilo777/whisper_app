@@ -161,6 +161,17 @@ def test_friendly_load_error_generic():
     assert "NVIDIA ASR" in msg or "something odd" in msg
 
 
+def test_friendly_load_error_tokenizers_version_clash():
+    msg = na.friendly_load_error(
+        ImportError(
+            "tokenizers>=0.22.0,<=0.23.0 is required for a normal "
+            "functioning of this module, but found tokenizers==0.23.1."
+        )
+    )
+    assert "dependency clash" in msg.lower()
+    assert "different engine" in msg.lower()
+
+
 # ---------------------------------------------------------------- config read
 
 
@@ -199,6 +210,25 @@ def test_backend_starts_not_ready():
     assert b.get_error() is None
 
 
+def test_load_reports_friendly_error_on_tokenizers_version_clash(monkeypatch):
+    """The real-world failure: find_spec sees transformers on disk (so the
+    on-demand installer is skipped), but the actual import raises from
+    transformers' own dependency_versions_check. load() must route that
+    through friendly_load_error(), not a raw f-string of the exception."""
+    b = na.NvidiaAsrBackend(config={})
+    monkeypatch.setattr(na, "_transformers_available", lambda: True)
+
+    def _boom():
+        raise ImportError(
+            "tokenizers>=0.22.0,<=0.23.0 is required for a normal "
+            "functioning of this module, but found tokenizers==0.23.1."
+        )
+
+    monkeypatch.setattr(na, "_import_torch_and_transformers", _boom)
+    assert b.load() is False
+    assert "dependency clash" in (b.get_error() or "").lower()
+
+
 # ---------------------------------------------------------------- factory
 
 
@@ -224,8 +254,29 @@ def test_availability_deep_ready_with_transformers(monkeypatch):
     from core.backends import availability
 
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(availability, "_import_transformers", lambda: None)
     st = availability.engine_status("nvidia_asr", {}, deep=True)
     assert st.ready is True
+
+
+def test_availability_deep_not_ready_on_version_clash(monkeypatch):
+    """find_spec sees the files on disk, but the real import still raises
+    (the tokenizers/transformers version-clash case) — must NOT report
+    ready, and the detail must carry the friendly diagnostic."""
+    from core.backends import availability
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+
+    def _boom() -> None:
+        raise ImportError(
+            "tokenizers>=0.22.0,<=0.23.0 is required for a normal "
+            "functioning of this module, but found tokenizers==0.23.1."
+        )
+
+    monkeypatch.setattr(availability, "_import_transformers", _boom)
+    st = availability.engine_status("nvidia_asr", {}, deep=True)
+    assert st.ready is False
+    assert "dependency clash" in st.detail.lower()
 
 
 def test_availability_shallow_is_ready_at_startup():
