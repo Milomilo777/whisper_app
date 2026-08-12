@@ -5,7 +5,58 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟡 2026-08-12 — nvidia_asr tokenizers/transformers version clash fixed (committed, NOT released yet)
+## 🟢 2026-08-12 (later) — v1.6.0 shipped: Live tab + denoise + ASS/SSA + the tokenizers fix, Windows only
+
+Version bumped 1.5.0 → 1.6.0 (`core/__init__.py`, `pyproject.toml`,
+both `.iss` files, the mac spec for parity). This folds in everything
+that had been source-only since v1.5.0: the Live tab, adaptive denoise,
+ASS/SSA output, the Windows source-install updater, the 7-language
+READMEs, and the `nvidia_asr` tokenizers/transformers pin fix from the
+entry directly below (now released, not just committed). `docs/CHANGELOG.md`
+`[1.6.0]` and `docs/release-notes/RELEASE_NOTES_v1.6.0.md` have the
+full list.
+
+**Owner-requested change from the usual release policy**: the old
+`v1.5.0` GitHub release was deliberately KEPT (not pruned) alongside
+the new `v1.6.0` one, so downloads can be compared per version. This
+overrides CLAUDE.md's normal "keep only latest" rule **for this
+release only** — re-confirm with the owner before assuming it applies
+to future releases too.
+
+Gate before building: `pyright app core` 0/0/0. `pytest tests/
+--ignore=tests/smoke` run twice — first run hit an `F` around 58% and
+the same pre-existing Windows fatal-exception crash near 91% already
+documented in the entry below (background `_probe` thread import
+race, not caused by this session's changes — the diff was version
+strings + docs only); a second full run reached 100% with zero
+failures, and the `F` did not reproduce. Treated as the same known
+flake, not a regression — see the entry below for the suspected root
+cause if a future session wants to actually fix it.
+
+Built via `docs/BUILD.md` Method C (`build_embed_installer.bat` →
+ISCC `installer_embed.iss` → portable zip). Embed sanity imports all
+passed (`embed_import_ok`, `embed_gcloud_import_ok`,
+`embed_core_import_ok`), `tokenizers-0.22.2` landed inside the pinned
+`>=0.22.0,<=0.23.0` range. Tagged `v1.6.0`, pushed, released:
+
+- `WhisperProject-v1.6.0-Setup-Standard.exe` (~226 MB)
+- `WhisperProject-v1.6.0-Portable.zip` (~345 MB)
+
+**Not done, scope of this session was Windows-only**: macOS was NOT
+rebuilt. `v1.5.0`'s `WhisperProject-v1.5.0-macOS-x64.dmg` is still the
+newest Mac build available. A future session should rebuild macOS via
+`docs/BUILD.md` Step 4b and upload it to the `v1.6.0` release (or a
+later one) once someone asks for it.
+
+**Not done, pre-existing and out of scope**: the `_probe`-thread
+concurrent-import race that crashes the full test suite intermittently
+near the end (see below). The known stats endpoint gaps from the
+2026-08-04 entry further down (unauthenticated POST, no rate limit,
+`telemetry_opt_in` docstring mismatch) are also still open.
+
+---
+
+## 🟢 2026-08-12 — nvidia_asr tokenizers/transformers version clash fixed (now RELEASED in v1.6.0, see entry above)
 
 A colleague hit `transformers / torch not available: tokenizers>=0.22.0,
 <=0.23.0 is required ... but found tokenizers==0.23.1` testing Parakeet.
@@ -31,13 +82,10 @@ just `find_spec`) so this surfaces in the status line before a
 transcription attempt. 4 new tests, `tests/core/test_nvidia_asr.py` 32
 passed, `pyright app core` 0/0/0.
 
-**Not done yet — needs an explicit decision:** this fix only changes what
-a FUTURE build bundles. Every already-shipped release still has the old,
-unpinned, already-broken `tokenizers` baked in and stays broken until
-rebuilt + re-uploaded (see CLAUDE.md's "Release assets must track every
-bug fix"). Committed locally, NOT pushed, NOT released. Next session:
-ask whether to push + cut a rebuild now or batch it with other pending
-work.
+**RESOLVED** (see the entry above): pushed and released in `v1.6.0` the
+same day. Every `v1.5.0`-and-earlier asset still has the old, unpinned,
+already-broken `tokenizers` baked in — anyone still on those installers
+needs `v1.6.0` to fix `nvidia_asr`.
 
 **Unrelated finding, not chased down:** while verifying the above with
 the full suite, `pytest tests/ --ignore=tests/smoke -q` hit a Windows
