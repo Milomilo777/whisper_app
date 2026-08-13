@@ -35,6 +35,11 @@ _FORMAT_LABELS: dict[str, str] = {
     "smtv_docx": "SMTV transcription",
     # Bare "ASS" is opaque, and the acronym reads badly on its own.
     "ass": "ASS (styled subtitles / karaoke)",
+    # Without an override these fall back to name.upper(): "EXPRESS_SCRIBE"
+    # renders with a literal underscore (looks like a raw identifier, not a
+    # label) and "INQSCRIBE" loses the product's own InqScribe capitalisation.
+    "express_scribe": "Express Scribe",
+    "inqscribe": "InqScribe",
 }
 
 # One-line "what is this / who uses it" for each output format's hover-help

@@ -5,6 +5,109 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-14 (latest) — Advanced dialog readability pass, 3 rounds, real screenshots
+
+Owner asked, after the Voice-Pro comparison work below: was that visually
+tested, and — separately, the main ask — do several more rounds of
+readability/simplicity work specifically on the Advanced settings dialog,
+and expand the existing hover-help (?) icon system. Explicit go-ahead for
+"every kind of visual testing."
+
+Three rounds, each verified and pushed separately (`01e131d`, `2efaa32`,
+and this entry's commit):
+
+1. **Consistent section headers + split "Whisper extras".** 3 sections
+   (Cloud STT/Gemini, Google Cloud STT service-account, NVIDIA Parakeet)
+   were still a raw `ttk.LabelFrame(text="long run-on sentence")` with no
+   hover-help, visually different from the other 7 sections'
+   `section_labelframe()` short-title-plus-(?) pattern — converted all 3.
+   The old "Whisper extras" section crammed 10 unrelated rows (model
+   picker, batch size, prompt, hotwords, backend, alignment,
+   hallucination toggle, hardware, filename template) into one scroll of
+   content; split into "Model & engine" (what runs / how it decodes) and
+   "Prompt, hotwords & output naming" (user-authored text + file naming).
+2. **Hover-help on every output format + 3 more bare spots.** All 15
+   output-format checkboxes (SRT/ASS/VTT/TSV/TXT/JSON/LRC/MD/OTR/ELAN/
+   InqScribe/Express Scribe/DOCX/PDF/SMTV) now explain what the format is
+   and who uses it — acronyms like ELAN/InqScribe meant nothing with zero
+   other explanation on screen. Also added tooltips to the Google Cloud
+   "Cloud Storage bucket" field, its "Detect speakers (diarization)"
+   checkbox, and "Minimise to system tray" (explains what the tray icon
+   does, since "system tray" is jargon to a non-technical user).
+3. **Grouped the "Jump to" nav sidebar.** Its 11 links now sit under two
+   small gray captions — "Alternate engines" before the 3 cloud/NVIDIA
+   sections, "App preferences" before Watched folder/App behaviour/
+   Downloads — so a user scanning it can tell at a glance which sections
+   are everyday settings vs. opt-in extras, instead of one flat list.
+
+**Visual testing, done for real this time, several ways — answering the
+"did you actually look at it" question directly:**
+
+- Real `tk.Tk()` + real `AdvancedDialog`, `winfo_reqwidth/height/y`
+  measured directly (this file's own documented technique), at both this
+  machine's real screen and a monkeypatched 1366×768 simulated laptop
+  (`tk.Misc.winfo_screenwidth`/`winfo_screenheight` patched at the CLASS
+  level before construction — patching the instance doesn't work, since
+  `AdvancedDialog.__init__` calls `self.winfo_screenwidth()`, not the
+  parent's). Confirmed no horizontal clipping (canvas has no h-scrollbar,
+  so a too-wide `body` would silently cut off) and the nav sidebar has
+  room for all 11+2 caption widgets, at both sizes.
+  - Hit a real gotcha getting there: a `Toplevel` that is `transient()` to
+    a **withdrawn** parent never gets mapped/sized by the window manager
+    on this machine — `winfo_width()`/`geometry()` stayed `1x1` even
+    after several `update()` calls. Fix: leave the throwaway parent `Tk()`
+    root mapped (tiny, at a screen corner) instead of withdrawing it.
+- **Actual scoped screenshots**, not a blind screen grab. This file's own
+  Gotchas record an earlier session abandoning screenshots here because a
+  full-desktop/region capture can grab an unrelated foreground window.
+  Used `PrintWindow` (Win32, `PW_RENDERFULLCONTENT`) targeted at the
+  dialog's own HWND (`GetAncestor(tk_winfo_id, GA_ROOT)`) instead — this
+  renders only that specific window's content into a bitmap regardless of
+  what else is on top, so it cannot pick up unrelated desktop content.
+  Caught one real bug this way that geometry numbers alone would not have
+  shown: `EXPRESS_SCRIBE` rendered with a literal underscore and
+  `INQSCRIBE` lost its product capitalisation, both falling through
+  `_FORMAT_LABELS.get(name, name.upper())` with no override — fixed by
+  adding both to `_FORMAT_LABELS` ("Express Scribe" / "InqScribe"),
+  re-screenshotted to confirm.
+- **Popped open a real tooltip and screenshotted just the popup** (same
+  `PrintWindow`-on-HWND technique — a `bind_tooltip` popup is its own
+  sibling `Toplevel`, discoverable as a Tkinter child of the icon widget
+  once shown, so it gets its own scoped capture too): triggered
+  `<Enter>` on a format icon, pumped the real Tk event loop past the
+  450 ms grace delay, captured the resulting yellow popup. Confirmed the
+  popup renders and wraps correctly, not just that the icon sits in the
+  right place.
+
+Gate throughout: `pytest tests/core/test_fixpack_bl_advanced.py
+tests/core/test_advanced_model_change.py
+tests/core/test_advanced_restore_defaults.py -q` green after every round;
+`pyright app core` 0/0/0 after every round.
+
+**Found, not fixed (pre-existing, out of scope for a readability pass):**
+`AdvancedDialog._save_and_close` unconditionally clears
+`gcloud_stt_diarization` whenever `transcribe_backend == "google_cloud_stt"`
+is the selected backend at Save time — not scoped to Batch mode
+specifically, despite the "Detect speakers" checkbox living right there
+in the Google Cloud STT section. Read the code to confirm this rather
+than guessing, and wrote the new tooltip to describe the actual observed
+behavior accurately. Whether this guard is still correct (the comment
+says "Google Cloud STT v2 rejects diarization on this recognizer") or
+stale/overbroad is worth a future session actually checking against the
+current `core/backends/google_cloud_stt.py`, since the backend module
+does have real `SpeakerDiarizationConfig`-building code — if diarization
+genuinely works there, this checkbox may be silently dead today.
+
+**Not done, if there is a next round**: the AI Layer section's Demucs/
+denoise/chapters/voiceprint rows and the Downloads (yt-dlp) section were
+left as-is (already had reasonable hover-help or self-explanatory
+labels) — a future pass could look at whether the always-visible gray
+`#666` caption pattern vs. the hover-only (?) icon pattern should be used
+more consistently (right now both coexist by design: short captions
+stay always-visible, longer explanations hide behind hover).
+
+---
+
 ## 🟢 2026-08-14 (latest) — Live tab's default "Microphone" source now actually works
 
 Owner relayed a colleague's report verbatim: `sounddevice not installed —
