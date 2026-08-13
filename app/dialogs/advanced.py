@@ -369,16 +369,18 @@ class AdvancedDialog(tk.Toplevel):
                 variable=self._format_vars[name],
             ).grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=4)
 
-        # Whisper extras
-        extras = section_labelframe(
-            body, "Whisper extras",
-            "Model choice + lower-level tuning for the offline/local "
-            "engines: which weights to run, how much to batch on a GPU, "
-            "prompt/hotword biasing, the backend engine, word-level "
-            "timing refinement, and output naming.",
+        # Model & engine — split out of the old single "Whisper extras"
+        # grab-bag section (2026-08-14 readability pass): ten unrelated rows
+        # in one section was too much to scan. This half is "what actually
+        # runs the transcription and how it decodes."
+        engine = section_labelframe(
+            body, "Model & engine",
+            "Which model and backend run the transcription, plus "
+            "lower-level decode tuning: GPU batching, word-timestamp "
+            "refinement, and hallucination flagging.",
         )
-        extras.pack(fill="x", pady=(0, 14))
-        self._nav_targets.append(("Whisper extras", extras))
+        engine.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Model & engine", engine))
 
         # Model picker (v0.8) — slug → catalog entry. The catalog is the
         # MERGED config catalog (built-in MODEL_REGISTRY + any models the
@@ -386,7 +388,7 @@ class AdvancedDialog(tk.Toplevel):
         # can ship without an app update. Changing the picker rewrites
         # cfg["model"] + cfg["model_path"] in _save_and_close so ensure_model
         # downloads the new variant on the next transcription.
-        ttk.Label(extras, text="Whisper model").grid(
+        ttk.Label(engine, text="Whisper model").grid(
             row=0, column=0, sticky="w", padx=8, pady=4
         )
         # Augment each model's label with its on-disk status so the user
@@ -404,125 +406,139 @@ class AdvancedDialog(tk.Toplevel):
         )
         self._model_display = tk.StringVar(value=current_label)
         ttk.Combobox(
-            extras,
+            engine,
             textvariable=self._model_display,
             state="readonly",
             values=[lbl for _slug, lbl in labeled],
             width=56,
         ).grid(row=0, column=1, sticky="ew", padx=8, pady=4)
         ttk.Button(
-            extras, text="?", width=3, command=self._show_model_info,
+            engine, text="?", width=3, command=self._show_model_info,
         ).grid(row=0, column=2, sticky="w", padx=(0, 8), pady=4)
         ttk.Button(
-            extras, text="Download now", command=self._download_selected_model,
+            engine, text="Download now", command=self._download_selected_model,
         ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=4)
 
-        ttk.Label(extras, text="Batch size (CUDA only)").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        ttk.Spinbox(extras, from_=1, to=64, increment=1, textvariable=self._batch_size, width=6).grid(
-            row=1, column=1, sticky="w", padx=8, pady=4
-        )
-        help_icon(
-            extras,
-            "How many audio chunks the GPU processes at once. Higher can "
-            "be faster but uses more VRAM; only affects CUDA runs, CPU "
-            "ignores this.",
-        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
-        ttk.Label(extras, text="Initial prompt").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(extras, textvariable=self._initial_prompt, width=42).grid(
-            row=2, column=1, sticky="ew", padx=8, pady=4
-        )
-        help_icon(
-            extras,
-            "Optional text fed to the model as context before it starts — "
-            "e.g. proper nouns or a punctuation/formatting style to "
-            "nudge it toward. Leave blank for none.",
-        ).grid(row=2, column=2, sticky="w", padx=8, pady=4)
-        ttk.Label(extras, text="Hotwords (comma-separated)").grid(row=3, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(extras, textvariable=self._hotwords, width=42).grid(
-            row=3, column=1, sticky="ew", padx=8, pady=4
-        )
-        help_icon(
-            extras,
-            "Words or short phrases (names, jargon, acronyms) the model "
-            "should be biased toward recognizing correctly when it hears "
-            "something close to them.",
-        ).grid(row=3, column=2, sticky="w", padx=8, pady=4)
-        ttk.Label(extras, text="Backend").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(engine, text="Backend").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         backend_combo = ttk.Combobox(
-            extras,
+            engine,
             textvariable=self._backend_display,
             state="readonly",
             values=[label for label, _value in _BACKEND_CHOICES],
             width=56,
         )
-        backend_combo.grid(row=4, column=1, sticky="ew", padx=8, pady=4)
+        backend_combo.grid(row=1, column=1, sticky="ew", padx=8, pady=4)
         ttk.Button(
-            extras, text="Get whisper.cpp model...",
+            engine, text="Get whisper.cpp model...",
             command=self._download_whisper_cpp_model,
-        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
         help_icon(
-            extras,
+            engine,
             "Which engine runs the offline model. Faster-Whisper is the "
             "default; whisper.cpp helps on low-end CPUs; the cloud/NVIDIA "
             "options need their own setup further down this dialog. Same "
             "picker as the Engine dropdown on the Transcribe tab.",
-        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=1, column=3, sticky="w", padx=(0, 8), pady=4)
 
-        ttk.Label(extras, text="Word alignment").grid(row=5, column=0, sticky="w", padx=8, pady=4)
+        ttk.Label(engine, text="Hardware").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        ttk.Button(
+            engine, text="Re-detect hardware…",
+            command=self._open_hardware_wizard,
+        ).grid(row=2, column=1, sticky="w", padx=8, pady=4)
+        ttk.Label(
+            engine,
+            text="Probes CUDA / NPU / DirectML and picks the fastest tier.",
+            foreground="#666", wraplength=170, justify="left",
+        ).grid(row=2, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(engine, text="Batch size (CUDA only)").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        ttk.Spinbox(engine, from_=1, to=64, increment=1, textvariable=self._batch_size, width=6).grid(
+            row=3, column=1, sticky="w", padx=8, pady=4
+        )
+        help_icon(
+            engine,
+            "How many audio chunks the GPU processes at once. Higher can "
+            "be faster but uses more VRAM; only affects CUDA runs, CPU "
+            "ignores this.",
+        ).grid(row=3, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(engine, text="Word alignment").grid(row=4, column=0, sticky="w", padx=8, pady=4)
         ttk.Combobox(
-            extras,
+            engine,
             textvariable=self._alignment,
             state="readonly",
             values=("none", "stable_ts"),
             width=20,
-        ).grid(row=5, column=1, sticky="w", padx=8, pady=4)
+        ).grid(row=4, column=1, sticky="w", padx=8, pady=4)
         ttk.Label(
-            extras,
+            engine,
             text="stable_ts refines word timestamps via DTW (~10-30% slower).",
             foreground="#666", wraplength=170, justify="left",
-        ).grid(row=5, column=2, sticky="w", padx=8, pady=4)
+        ).grid(row=4, column=2, sticky="w", padx=8, pady=4)
 
-        # Hallucination detector toggle (v0.8) + Hardware re-detect.
+        # Hallucination detector toggle (v0.8).
         ttk.Checkbutton(
-            extras,
+            engine,
             text="Flag likely hallucinations (repetition + BoH heuristics)",
             variable=self._hallucination_detect,
-        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         help_icon(
-            extras,
+            engine,
             "Marks segments that look like Whisper's known failure modes "
             "on silence/noise: repeated phrases, or text matching common "
             "'beginning of hallucination' (BoH) patterns. Flags them in "
             "the output rather than removing them.",
-        ).grid(row=6, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=5, column=3, sticky="w", padx=(0, 8), pady=4)
+        engine.columnconfigure(1, weight=1)
 
-        ttk.Label(extras, text="Hardware").grid(row=7, column=0, sticky="w", padx=8, pady=4)
-        ttk.Button(
-            extras, text="Re-detect hardware…",
-            command=self._open_hardware_wizard,
-        ).grid(row=7, column=1, sticky="w", padx=8, pady=4)
-        ttk.Label(
-            extras,
-            text="Probes CUDA / NPU / DirectML and picks the fastest tier.",
-            foreground="#666", wraplength=170, justify="left",
-        ).grid(row=7, column=2, sticky="w", padx=8, pady=4)
+        # Prompt & output naming — the other half of the old "Whisper
+        # extras" section: user-authored text inputs and how output files
+        # get named, as opposed to engine/decode behaviour above.
+        prompt_section = section_labelframe(
+            body, "Prompt, hotwords & output naming",
+            "Optional text fed to the model before it starts, words to "
+            "bias recognition toward, and how output files get named.",
+        )
+        prompt_section.pack(fill="x", pady=(0, 14))
+        self._nav_targets.append(("Prompt & output naming", prompt_section))
 
-        ttk.Label(extras, text="Output filename template").grid(row=8, column=0, sticky="w", padx=8, pady=4)
-        ttk.Entry(extras, textvariable=self._filename_template, width=42).grid(
-            row=8, column=1, columnspan=2, sticky="ew", padx=8, pady=4
+        ttk.Label(prompt_section, text="Initial prompt").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(prompt_section, textvariable=self._initial_prompt, width=42).grid(
+            row=0, column=1, sticky="ew", padx=8, pady=4
         )
         help_icon(
-            extras,
+            prompt_section,
+            "Optional text fed to the model as context before it starts — "
+            "e.g. proper nouns or a punctuation/formatting style to "
+            "nudge it toward. Leave blank for none.",
+        ).grid(row=0, column=2, sticky="w", padx=8, pady=4)
+        ttk.Label(prompt_section, text="Hotwords (comma-separated)").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(prompt_section, textvariable=self._hotwords, width=42).grid(
+            row=1, column=1, sticky="ew", padx=8, pady=4
+        )
+        help_icon(
+            prompt_section,
+            "Words or short phrases (names, jargon, acronyms) the model "
+            "should be biased toward recognizing correctly when it hears "
+            "something close to them.",
+        ).grid(row=1, column=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(prompt_section, text="Output filename template").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        ttk.Entry(prompt_section, textvariable=self._filename_template, width=42).grid(
+            row=2, column=1, columnspan=2, sticky="ew", padx=8, pady=4
+        )
+        help_icon(
+            prompt_section,
             "Pattern used to name each output file. Mix the tokens below "
             "with literal text; the default {base}.{ext} just keeps the "
             "source filename with the new extension.",
-        ).grid(row=8, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=2, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Label(
-            extras,
+            prompt_section,
             text="Tokens: {base} {ext} {lang} {date} {speaker_count}",
             foreground="#666",
-        ).grid(row=9, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-        extras.columnconfigure(1, weight=1)
+        ).grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        prompt_section.columnconfigure(1, weight=1)
 
         # AI Layer (v0.8 Phase 2 + 3) — opt-in heavy features.
         ai = section_labelframe(
@@ -616,8 +632,11 @@ class AdvancedDialog(tk.Toplevel):
         # Cloud Speech-to-Text (Google) — OPTIONAL, uploads audio.
         # Placed after the Google Cloud Speech-to-Text section: the Gemini
         # "paste a key" backend is the older, less-important cloud path.
-        cloud = ttk.LabelFrame(
-            body, text="Cloud Speech-to-Text (Google) — optional, uploads audio"
+        cloud = section_labelframe(
+            body, "Cloud Speech-to-Text (Gemini)",
+            "Optional — paste a free Gemini API key to transcribe via "
+            "Google's cloud instead of this machine. Uploads your audio; "
+            "see the privacy warning below before turning it on.",
         )
         cloud.pack(fill="x", pady=(0, 14))
         self._nav_targets.append(("Cloud STT (Gemini)", cloud))
@@ -690,9 +709,12 @@ class AdvancedDialog(tk.Toplevel):
         cloud.columnconfigure(1, weight=1)
 
         # NVIDIA Parakeet / FastConformer — LOCAL, runs offline via transformers.
-        nvidia = ttk.LabelFrame(
-            body,
-            text="NVIDIA Parakeet / FastConformer — local, runs offline",
+        nvidia = section_labelframe(
+            body, "NVIDIA Parakeet (local, offline)",
+            "An alternative offline speech engine (multilingual "
+            "FastConformer/Parakeet) that runs entirely on this machine — "
+            "no audio ever leaves the device. Downloads transformers + "
+            "torch + the model (a few GB) automatically on first use.",
         )
         nvidia.pack(fill="x", pady=(0, 14))
         self._nav_targets.append(("NVIDIA Parakeet", nvidia))
@@ -879,12 +901,13 @@ class AdvancedDialog(tk.Toplevel):
         downloaded service-account JSON file) and a non-technical user must
         not confuse them.
         """
-        gc = ttk.LabelFrame(
-            body,
-            text=(
-                "Google Cloud Speech-to-Text (service account) "
-                "— optional, uploads audio"
-            ),
+        gc = section_labelframe(
+            body, "Google Cloud Speech-to-Text (service account)",
+            "Optional — the full Google Cloud Speech-to-Text service, "
+            "signed in with a downloaded service-account JSON file (not "
+            "the simple API key the Gemini option below uses). New "
+            "accounts get 60 free minutes/month plus a $300/90-day "
+            "credit. Uploads your audio to Google — not offline.",
         )
         gc.pack(fill="x", pady=(0, 14))
 

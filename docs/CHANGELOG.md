@@ -21,6 +21,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   folder, and cloud credentials are left untouched. Nothing is written
   until you click Save, so Cancel undoes this too.
 
+- **Advanced dialog: consistent section headers + a split-up "Whisper
+  extras"** — the 3 cloud/NVIDIA sections now use the same short-title +
+  hover-help header as the other 7 (previously plain, long run-on titles
+  with no hover-help). The old 10-row "Whisper extras" grab-bag is now two
+  focused sections, "Model & engine" and "Prompt, hotwords & output
+  naming". Part of an ongoing readability pass (owner request,
+  2026-08-14) — more rounds land alongside this one.
+
 ### Fixed
 
 - **Live tab's default "Microphone" source did not work out of the box** —
