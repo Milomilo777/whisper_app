@@ -5,6 +5,73 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-14 (latest) — LAN web page borrows UI ergonomics from Voice-Pro
+
+Owner asked to compare against `voice-pro` (github.com/abus-aikorea/voice-pro,
+already analysed 2026-08-07 in `docs/GAPS_VS_VOICE_PRO_2026.md` /
+`VOICE_PRO_GAP_FA_EN.txt`) and pull the best frontend ideas into our own
+project, hands-off. Item 7 of that earlier doc had already ruled out adopting
+Gradio itself (huge dependency tree, breaks the slim embed build) and
+recommended growing `core/server/static/index.html` incrementally instead —
+this session executed that, not a fresh decision.
+
+Cloned `voice-pro` shallowly into scratch (not committed, deleted after
+reading) and read its real Gradio layout (`app/tab_subtitle.py`,
+`app/tab_gulliver.py`, `app/abus_app_voice.py`), not just its README. Their
+actual UX edge over our LAN page was never visual polish (their theme is
+Gradio's stock default) — it was ergonomics: media preview right after
+picking a source, a Clear/Reset action, a copy button on the transcript
+text, and everything visible without leaving the page. Ported the four that
+made sense for an async multi-job LAN server (did NOT copy their
+synchronous single-job-blocks-the-page model — that would have regressed
+our pause/resume/cancel/walk-away queue, which Voice-Pro doesn't have):
+
+- Picking a local file now shows an instant `<audio>`/`<video>` preview via
+  `URL.createObjectURL` — no server round-trip, no submit click needed.
+- A **Reset** button next to Start clears the form (file/url/formats/
+  language/advanced options) back to defaults.
+- The Result view's transcript box has a **Copy** button
+  (`navigator.clipboard.writeText`, with a hidden-textarea/`execCommand`
+  fallback since this page is normally opened over plain `http://<lan-ip>`
+  from another device, where the Clipboard API's secure-context check
+  would otherwise silently fail).
+- The Submit view now shows a compact **Recent jobs** (last 3) list so a
+  second job's progress is visible without switching to the Jobs tab.
+
+Also fixed a real bug caught before it shipped: `.recent-row .src` inside a
+flex row needs `min-width: 0` or `text-overflow: ellipsis` silently fails to
+truncate a long source name (flex items default to `min-width: auto`).
+
+**Verified for real, not just read** — pyright `app core` 0/0/0 (no `.py`
+touched; static-page-only change). Started the real server
+(`python gui.py serve --port 8765`) and drove it with a real headless Edge
+(`msedge --headless=new --remote-debugging-port=9222`) over raw CDP (no
+`chromium-cli`/Playwright installed on this machine, so a ~150-line
+dependency-free Node driver script was written to the scratchpad instead,
+not committed). 17/17 checks passed against the live page: real file input
+via `DOM.setFileInputFiles` with `tests/fixtures/audio/tone_440hz_2s.wav`
+produced a real blob-URL `<audio>` preview; Reset genuinely cleared every
+field; the Copy button did a real `clipboard.writeText` → `readText()`
+round-trip (needed `Browser.grantPermissions` **and** `Page.bringToFront`/
+`window.focus()` — Chromium's Clipboard API silently rejects on an
+unfocused headless tab even with permission granted, which read as a false
+failure on the first pass); hash routing between Submit/Jobs/Result still
+works; zero uncaught exceptions. 4 screenshots taken and visually reviewed
+(clean layout, no overlap). Servers/headless browser stopped after.
+
+**Not done, deliberately out of scope this pass**: the Tkinter desktop app
+(`app/`) has no equivalent Reset/Load-defaults affordance on the Transcribe
+tab either (checked — no match for `reset|clear|load default` in
+`app/widgets/tabs.py`), but it's already far ahead of Voice-Pro's plain
+`gr.Textbox` subtitle tab on almost every other axis (embedded VLC, karaoke
+highlight, click-to-seek, find/replace, speaker rename), so this wasn't
+chased in the same pass — flagging for a future session if it's wanted.
+Also not done: browser-mic recording on the web page (Voice-Pro has one;
+ours only has it in the desktop Live tab) — a real feature add, not a UI
+ergonomics port, so out of scope for "borrow the frontend."
+
+---
+
 ## 🟢 2026-08-12 (latest) — v1.6.0 Windows assets rebuilt in place (no version bump) for the usage-stats fix
 
 Three commits landed on `master` after `v1.6.0` shipped (docs-only

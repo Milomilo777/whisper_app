@@ -52,6 +52,16 @@
   .src { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .minibar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; width: 90px; }
   .minibar > span { display: block; height: 100%; background: #2d6cdf; }
+  .preview { margin: 10px 0 0; }
+  .preview video, .preview audio { width: 100%; max-width: 100%; }
+  .recent-row {
+    display: flex; align-items: center; gap: 10px; padding: 6px 0;
+    border-bottom: 1px solid #2a2a2a; font-size: .85rem;
+  }
+  .recent-row:last-child { border-bottom: 0; }
+  .recent-row .src { flex: 1 1 auto; min-width: 0; }
+  .recent-row .st { flex: 0 0 auto; color: #9ad; min-width: 70px; }
+  .recent-row .minibar { flex: 0 0 auto; }
   .seg { margin: 0 0 8px; }
   .seg .t { color: #6a9; font-size: .75rem; }
   .seg .spk { color: #d9a; font-weight: 600; margin-right: 6px; }
@@ -114,6 +124,7 @@
       <label>Link (YouTube, etc.)<br>
         <input type="url" id="url" placeholder="https://...">
       </label>
+      <div id="sourcePreview" class="preview hidden"></div>
     </fieldset>
 
     <fieldset>
@@ -166,8 +177,16 @@
     </details>
 
     <button id="start">Start transcription</button>
+    <button id="reset" class="ghost">Reset</button>
     <div id="submitStatus"></div>
     <p class="note" id="caveat"></p>
+
+    <fieldset id="recentBox">
+      <legend>Recent jobs</legend>
+      <div id="recentList"></div>
+      <p class="note" id="recentEmpty"></p>
+      <p class="note"><a href="#jobs">See all jobs →</a></p>
+    </fieldset>
   </section>
 
   <!-- ============ Jobs view ============ -->
@@ -193,7 +212,7 @@
     </fieldset>
     <div id="resultStatus"></div>
     <fieldset id="transcriptBox" class="hidden">
-      <legend>Transcript</legend>
+      <legend>Transcript <button id="copyTranscript" class="mini ghost">Copy</button></legend>
       <div id="transcript"></div>
     </fieldset>
   </section>
@@ -217,6 +236,7 @@
   // ---- view routing (hash based) ----
   var views = ["submit", "jobs", "result"];
   var jobsTimer = null;
+  var recentTimer = null;
   function showView(name) {
     if (views.indexOf(name) < 0) { name = "submit"; }
     views.forEach(function (v) {
@@ -226,7 +246,9 @@
       a.classList.toggle("active", a.getAttribute("data-view") === name);
     });
     if (jobsTimer) { clearInterval(jobsTimer); jobsTimer = null; }
+    if (recentTimer) { clearInterval(recentTimer); recentTimer = null; }
     if (name === "jobs") { refreshJobs(); jobsTimer = setInterval(refreshJobs, 2000); }
+    if (name === "submit") { refreshRecent(); recentTimer = setInterval(refreshRecent, 2000); }
   }
   document.querySelectorAll("nav a").forEach(function (a) {
     a.addEventListener("click", function () {
@@ -482,15 +504,40 @@
     });
   }
 
+  // ---- Recent jobs (compact glance from the Submit view, no tab switch needed) ----
+  var recentList = document.getElementById("recentList");
+  var recentEmpty = document.getElementById("recentEmpty");
+
+  function refreshRecent() {
+    fetch("/api/jobs", { headers: authHeaders() })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { renderRecent((d.jobs || []).slice(0, 3)); })
+      .catch(function () { /* transient; leave the last good render in place */ });
+  }
+
+  function renderRecent(jobs) {
+    if (!jobs.length) { recentList.innerHTML = ""; recentEmpty.textContent = "No jobs yet."; return; }
+    recentEmpty.textContent = "";
+    recentList.innerHTML = jobs.map(function (j) {
+      var statusTxt = j.status + (j.paused ? " (paused)" : "");
+      return '<div class="recent-row"><span class="src" title="' + escapeHtml(j.source) + '">' +
+        escapeHtml(j.source) + '</span><span class="st">' + escapeHtml(statusTxt) +
+        '</span><span class="minibar"><span style="width:' + (Number(j.progress) || 0) +
+        '%"></span></span></div>';
+    }).join("");
+  }
+
   // ---- Result view ----
   var resultStatus = document.getElementById("resultStatus");
   var transcriptBox = document.getElementById("transcriptBox");
   var transcriptEl = document.getElementById("transcript");
+  var lastTranscriptSegs = null;
 
   function loadResult() {
     var jobId = document.getElementById("resultJobId").value.trim();
     if (!jobId) { resultStatus.innerHTML = '<p class="err">Enter a job id.</p>'; return; }
     transcriptBox.classList.add("hidden");
+    lastTranscriptSegs = null;
     resultStatus.innerHTML = "<p>Loading...</p>";
     fetch("/api/jobs/" + jobId, { headers: authHeaders() })
       .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
@@ -532,6 +579,7 @@
     // Tolerate either {segments:[...]} or a bare array.
     var segs = (data && data.segments) ? data.segments : (Array.isArray(data) ? data : []);
     if (!segs.length) { return; }
+    lastTranscriptSegs = segs;
     var parts = segs.map(function (seg) {
       var t = '<span class="t">[' + fmtTime(seg.start) + "]</span> ";
       var spk = seg.speaker ? '<span class="spk">' + escapeHtml(String(seg.speaker)) + "</span>" : "";
@@ -550,12 +598,94 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
+  function copyText(text) {
+    if (window.isSecureContext && navigator.clipboard) {
+      return navigator.clipboard.writeText(text);
+    }
+    // navigator.clipboard needs a secure context (https/localhost); this
+    // page is routinely opened over plain http from another device on the
+    // LAN, so fall back to the classic hidden-textarea execCommand trick.
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      var ok = document.execCommand("copy");
+      return ok ? Promise.resolve() : Promise.reject(new Error("execCommand failed"));
+    } catch (e) {
+      return Promise.reject(e);
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
+  // ---- Source preview (local files only; a pasted URL is fetched server-side) ----
+  var fileInput = document.getElementById("file");
+  var previewBox = document.getElementById("sourcePreview");
+  var previewUrl = null;
+
+  function clearPreview() {
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+    previewBox.innerHTML = "";
+    previewBox.classList.add("hidden");
+  }
+
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files[0];
+    clearPreview();
+    if (!file) { return; }
+    previewUrl = URL.createObjectURL(file);
+    var el = document.createElement(file.type.indexOf("video/") === 0 ? "video" : "audio");
+    el.controls = true;
+    el.src = previewUrl;
+    previewBox.appendChild(el);
+    previewBox.classList.remove("hidden");
+  });
+
   // ---- wire up ----
   document.getElementById("caveat").textContent =
     "Note: your audio is uploaded to the host running this server, and link " +
     "(URL) jobs are fetched by the server itself. Use only on a trusted network.";
   startBtn.addEventListener("click", start);
+  document.getElementById("reset").addEventListener("click", function () {
+    fileInput.value = "";
+    document.getElementById("url").value = "";
+    clearPreview();
+    fmtBox.querySelectorAll("input").forEach(function (cb) {
+      cb.checked = (cb.value === "srt" || cb.value === "txt");
+    });
+    langSel.value = "";
+    document.getElementById("o_vad").checked = true;
+    document.getElementById("o_vad_threshold").value = "";
+    document.getElementById("o_vad_min_silence_ms").value = "";
+    document.getElementById("o_word_timestamps").checked = false;
+    document.getElementById("o_diarization_enabled").checked = false;
+    document.getElementById("o_diarization_num_speakers").value = "";
+    document.getElementById("o_demucs_enabled").checked = false;
+    document.getElementById("o_hallucination_detect_enabled").checked = true;
+    document.getElementById("o_auto_chapters_enabled").checked = true;
+    document.getElementById("o_clip_start").value = "";
+    document.getElementById("o_clip_end").value = "";
+    setSubmitStatus("");
+  });
   document.getElementById("loadResult").addEventListener("click", loadResult);
+  document.getElementById("copyTranscript").addEventListener("click", function () {
+    var btn = document.getElementById("copyTranscript");
+    var text = (lastTranscriptSegs || []).map(function (seg) {
+      return String(seg.text || "").trim();
+    }).join("\n");
+    var orig = btn.textContent;
+    copyText(text).then(function () {
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = orig; }, 1500);
+    }).catch(function () {
+      btn.textContent = "Copy failed";
+      setTimeout(function () { btn.textContent = orig; }, 1500);
+    });
+  });
   loadOptions();
   showView((location.hash || "#submit").slice(1));
 })();

@@ -4,6 +4,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Added
+
+- **LAN web page: source preview, Reset, Copy-transcript, Recent jobs** —
+  picking a file now shows an instant local audio/video preview; a Reset
+  button clears the form back to defaults; the transcript view has a
+  one-click Copy button; and the Submit view shows the last 3 jobs so you
+  don't have to switch tabs to see something is still running. Ergonomics
+  borrowed from `voice-pro`'s Gradio frontend (see
+  `docs/GAPS_VS_VOICE_PRO_2026.md` item 7) without adding Gradio itself.
+
 ## [1.6.0] — 2026-08-12
 
 > Live tab + adaptive denoise release. Real-time microphone/system-audio
