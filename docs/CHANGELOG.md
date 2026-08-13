@@ -28,6 +28,15 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   focused sections, "Model & engine" and "Prompt, hotwords & output
   naming". Part of an ongoing readability pass (owner request,
   2026-08-14) — more rounds land alongside this one.
+- **Advanced dialog: hover-help on every output format + a few more bare
+  spots, and a grouped nav sidebar** — each of the 15 output-format
+  checkboxes (SRT/VTT/ELAN/InqScribe/Express Scribe/etc.) now has a
+  one-line "what is this" tooltip instead of a bare acronym; the Google
+  Cloud "Cloud Storage bucket" field, "Detect speakers" checkbox, and
+  "Minimise to system tray" checkbox gained tooltips too. The "Jump to"
+  sidebar now groups its 11 links under small captions ("Alternate
+  engines", "App preferences") so the 3 opt-in cloud/NVIDIA sections read
+  as clearly optional rather than blending into one long list.
 
 ### Fixed
 

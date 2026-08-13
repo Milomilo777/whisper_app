@@ -37,6 +37,42 @@ _FORMAT_LABELS: dict[str, str] = {
     "ass": "ASS (styled subtitles / karaoke)",
 }
 
+# One-line "what is this / who uses it" for each output format's hover-help
+# icon. Most of these acronyms (ELAN, InqScribe, Express Scribe, LRC, TSV)
+# mean nothing to a non-technical user staring at a grid of checkboxes with
+# no other explanation — added in the 2026-08-14 readability pass. Every
+# key from core.writers.supported_formats() must appear here.
+_FORMAT_HELP: dict[str, str] = {
+    "srt": "The most common subtitle format. Works in VLC, YouTube "
+           "uploads, and nearly every video player/editor.",
+    "ass": "Styled subtitles with per-word karaoke highlighting and text "
+           "effects. Used by subtitle editors like Aegisub.",
+    "vtt": "The web-standard subtitle format (HTML5 video, YouTube). "
+           "Also supports per-word karaoke highlighting.",
+    "tsv": "Tab-separated start/end/text — opens directly as an Audacity "
+           "Labels track for lining the transcript up against a waveform.",
+    "txt": "Plain text, one line per segment, no timestamps — for "
+           "reading or pasting the transcript elsewhere.",
+    "json": "This app's own detailed format: every timestamp, word and "
+            "speaker label. What Convert / re-import and the transcript "
+            "viewer read.",
+    "lrc": "Synced-lyrics format used by music players and some karaoke "
+           "tools.",
+    "md": "Markdown with bold timestamps — readable on GitHub, Notion, "
+          "or any Markdown viewer.",
+    "otr": "Round-trips with the free otranscribe.com web transcript "
+           "editor.",
+    "elan": "For ELAN, a linguistics annotation tool used in language "
+            "research and documentation.",
+    "inqscribe": "For InqScribe, a transcription-editing application.",
+    "express_scribe": "For Express Scribe, transcription software often "
+                       "paired with a foot pedal. Export-only.",
+    "docx": "A Microsoft Word document with the transcript text.",
+    "pdf": "A PDF of the transcript, ready to print or share.",
+    "smtv_docx": "Fills the Supreme Master TV transcription team's exact "
+                 "Word template layout.",
+}
+
 
 _SPONSORBLOCK_CATEGORIES = [
     ("sponsor", "Sponsor"),
@@ -363,11 +399,19 @@ class AdvancedDialog(tk.Toplevel):
         outputs.pack(fill="x", pady=(0, 14))
         self._nav_targets.append(("Output formats", outputs))
         for i, name in enumerate(supported_formats()):
+            # Each checkbox + its hover-help icon share one cell frame so
+            # the 3-per-row grid stays intact (a bare Checkbutton has no
+            # spare column of its own to grid a second widget into).
+            cell = ttk.Frame(outputs)
+            cell.grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=4)
             ttk.Checkbutton(
-                outputs,
+                cell,
                 text=_FORMAT_LABELS.get(name, name.upper()),
                 variable=self._format_vars[name],
-            ).grid(row=i // 3, column=i % 3, sticky="w", padx=8, pady=4)
+            ).pack(side="left")
+            help_icon(
+                cell, _FORMAT_HELP.get(name, ""), wraplength=280,
+            ).pack(side="left")
 
         # Model & engine — split out of the old single "Whisper extras"
         # grab-bag section (2026-08-14 readability pass): ten unrelated rows
@@ -790,11 +834,21 @@ class AdvancedDialog(tk.Toplevel):
         )
         misc.pack(fill="x", pady=(0, 14))
         self._nav_targets.append(("App behaviour", misc))
+        tray_row = ttk.Frame(misc)
+        tray_row.pack(anchor="w", fill="x")
         tray_check = ttk.Checkbutton(
-            misc, text="Minimise to system tray instead of exit",
+            tray_row, text="Minimise to system tray instead of exit",
             variable=self._minimise_to_tray,
         )
-        tray_check.pack(anchor="w", padx=8, pady=4)
+        tray_check.pack(side="left", padx=8, pady=4)
+        help_icon(
+            tray_row,
+            "When on, closing the main window (the X button) hides it to "
+            "a small icon near the clock instead of quitting — any "
+            "running or queued jobs keep going in the background. Click "
+            "the tray icon to bring the window back, or use its right-"
+            "click menu to Exit for real.",
+        ).pack(side="left")
         if sys.platform == "darwin":
             # System tray is unsupported on macOS (TrayController bails
             # out for darwin); disable the checkbox so it can't be
@@ -885,7 +939,25 @@ class AdvancedDialog(tk.Toplevel):
             total = max(body.winfo_height(), 1)
             canvas.yview_moveto(max(0.0, min(1.0, frame.winfo_y() / total)))
 
+        # Small category captions so a user scanning the sidebar can tell
+        # at a glance which sections are everyday transcription settings
+        # vs. opt-in alternate backends vs. app-wide preferences, instead
+        # of one undifferentiated list of 11 (2026-08-14 readability pass).
+        # Keyed by the label that STARTS each new group.
+        _group_before = {
+            "Google Cloud STT": "Alternate engines",
+            "Watched folder": "App preferences",
+        }
         for label, frame in self._nav_targets:
+            caption = _group_before.get(label)
+            if caption:
+                ttk.Separator(nav, orient="horizontal").pack(
+                    fill="x", pady=(8, 4)
+                )
+                ttk.Label(
+                    nav, text=caption, foreground="#888",
+                    font=("TkDefaultFont", 8),
+                ).pack(anchor="w", pady=(0, 2))
             link = ttk.Label(
                 nav, text=label, foreground="#1a73e8", cursor="hand2",
                 wraplength=122, justify="left",
@@ -983,6 +1055,13 @@ class AdvancedDialog(tk.Toplevel):
             gc, textvariable=self._gcloud_bucket, width=42,
         )
         self._gcloud_bucket_entry.grid(row=6, column=1, sticky="ew", padx=8, pady=4)
+        help_icon(
+            gc,
+            "Only needed for Batch mode above: the name of a Google Cloud "
+            "Storage bucket YOU own, that this Google Cloud account has "
+            "access to. Create one in the Cloud Storage section of the "
+            "console if you don't have one yet.",
+        ).grid(row=6, column=2, sticky="w", padx=(0, 8), pady=4)
 
         # -- diarization ---------------------------------------------------
         ttk.Checkbutton(
@@ -990,6 +1069,14 @@ class AdvancedDialog(tk.Toplevel):
             text="Detect speakers (diarization)",
             variable=self._gcloud_diarization,
         ).grid(row=7, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            gc,
+            "Labels which speaker said each part of the transcript "
+            "(Speaker 1, Speaker 2, ...). Note: this is cleared "
+            "automatically when you click Save with 'Google Cloud "
+            "Speech-to-Text' selected as the Backend above — that "
+            "combination isn't supported yet.",
+        ).grid(row=7, column=3, sticky="w", padx=(0, 8), pady=4)
 
         # -- live usage / cost estimate -----------------------------------
         ttk.Label(
