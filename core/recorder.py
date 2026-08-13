@@ -313,6 +313,12 @@ class Recorder:
                 self.sample_rate = native_rate
                 wf = self._open_wave(native_rate)
                 try:
+                    # The FIRST stream.read() here can block far longer than
+                    # 1024 frames' worth of audio (~49s measured on real
+                    # hardware with a silent output device) -- WASAPI only
+                    # actively renders/delivers loopback data once something
+                    # is actually playing. Reads after the first are normal
+                    # (sub-second). See docs/LIVE.md's Limitations section.
                     while not self._stop_event.is_set():
                         data = stream.read(1024, exception_on_overflow=False)
                         mono = _downmix_to_mono_int16(data, channels)

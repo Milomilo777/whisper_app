@@ -5,6 +5,91 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-14 (latest) — Live tab's default "Microphone" source now actually works
+
+Owner relayed a colleague's report verbatim: `sounddevice not installed —
+pip install sounddevice to enable microphone recording. Cannot record audio
+live`. Root cause: `sounddevice` (and, on Windows, `PyAudioWPatch` for the
+"System audio" source) were never in `requirements.txt` or `pyproject.toml`
+— `core/recorder.py` and `docs/LIVE.md` already documented this as
+deliberate ("Neither is bundled... Start explains what to install"), but
+that assumes a user who can find a console and run pip, which contradicts
+this app's own non-technical drag-and-drop-desktop-app design (every other
+small UI dependency — `tkinterdnd2`, `python-vlc`, `pystray` — ships by
+default). Every shipped install (Windows Setup-Standard/Portable, Linux,
+macOS, and a fresh source checkout) hit this on the Live tab's *default*
+source, since neither package was ever installed anywhere.
+
+Fixed by moving both into the always-installed dependency tier: added
+`sounddevice>=0.4.6` (all platforms) and `PyAudioWPatch>=0.2.12.6;
+sys_platform == "win32"` to `requirements.txt` and `pyproject.toml`'s
+`dependencies`. No `app/`/`core/` code change was needed beyond a comment
+(see below) — `core.recorder`, `core.live`, `app.widgets.live_tab`, and
+`app.services.live_service` were already correctly declared in both
+Windows PyInstaller specs' `hiddenimports` from when the Live tab first
+shipped; the packages just were not there for pip to actually install.
+Confirmed no explicit `.spec` hidden-import/data entry is needed for
+`sounddevice` itself: it is imported with a plain `import sounddevice`
+inside `core/recorder.py`, which PyInstaller's Analysis discovers on its
+own (unlike the importlib-string-based optional deps that need an explicit
+entry). `docs/LIVE.md`'s Requirements section and `docs/CHANGELOG.md`
+`[Unreleased] > Fixed` updated.
+
+**Verified for real, on this machine's real hardware — per the new
+"real-hardware testing before release" rule added to `CLAUDE.md` this same
+session, triggered by this exact bug:**
+
+- Reproduced first: confirmed `sounddevice`/`pyaudiowpatch` were genuinely
+  absent from this dev machine's Python 3.14 environment before the fix
+  (`ModuleNotFoundError` on both, matching the colleague's report exactly).
+- Installed only the two new packages (not a full `requirements.txt`
+  re-run, to avoid churning unrelated pins) — both resolved prebuilt
+  `cp314-win_amd64` wheels, no build-from-source, confirming these are
+  cheap to bundle as claimed.
+- `pytest tests/core/test_recorder.py tests/core/test_live.py
+  tests/app/test_live_tab.py -q` — all green. `pyright app core` — 0/0/0.
+- **Real microphone capture**, not mocked: `core.recorder.list_mic_devices()`
+  enumerated 6 real devices including a real "Microphone (Yeti Stereo
+  Microphone)"; a real 3-second `Recorder(mode="mic")` capture against the
+  default device produced a valid 16kHz mono WAV with genuine varying
+  signal (peak 177/32767, RMS 61.8, 271 distinct sample values) — not
+  silence, not a mocked/fake buffer.
+- **Real WASAPI loopback capture** also exercised (`mode="loopback"`) and
+  it works, but surfaced a real, separate finding: the *first*
+  `stream.read()` on a freshly opened loopback stream took **~49 seconds**
+  when nothing was currently playing on the output device (reads after
+  that were normal, sub-second). This is an upstream WASAPI/PyAudioWPatch
+  characteristic (the render engine only actively delivers loopback data
+  once something is actually playing), not a bug in this app's code, and
+  in the feature's actual intended use (transcribing a meeting/video/call
+  that is already playing) the engine is already warm — but it is a real
+  rough edge on a path this fix newly makes reachable for the first time
+  (it was previously unreachable for everyone, same root cause as the mic
+  side). Documented in `docs/LIVE.md`'s Limitations section and as a code
+  comment at the exact `stream.read()` call in `core/recorder.py`, rather
+  than engineered around (would need threading a new pre-read status event
+  through `Recorder` → `LiveSession` → `live_tab`, out of scope for what
+  was actually reported). A `Recorder.stop()` call arriving mid-first-read
+  is already handled correctly by existing code (documented in `stop()`'s
+  own docstring: a wedged thread's partial/pending WAV is left alone
+  rather than raced for the file handle) — confirmed this is why an early
+  ad-hoc test of the loopback path saw an `EOFError` reading a WAV that
+  simply had not been finalized yet, not a new bug.
+
+**Not done yet, next step**: the release-asset rebuild this fix needs
+(per `CLAUDE.md`'s "release assets must track every bug fix" +
+the new real-hardware-testing rule) is being batched with this session's
+other in-flight work (Advanced-settings frontend pass) rather than
+rebuilding twice — see further up this file once that lands, or check
+`git log` if this note is stale.
+
+Also this session: the owner reversed the 2026-05-26 batch-push policy —
+every commit now pushes to `origin/master` immediately, in the same
+session. See `CLAUDE.md`'s "Commit + push cadence" section (updated, still
+the source of truth — not repeated here).
+
+---
+
 ## 🟢 2026-08-14 (latest) — LAN web page borrows UI ergonomics from Voice-Pro
 
 Owner asked to compare against `voice-pro` (github.com/abus-aikorea/voice-pro,

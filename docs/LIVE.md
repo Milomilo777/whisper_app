@@ -32,8 +32,11 @@ to re-transcribe it properly afterwards.
 | Microphone | `sounddevice` | Any platform |
 | System audio | `PyAudioWPatch` | **Windows only** (WASAPI loopback) |
 
-Neither is bundled. When a backend is missing the source is simply not
-offered, and Start explains what to install rather than failing later.
+Both ship in `requirements.txt` by default (as of 2026-08-14 — see
+`docs/CHANGELOG.md`), so a normal install already has them. If either
+is still missing for some reason (e.g. a hand-trimmed environment),
+that source is simply not offered, and Start explains what to install
+rather than failing later.
 
 ## How it works
 
@@ -119,6 +122,14 @@ win. Tuning lives in `core.live.SegmenterConfig`.
   Transcribe tab on the saved WAV for that.
 - **System audio is Windows-only** — macOS and Linux have no equivalent
   loopback device without a third-party virtual audio driver.
+- **System audio's first read can be slow if nothing is currently
+  playing.** Measured on real hardware (2026-08-14): capturing from a
+  silent output device, WASAPI's loopback endpoint took ~49 seconds to
+  deliver its first buffer, then read normally (well under a second
+  per chunk) for the rest of the session. This is an upstream WASAPI/
+  PyAudioWPatch characteristic, not something this app controls. In
+  the intended use (a meeting, video, or call already playing), the
+  render engine is already active and this has not been observed.
 - Auto-detect can pick the wrong language on short chunks. Name the
   language when you know it.
 

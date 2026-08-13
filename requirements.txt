@@ -53,6 +53,17 @@ watchdog>=3.0
 pystray>=0.19
 Pillow>=10.0
 
+# Live tab audio capture. Small, no heavy transitive deps (unlike the
+# opt-in on-demand extras below), so — unlike those — these ship by
+# default rather than going through core/optional_deps.py: the Live
+# tab's default source is "Microphone", and a user should not have to
+# find a console and run pip themselves to make the default option
+# work. sounddevice is cross-platform; PyAudioWPatch is a WASAPI-
+# loopback fork of PyAudio and only installs/works on Windows (the
+# "System audio" source), hence the marker.
+sounddevice>=0.4.6
+PyAudioWPatch>=0.2.12.6; sys_platform == "win32"
+
 # Host/hardware facts (OS, CPU count, total RAM) for the opt-in usage-stats
 # payload (core/stats.py). Pure local introspection, no data collection by
 # itself.

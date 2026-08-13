@@ -21,6 +21,16 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   folder, and cloud credentials are left untouched. Nothing is written
   until you click Save, so Cancel undoes this too.
 
+### Fixed
+
+- **Live tab's default "Microphone" source did not work out of the box** —
+  `sounddevice` (and, on Windows, `PyAudioWPatch` for the "System audio"
+  source) were never in `requirements.txt`, so no shipped install actually
+  had them; every user hit "sounddevice not installed" the first time they
+  opened the Live tab. Both now ship by default, like the app's other small
+  UI dependencies (`tkinterdnd2`, `python-vlc`), instead of requiring a
+  manual `pip install` a non-technical user has no way to run.
+
 ## [1.6.0] — 2026-08-12
 
 > Live tab + adaptive denoise release. Real-time microphone/system-audio
