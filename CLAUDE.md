@@ -11,16 +11,29 @@ crash — every coherent feature, fix, refactor, non-trivial docs change,
 or test batch gets its own local commit as soon as it passes pyright +
 the relevant tests.
 
-But **PUSH in batches, not after every commit** (2026-05-26, owner
-request: *"keep changing things locally so nothing is lost, but send
-several changes together to the repo/branch so it doesn't get noisy"*).
-Accumulate a few related commits locally, then push them together.
+**PUSH immediately, in the same session, right after every commit**
+(2026-08-14, owner request — this REVERSES the older 2026-05-26
+"batch pushes, don't push after every commit" rule below; that rule
+no longer applies). Do not accumulate commits locally waiting for a
+batch — each commit gets pushed as soon as it lands.
+
+<details>
+<summary>Superseded 2026-05-26 rule (kept for history only — do not follow)</summary>
+
+Push in batches, not after every commit (owner request: *"keep
+changing things locally so nothing is lost, but send several changes
+together to the repo/branch so it doesn't get noisy"*). Accumulate a
+few related commits locally, then push them together.
+
+</details>
 
 **Release cadence: slow down.** Do NOT cut a new version for every small
 change (2026-05-26, owner: *"half or a third the speed"*). Batch several
-features/fixes into one release.
+features/fixes into one release. This release-cadence rule is unchanged
+by the 2026-08-14 push-cadence update above — pushing to `master`
+promptly is independent from cutting a new tagged release.
 
-So: frequent local commits → occasional batched push → infrequent release.
+So: frequent local commits → immediate push, same session → infrequent release.
 
 Atomic-commit hygiene:
 
