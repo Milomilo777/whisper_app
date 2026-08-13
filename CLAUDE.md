@@ -51,6 +51,27 @@ investigation (repro steps, why it happened, alternatives considered)
 belongs in the commit message and/or `docs/SESSION_HANDOFF_NEXT.md`,
 never in the changelog itself.
 
+## New capabilities need real-hardware testing before release (2026-08-14, owner request)
+
+Every time a new capability is added, it must be exercised for real on
+this development machine before it ships — not just covered by unit
+tests with stubs/mocks. This machine has a real microphone that is
+always on and connected, so any mic-dependent path (the Live tab,
+`core/recorder.py`, anything gated on `sounddevice`/`pyaudiowpatch`)
+must actually be run against that real microphone, not merely asserted
+importable.
+
+**Why:** a colleague testing the Live tab hit `sounddevice not
+installed — pip install sounddevice to enable microphone recording.
+Cannot record audio live`. A real run on real hardware before release
+would have caught this gap before it reached a user.
+
+**How to apply:** before calling a new feature release-ready, actually
+drive it end-to-end on this machine (real mic input for audio-capture
+features, a real file for a new format/backend, etc.), in addition to
+the existing pyright + pytest gate — the automated gate does not
+substitute for this.
+
 ## Release assets must track every bug fix (2026-07-04, owner request)
 
 Any bug fix that touches shipped code is not actually "done" until the
