@@ -829,6 +829,20 @@ class AdvancedDialog(tk.Toplevel):
         buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(buttons, text="Cancel", command=self._on_close).pack(side="right", padx=(8, 0))
         ttk.Button(buttons, text="Save", command=self._save_and_close).pack(side="right")
+        ttk.Button(
+            buttons, text="Restore transcription defaults",
+            command=self._restore_transcription_defaults,
+        ).pack(side="left")
+        help_icon(
+            buttons,
+            "Resets the VAD, hallucination-detection, alignment, batch "
+            "size, denoise, Demucs, auto-chapters and voiceprint options "
+            "above back to their defaults. Nothing is saved until you "
+            "click Save, so Cancel undoes this too. Output formats, the "
+            "hotwords/prompt text, model/backend choice, watched folder, "
+            "and any cloud credentials are left untouched — those are "
+            "deliberate choices, not per-job tuning knobs.",
+        ).pack(side="left", padx=(4, 0))
 
     def _populate_nav_sidebar(
         self, nav: "ttk.Frame", canvas: "tk.Canvas", body: "ttk.Frame",
@@ -1106,6 +1120,29 @@ class AdvancedDialog(tk.Toplevel):
         # was loaded "Download now" did nothing. We already confirmed THIS
         # slug's bytes are absent via _model_downloaded above; force the modal.
         self.app.after(0, lambda: self.app.download_model_now())
+
+    def _restore_transcription_defaults(self) -> None:
+        """Reset per-job transcription tuning knobs to `DEFAULT_CONFIG`.
+
+        Scoped like Voice-Pro's own per-panel "Load Defaults" button: only
+        the settings that shape a single transcription run. Deliberately
+        excludes output formats, initial_prompt/hotwords (user-authored
+        text), model/backend choice, watched folder, and every credential
+        field - those are persistent choices a silent reset shouldn't
+        touch, not experiments a user wants to undo.
+        """
+        self._vad_min_silence.set(500)
+        self._vad_threshold.set(0.5)
+        self._vad_speech_pad.set(400)
+        self._batch_size.set(16)
+        self._hallucination_detect.set(True)
+        self._alignment.set("none")
+        self._demucs_enabled.set(False)
+        self._denoise_enabled.set(False)
+        self._denoise_level.set("auto")
+        self._auto_chapters_enabled.set(True)
+        self._voiceprint_enabled.set(True)
+        self._sync_denoise_level_state()
 
     def _save_and_close(self) -> None:
         cfg = self.app.app_config

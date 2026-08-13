@@ -59,16 +59,58 @@ failure on the first pass); hash routing between Submit/Jobs/Result still
 works; zero uncaught exceptions. 4 screenshots taken and visually reviewed
 (clean layout, no overlap). Servers/headless browser stopped after.
 
-**Not done, deliberately out of scope this pass**: the Tkinter desktop app
-(`app/`) has no equivalent Reset/Load-defaults affordance on the Transcribe
-tab either (checked — no match for `reset|clear|load default` in
-`app/widgets/tabs.py`), but it's already far ahead of Voice-Pro's plain
-`gr.Textbox` subtitle tab on almost every other axis (embedded VLC, karaoke
-highlight, click-to-seek, find/replace, speaker rename), so this wasn't
-chased in the same pass — flagging for a future session if it's wanted.
-Also not done: browser-mic recording on the web page (Voice-Pro has one;
-ours only has it in the desktop Live tab) — a real feature add, not a UI
-ergonomics port, so out of scope for "borrow the frontend."
+**Follow-up done the same day**: owner asked for "more work" in the same
+direction. Added the Tkinter-side equivalent — a **"Restore transcription
+defaults"** button in the Advanced dialog's button bar (`app/dialogs/
+advanced.py`, `AdvancedDialog._restore_transcription_defaults`), scoped
+like Voice-Pro's own per-panel "Load Defaults" button: VAD (min silence /
+threshold / speech pad), batch size, hallucination detection, alignment,
+Demucs, denoise (+ level), auto-chapters, voiceprint — i.e. per-job tuning
+knobs only. Deliberately does NOT touch output formats, initial_prompt /
+hotwords (user-authored text), model/backend choice, watched folder, or any
+credential field — those are persistent choices, not experiments a reset
+should silently discard. Values match `core.config.DEFAULT_CONFIG` exactly
+(`alignment` has no entry there; `"none"` is the same fallback
+`AdvancedDialog.__init__` itself already uses). Caught one real bug before
+it shipped: `_denoise_enabled` is set programmatically, which does not fire
+the checkbutton's own `command`, so the strength combobox would have stayed
+stuck in whatever enabled/disabled state it was in without an explicit
+`_sync_denoise_level_state()` call after the reset — added that call.
+
+Verified two ways: `tests/core/test_advanced_restore_defaults.py` (new,
+follows the repo's existing `SimpleNamespace` + stub-`_V` convention used
+by `test_advanced_model_change.py` — no real Tk root, 3 tests covering the
+reset values, the untouched fields staying untouched, and the combobox
+resync) AND a real `tk.Tk()` + real `AdvancedDialog` + real widget
+`.invoke()` clicks in a throwaway scratch script (not committed) with
+before/after screenshots — confirms the button is actually wired, visible,
+doesn't overlap anything, and the real denoise checkbox → combobox
+enable/disable path survives a real reset. One thing that script caught
+about the environment, not the product: Python 3.14's tkinter returns
+`combo["state"]` as a `Tcl_Obj` wrapper, not a plain `str`, so `== "readonly"`
+silently fails — `.instate([...])` is the correct check on this interpreter
+version. `pyright app core` 0/0/0 (checked after this addition too).
+
+Full `pytest tests/ --ignore=tests/smoke -q` as ONE combined run hit the
+pre-existing Windows fatal-exception crash (`0x80000003`, `Thread-59
+(_probe)` + a pile of `worker-heartbeat`/`live-worker-reader` threads,
+documented multiple times earlier in this file) **three times in a row**,
+always at ~91%, never touching any file this session changed. Rather than
+keep retrying the same combined invocation, split it into `pytest
+tests/core -q` and `pytest tests/app tests/integrations -q` — same ~1900
+tests, just not accumulating live threads from one gigantic run — and both
+came back 100% clean (exit code 0, no failures). That both confirms zero
+regressions from this session's changes AND doubles the evidence that the
+crash is purely late-suite thread pile-up in a single mega-run on this
+local Python 3.14 dev environment, not a real failure (CI's pinned 3.11/
+3.12 remains unaffected per the earlier entries in this file). Root cause
+still not chased down — same open lead as before: serialise the `_probe`
+threads in `app.py`, or cache/guard `google_cloud_stt.runtime_available()`'s
+import instead of re-importing per call.
+
+Also not done, still deliberately out of scope: browser-mic recording on
+the web page (Voice-Pro has one; ours only has it in the desktop Live tab)
+— a real feature add, not a UI ergonomics port.
 
 ---
 

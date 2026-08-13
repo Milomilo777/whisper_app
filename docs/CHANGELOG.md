@@ -13,6 +13,13 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   don't have to switch tabs to see something is still running. Ergonomics
   borrowed from `voice-pro`'s Gradio frontend (see
   `docs/GAPS_VS_VOICE_PRO_2026.md` item 7) without adding Gradio itself.
+- **Advanced dialog: "Restore transcription defaults" button** — resets
+  the VAD, hallucination-detection, alignment, batch size, denoise,
+  Demucs, auto-chapters and voiceprint options back to their defaults in
+  one click. Deliberately scoped to per-job tuning knobs only — output
+  formats, the hotwords/prompt text, model/backend choice, watched
+  folder, and cloud credentials are left untouched. Nothing is written
+  until you click Save, so Cancel undoes this too.
 
 ## [1.6.0] — 2026-08-12
 
