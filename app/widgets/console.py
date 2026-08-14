@@ -73,8 +73,14 @@ def insert_log_line(txt: tk.Text, msg: str) -> None:
 
 def _attach_context_menu(txt: tk.Text) -> None:
     def _copy_selection() -> None:
+        # Same as _clear below: <<Copy>> is unreliable on a disabled Text
+        # widget on some platforms, and the log sits in state="disabled"
+        # between writes -- flip to normal for the copy, then restore.
         try:
+            state = str(txt.cget("state"))
+            txt.configure(state="normal")
             txt.event_generate("<<Copy>>")
+            txt.configure(state=state)  # type: ignore[arg-type]
         except tk.TclError:
             pass
 
