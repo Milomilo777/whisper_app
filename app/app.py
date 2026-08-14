@@ -4709,14 +4709,29 @@ class App(tk.Tk):
             )
 
     def _cancel_running(self) -> None:
-        """Esc handler — cancel whichever single running task is most relevant."""
+        """Esc handler — cancel whichever single running task is most relevant.
+
+        Confirms first: Esc is an easy accidental keystroke and the
+        running task can be a long transcription, not something to
+        drop with zero recovery on one stray tap.
+        """
         for t in self.queue:
             if t.status == "running":
-                self.cancel(t)
+                if messagebox.askyesno(
+                    "Cancel transcription?",
+                    f"A transcription is running ({os.path.basename(t.file_path)}). Cancel it?",
+                    parent=self,
+                ):
+                    self.cancel(t)
                 return
         for d in self.download_queue:
             if d.status == "running":
-                self.cancel_download(d)
+                if messagebox.askyesno(
+                    "Cancel download?",
+                    "A download is running. Cancel it?",
+                    parent=self,
+                ):
+                    self.cancel_download(d)
                 return
 
     def _save_window_geometry(self) -> None:
