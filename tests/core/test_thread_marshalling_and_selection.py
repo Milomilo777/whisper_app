@@ -22,7 +22,7 @@ import pytest
 pytest.importorskip("tkinter")
 
 from app.app import App, _iids_for_tasks
-from app.domain.tasks import TranscriptionTask
+from app.domain.tasks import TranscriptionTask, VideoDownloadTask
 
 
 # --- BUG A: pure iid<->task remapping --------------------------------------
@@ -146,6 +146,67 @@ def test_refresh_empty_selection_stays_empty():
     App.refresh(app)  # type: ignore[arg-type]
     assert App._selected_tasks(app) == []  # type: ignore[arg-type]
     assert app._selection_at_bar == ()
+
+
+# --- BUG D: refresh_download_queue() preserves selection (2026-08-14) ------
+#
+# refresh_download_queue() had the exact same delete()+re-insert() rebuild
+# as refresh() above, minus the selection-preservation fix -- unlike
+# refresh(), it ran with NO snapshot/restore step, so a selected download
+# row lost its selection on every drained event (frequent while a download
+# is active), disabling the Pause/Resume/Cancel action bar mid-download.
+
+
+def _fake_download_refresh_app(queue):
+    tree = _FakeTree()
+    app = types.SimpleNamespace(
+        download_tree=tree,
+        download_row_map={},
+        download_queue=queue,
+        _download_row_progress=lambda _t: 0,
+        _row_progress_text=lambda *_a: "",
+        fmt_time=lambda _t: "",
+        _refresh_window_title=lambda: None,
+        _ensure_animation=lambda: None,
+        _update_download_action_bar=lambda: None,
+    )
+    app._selected_downloads = lambda: App._selected_downloads(app)  # type: ignore[arg-type]
+    return app
+
+
+def _download_task(title: str) -> VideoDownloadTask:
+    return VideoDownloadTask(
+        url=f"https://example.com/{title}", folder=".",
+        format_label="best", format_info={}, title=title,
+    )
+
+
+def test_refresh_download_queue_preserves_selection_across_rebuild():
+    d1, d2, d3 = (_download_task(f"v{i}") for i in range(3))
+    for d in (d1, d2, d3):
+        d.status = "running"
+    app = _fake_download_refresh_app([d1, d2, d3])
+
+    App.refresh_download_queue(app)  # type: ignore[arg-type]
+    iids = list(app.download_tree.get_children())
+    assert len(iids) == 3
+    app.download_tree.selection_set((iids[1],))
+    assert App._selected_downloads(app) == [d2]  # type: ignore[arg-type]
+
+    # A drained download event rebuilds the tree from scratch, same as the
+    # transcription queue's 500ms refresh().
+    App.refresh_download_queue(app)  # type: ignore[arg-type]
+
+    assert App._selected_downloads(app) == [d2]  # type: ignore[arg-type]
+
+
+def test_refresh_download_queue_empty_selection_stays_empty():
+    d1 = _download_task("only")
+    d1.status = "waiting"
+    app = _fake_download_refresh_app([d1])
+    App.refresh_download_queue(app)  # type: ignore[arg-type]
+    App.refresh_download_queue(app)  # type: ignore[arg-type]
+    assert App._selected_downloads(app) == []  # type: ignore[arg-type]
 
 
 # --- BUG B + C: thread marshalling -----------------------------------------

@@ -60,18 +60,25 @@ class _Var:
 
 
 class _Svc:
-    def __init__(self) -> None:
+    def __init__(self, busy: bool = False) -> None:
         self.stop_all_calls = 0
+        self._busy = busy
 
     def stop_all(self) -> None:
         self.stop_all_calls += 1
 
+    def active_workers(self) -> list:
+        # App._confirm_backend_switch (called by _on_engine_selected before
+        # stop_all()) only prompts when this reports a worker with an
+        # assigned task; empty means "nothing running, no prompt needed."
+        return [{"task": object()}] if self._busy else []
 
-def _bare_app(App, *, engine_label: str, backend: str):
+
+def _bare_app(App, *, engine_label: str, backend: str, busy: bool = False):
     a = App.__new__(App)
     a.transcribe_engine_var = _Var(engine_label)
     a.app_config = {"transcribe_backend": backend}
-    a.transcription_service = _Svc()
+    a.transcription_service = _Svc(busy=busy)
     a.logs = []
     a.log = a.logs.append
     a.engine_status_var = _Var("")
@@ -246,6 +253,46 @@ def test_on_engine_selected_persists_and_restarts_once(App, monkeypatch):
 
     saved: list[dict] = []
     monkeypatch.setattr("app.app.save_config", lambda _cfg: saved.append(_cfg))
+
+    App._on_engine_selected(a)
+
+    assert a.app_config["transcribe_backend"] == "google_cloud_stt"
+    assert a.transcription_service.stop_all_calls == 1
+    assert len(saved) == 1
+
+
+def test_on_engine_selected_asks_before_stopping_a_busy_worker(App, monkeypatch):
+    """stop_worker() hard-terminates rather than cooperatively cancelling,
+    so switching engines while something is actually transcribing must ask
+    first. Declining must not touch config or stop the worker -- the
+    dropdown reverts to the engine still actually in effect."""
+    google_label = eng.VALUE_TO_LABEL["google_cloud_stt"]
+    a = _bare_app(
+        App, engine_label=google_label, backend="faster_whisper", busy=True
+    )
+
+    saved: list[dict] = []
+    monkeypatch.setattr("app.app.save_config", lambda _cfg: saved.append(_cfg))
+    monkeypatch.setattr("tkinter.messagebox.askyesno", lambda *a, **k: False)
+
+    App._on_engine_selected(a)
+
+    assert a.transcription_service.stop_all_calls == 0
+    assert not saved
+    assert a.app_config["transcribe_backend"] == "faster_whisper"
+    assert a.transcribe_engine_var.get() == eng.VALUE_TO_LABEL["faster_whisper"]
+
+
+def test_on_engine_selected_stops_busy_worker_when_confirmed(App, monkeypatch):
+    """Confirming the prompt proceeds exactly like the no-prompt case."""
+    google_label = eng.VALUE_TO_LABEL["google_cloud_stt"]
+    a = _bare_app(
+        App, engine_label=google_label, backend="faster_whisper", busy=True
+    )
+
+    saved: list[dict] = []
+    monkeypatch.setattr("app.app.save_config", lambda _cfg: saved.append(_cfg))
+    monkeypatch.setattr("tkinter.messagebox.askyesno", lambda *a, **k: True)
 
     App._on_engine_selected(a)
 

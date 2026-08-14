@@ -1624,6 +1624,36 @@ class App(tk.Tk):
             pass
         self._refresh_engine_selector()
 
+    def _confirm_backend_switch(self, parent: "tk.Misc | None" = None) -> bool:
+        """True if it's safe to stop_all() workers for an engine switch.
+
+        stop_worker() is a hard terminate (shutdown request, then
+        terminate/kill), not the cooperative per-task Cancel -- so
+        switching engines while a transcription is actually running can
+        lose more progress than a normal Cancel would, with no warning.
+        Asks first when any worker has an assigned task; returns True with
+        no prompt when nothing is actually running.
+        """
+        svc = getattr(self, "transcription_service", None)
+        if svc is None:
+            return True
+        busy = [w for w in svc.active_workers() if w.get("task") is not None]
+        if not busy:
+            return True
+        from tkinter import messagebox
+        n = len(busy)
+        return messagebox.askyesno(
+            "Switch transcription engine?",
+            (
+                f"{n} transcription{'s are' if n != 1 else ' is'} running "
+                "right now. Switching engines stops "
+                f"{'them' if n != 1 else 'it'} immediately -- more "
+                "abruptly than a normal Cancel, so more progress may be "
+                "lost.\n\nSwitch anyway?"
+            ),
+            parent=parent or self,
+        )
+
     def _on_engine_selected(self) -> None:
         """Persist the Transcribe-tab engine pick and restart the worker so the
         new engine takes effect on the next transcription.
@@ -1640,6 +1670,9 @@ class App(tk.Tk):
         value = _eng.LABEL_TO_VALUE.get(evar.get() or "", _eng.FALLBACK_ENGINE)
         old = str(self.app_config.get("transcribe_backend") or "")
         if value != old:
+            if not self._confirm_backend_switch():
+                evar.set(_eng.VALUE_TO_LABEL.get(old, evar.get()))
+                return
             self.app_config["transcribe_backend"] = value
             try:
                 save_config(self.app_config)
@@ -3680,6 +3713,13 @@ class App(tk.Tk):
     def refresh_download_queue(self) -> None:
         from app.widgets.tabs import status_label
 
+        # Snapshot the SELECTED tasks (by identity) before tearing the tree
+        # down -- same rationale as refresh() above: a plain delete()+
+        # re-insert() assigns brand-new iids, wiping the selection and
+        # disabling the Pause/Resume/Cancel action bar mid-download, since
+        # this runs on every drained download event (frequent while a
+        # download is active), not just periodically.
+        prev_selected = self._selected_downloads()
         self.download_tree.delete(*self.download_tree.get_children())
         self.download_row_map = {}
         for task in self.download_queue:
@@ -3700,6 +3740,11 @@ class App(tk.Tk):
                 ),
             )
             self.download_row_map[item_id] = task
+        # Re-select the same task objects on their new iids (no-op when the
+        # selection was empty or its tasks left the queue).
+        restore = _iids_for_tasks(self.download_row_map, prev_selected)
+        if restore:
+            self.download_tree.selection_set(restore)
         self._refresh_window_title()
         self._ensure_animation()
         self._update_download_action_bar()

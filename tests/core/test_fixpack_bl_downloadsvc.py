@@ -258,3 +258,89 @@ def test_poll_normal_progress_still_works():
     DownloadService(app).poll()
     assert task.progress == 42
     assert app.rearmed is True
+
+
+def test_poll_survives_unexpected_exception_in_any_branch():
+    """The original fix above only guarded the 'progress' branch's int()
+    coercion. poll() now wraps EVERY event's dispatch in one try/except
+    (2026-08-14, gpt-5.4-mini adversarial review), so an unrelated
+    exception in a completely different branch -- here 'subtitle_status',
+    whose handler touches an attribute this minimal app doesn't define --
+    still cannot skip the after(300) re-arm and wedge the pump."""
+    task = _Task()
+    app = _PollApp([("subtitle_status", task, "some text")])
+    DownloadService(app).poll()
+    assert app.rearmed is True
+
+
+def test_poll_one_bad_event_does_not_block_later_good_events():
+    """A malformed event must not prevent LATER queued events (for other
+    tasks, in the same poll() call) from being processed."""
+    task1, task2 = _Task(), _Task()
+    app = _PollApp([
+        ("subtitle_status", task1, "boom"),  # no subtitle_status_var -> raises
+        ("progress", task2, 55.0),  # must still be processed despite the above
+    ])
+    DownloadService(app).poll()
+    assert task2.progress == 55
+    assert app.rearmed is True
+
+
+# --------------------------------------------------------------------------
+# 4. maybe_update_yt_dlp() must not poison the 24h backoff on a failed check
+#    (2026-08-14, gpt-5.4-mini adversarial review)
+# --------------------------------------------------------------------------
+
+
+class _UpdateApp:
+    """Minimal app for driving DownloadService.maybe_update_yt_dlp once."""
+
+    def __init__(self, cfg):
+        from queue import Queue
+        self.app_config = cfg
+        self.download_events = Queue()
+        self.entry_file = __file__
+
+    def yt_dlp_path(self):
+        return "yt-dlp"
+
+
+def test_maybe_update_yt_dlp_does_not_stamp_timestamp_on_timeout(monkeypatch):
+    """A network hiccup / subprocess timeout must not poison the 24h
+    backoff. The old code stamped last_yt_dlp_update_check unconditionally
+    (even on TimeoutExpired/any Exception), so one flaky check silently
+    suppressed every retry for a full day."""
+    import subprocess as subprocess_mod
+
+    def _raise_timeout(*_a, **_k):
+        raise subprocess_mod.TimeoutExpired(cmd="yt-dlp", timeout=60)
+
+    monkeypatch.setattr(
+        "app.services.download_service.subprocess.run", _raise_timeout
+    )
+    monkeypatch.setattr(
+        "app.services.download_service.save_config", lambda _c: None
+    )
+    cfg = {"auto_update_yt_dlp": True}
+    app = _UpdateApp(cfg)
+    DownloadService(app).maybe_update_yt_dlp(task=None)
+    assert "last_yt_dlp_update_check" not in cfg
+
+
+def test_maybe_update_yt_dlp_stamps_timestamp_on_success(monkeypatch):
+    """A check that actually completes (any returncode) DOES stamp the
+    timestamp, so a genuinely healthy check still gets its 24h backoff."""
+    monkeypatch.setattr(
+        "app.services.download_service.subprocess.run",
+        lambda *_a, **_k: types.SimpleNamespace(stdout="", stderr="", returncode=0),
+    )
+    saved = []
+    monkeypatch.setattr(
+        "app.services.download_service.save_config",
+        lambda c: saved.append(dict(c)),
+    )
+    cfg = {"auto_update_yt_dlp": True}
+    app = _UpdateApp(cfg)
+    DownloadService(app).maybe_update_yt_dlp(task=None)
+    assert "last_yt_dlp_update_check" in cfg
+    assert saved and "last_yt_dlp_update_check" in saved[0]

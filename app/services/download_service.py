@@ -618,15 +618,19 @@ class DownloadService:
                 self.app.download_events.put(
                     ("log", task, f"yt-dlp update returned code {update.returncode}; continuing")
                 )
+            # Only stamp the 24h backoff once the check actually ran to
+            # completion (regardless of returncode) -- a timeout or other
+            # failure below means we never really checked, so it must not
+            # suppress a retry on the next download for a full day.
+            cfg["last_yt_dlp_update_check"] = datetime.now(timezone.utc).isoformat()
+            try:
+                save_config(cfg)
+            except Exception:
+                logger.exception("Failed to persist yt-dlp auto-update preference")
         except subprocess.TimeoutExpired:
             self.app.download_events.put(("log", task, "yt-dlp update timed out; continuing"))
         except Exception as e:  # noqa: BLE001
             self.app.download_events.put(("log", task, f"yt-dlp update skipped: {e}"))
-        cfg["last_yt_dlp_update_check"] = datetime.now(timezone.utc).isoformat()
-        try:
-            save_config(cfg)
-        except Exception:
-            logger.exception("Failed to persist yt-dlp auto-update preference")
 
     def enqueue_from_form(self) -> None:
         """Read the download tab form, validate, build a task, and enqueue."""
@@ -1330,7 +1334,11 @@ class DownloadService:
                 app.download_events.put(("progress", task, float(parsed["percent"])))
             elif line:
                 last_line = line
-                if "ERROR" in line:
+                # Case-insensitive: yt-dlp emits both "ERROR:" and
+                # lowercase "[error]"-style lines depending on the
+                # extractor/postprocessor, and an uppercase-only match
+                # silently missed the real reason on the latter.
+                if "error" in line.lower():
                     last_error_line = line
                 dest = parse_destination_line(line)
                 if dest is not None:
@@ -1390,41 +1398,58 @@ class DownloadService:
             except Empty:
                 break
 
-            if kind == "progress":
-                # Defensive coercion: a non-numeric / NaN / inf percent
-                # (a malformed yt-dlp progress JSON, a future event source)
-                # would make int(payload) raise ValueError/OverflowError.
-                # poll() has no surrounding try/except, so that exception
-                # would skip the after(300) re-arm at the end and WEDGE the
-                # pump — no further progress/done/error events for ANY task.
-                # Finite values behave exactly as before.
+            try:
+                self._dispatch_event(app, kind, task, payload)
+            except Exception:  # noqa: BLE001
+                # One malformed/unexpected event must never wedge the whole
+                # download pump -- an uncaught exception here would skip the
+                # app.after(300, self.poll) re-arm below and silently stop
+                # ALL further download progress/done/error events.
+                logger.exception("Download event handling failed for %r", kind)
+
+            app.refresh_download_queue()
+
+        app.after(300, self.poll)
+
+    def _dispatch_event(
+        self, app: "App", kind: str, task: "VideoDownloadTask", payload: Any,
+    ) -> None:
+        """The per-event body of :meth:`poll`, split out so it can be
+        wrapped in one try/except there without re-indenting every branch."""
+        if kind == "progress":
+            # Defensive coercion: a non-numeric / NaN / inf percent
+            # (a malformed yt-dlp progress JSON, a future event source)
+            # would make int(payload) raise ValueError/OverflowError,
+            # which _dispatch_event's caller now catches -- but coerce
+            # defensively anyway so a bad payload degrades to 0% instead
+            # of being swallowed as a logged, silently-dropped event.
+            try:
+                pct = float(payload)
+            except (TypeError, ValueError):
+                pct = 0.0
+            if pct != pct or pct in (float("inf"), float("-inf")):
+                pct = 0.0
+            task.progress = min(100, max(0, int(pct)))
+        elif kind == "log":
+            app.log(payload)
+        elif kind == "subtitle_status":
+            app.subtitle_status_var.set(payload)
+        elif kind == "done":
+            self._finish(task, payload, saved_path=None)
+        elif kind == "done_full":
+            self._finish(task, payload["status"], saved_path=payload.get("saved_path"))
+        elif kind == "error":
+            task.status = "error"
+            import time as _time
+            if getattr(task, "end_time", None) is None:
                 try:
-                    pct = float(payload)
-                except (TypeError, ValueError):
-                    pct = 0.0
-                if pct != pct or pct in (float("inf"), float("-inf")):
-                    pct = 0.0
-                task.progress = min(100, max(0, int(pct)))
-            elif kind == "log":
-                app.log(payload)
-            elif kind == "subtitle_status":
-                app.subtitle_status_var.set(payload)
-            elif kind == "done":
-                self._finish(task, payload, saved_path=None)
-            elif kind == "done_full":
-                self._finish(task, payload["status"], saved_path=payload.get("saved_path"))
-            elif kind == "error":
-                task.status = "error"
-                import time as _time
-                if getattr(task, "end_time", None) is None:
-                    try:
-                        task.end_time = _time.time()
-                    except AttributeError:
-                        pass
-                app.log(payload)
-                if app.download_current is task:
-                    app.download_current = None
-                self.process_queue()
+                    task.end_time = _time.time()
+                except AttributeError:
+                    pass
+            app.log(payload)
+            if app.download_current is task:
+                app.download_current = None
+            self.process_queue()
 
             app.refresh_download_queue()
 
