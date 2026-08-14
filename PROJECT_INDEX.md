@@ -529,7 +529,7 @@ pip install pyright pytest
 ## Structure (auto-refreshed — do not hand-edit this block)
 
 - **Source files tracked:** 441
-- **Structure refreshed:** 2026-08-14T06:58:35
+- **Structure refreshed:** 2026-08-14T16:06:20
 - **Semantic sections last built:** 2026-07-04T15:30:21
 - **Drift since semantic build:** +35 added · ~58 changed · -2 removed
 
