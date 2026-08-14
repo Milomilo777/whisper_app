@@ -100,9 +100,9 @@ old pre-merge master as `archive/master-pre-merge`. master carries the
 v1.3.5 release. Pre-authorised for all future hands-off sessions:
 
   - `git push origin master`
-  - `git tag -a vX.Y.Z …` + `git push origin vX.Y.Z`
-  - `gh release create vX.Y.Z dist/*.exe dist_installer/*.exe`
-  - `gh release edit vX.Y.Z --notes-file docs/RELEASE_NOTES_vX.Y.Z.md`
+
+Cutting a release (`git tag`, `gh release create`/`edit`) is NOT on this
+list — see "Cutting a release" below.
 
 The following remain forbidden unless the user explicitly
 asks for them in the current session:
@@ -121,6 +121,17 @@ asks for them in the current session:
     kept too). 2026-05-26 owner decision — this REVERSES the 2026-05-25
     "keep every version" rule. The local installers under `dist_installer/`
     + the git version tags remain as the backup, so pruning is recoverable.
+
+## Cutting a release needs explicit go-ahead (2026-08-14, owner request)
+
+Version bump, build, `git tag`, and `gh release create`/`gh release edit`
+need the owner to explicitly say so each time — never infer this from a
+general "fix things hands-off" mandate, however broad. Local commits and
+`git push origin master` stay pre-authorised on their own.
+
+**Why:** a session cut and published v1.6.1 during a hands-off session
+without being asked to release; the owner had to interrupt to stop and
+undo it (release + tag deleted, version reverted to 1.6.0).
 
 ## macOS builds — do not build (2026-08-14, owner request, repeated)
 
