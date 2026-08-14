@@ -65,15 +65,103 @@ useful case of a genuinely-updated file re-appearing under the same
 name in the watched folder — so this is a product-behavior call, not
 a one-line bug fix. Flagging for next session rather than guessing.
 
-**Not reviewed this round**: Parts 3/4/6 of the report (God-object
-`App` class breakup, ~6 duplicated-code sites, readability nits) are
-refactor-scale, not bugs — out of scope for a "find and fix issues"
-pass on a shipping app. Available as a deliberate follow-up if wanted.
+**Deferred to a future session — owner call, 2026-08-14**: parts 3
+(architecture), 4 (duplication), and 5 (remaining UX) of the report
+are real and worth doing, but are refactor/polish-scale, not bug
+fixes — deliberately not started this session so they get their own
+focused pass instead of being rushed alongside a release. Full text
+in `hostile_code_review.md` (this session's Antigravity CLI artifact,
+not in the repo); the items below are the actionable subset, already
+checked for plausibility but NOT verified against current line numbers
+the way this session's applied fixes were — re-check line numbers
+before acting, the file has moved since.
+
+*Part 3 — Structural/Architectural (largest, riskiest, do last):*
+- `App` class (`app.py`, ~4,800 lines) is a God Object — owns Tk root,
+  tray, ffmpeg, DPI, thread bridging, SQLite history, drag-and-drop,
+  watching, downloads, transcription, and UI. Suggested split:
+  `TranscriptionController` / `DownloadController` / `TilingController`
+  / `DragDropHandler` / `HistoryManager`, `App` becomes a thin shell.
+  High blast radius — do this in its own isolated pass with heavy
+  regression testing, not mixed with anything else.
+- `advanced.py`'s `_build()` is a ~644-line procedural monolith (one
+  section, `_build_gcloud_frame`, is already extracted — the pattern
+  to extend to the other ~10 sections).
+- `tabs.py` (~1,240 lines) builds 5 unrelated tabs (Transcribe, Queue,
+  Download, Tiling, Server) in one file with near-zero sharing between
+  the Queue and Download builders specifically.
+- `app.py`'s `build_about_sections()` is ~250 lines of hardcoded About-
+  dialog literals; candidate to move to a data file.
+
+*Part 4 — Duplicated code (lower risk, mechanical):*
+- Window-centering math copy-pasted in `hub_setup.py`, `model_download.py`,
+  `model_loading.py`, `statistics.py` — one `center_on_parent(dialog,
+  parent)` helper would cover all four.
+- OS font-fallback tuple duplicated in `model_download.py` +
+  `model_loading.py`.
+- Worker-spawn command building (`frozen` vs `-m core.worker`)
+  duplicated in `live_service.py` + `transcription_service.py`.
+- `app.py`'s `_bulk_rerun` / `_bulk_resume` are near-identical block-
+  for-block (only the resume flag differs) — mergeable into one
+  `_bulk_queue_op(resume=False)`.
+- Treeview + action-bar construction duplicated between the Queue and
+  Download tab builders in `tabs.py`.
+- Three near-identical worker-thread bodies in `advanced.py`
+  (`_install_ai_model`, `_download_whisper_cpp_model`,
+  `_prepare_nvidia_asr_model`) — candidate `_run_download_task(name,
+  log_msg, task_func)` helper.
+
+*Part 5 — Remaining UX issues (Esc-cancel already fixed this session;
+these 14 were not acted on):*
+- Advanced Settings dialog has no horizontal scrollbar below its
+  1100px design width — content silently clips on 1024px screens.
+- Transcript viewer's `minsize(1180, 720)` exceeds usable space on
+  768p monitors after taskbar/title bar.
+- Transcript viewer's "Replace" replaces every occurrence in the
+  segment at once, not one-at-a-time like standard find/replace.
+- `warn_cpu_once`'s `messagebox.showwarning` is modal — freezes the
+  whole app (including a 50-file batch queue) until dismissed.
+- Dropping multiple URLs at once only queues the first; the "others
+  ignored" note goes to the log pane most users never look at, not a
+  dialog.
+- Download tab has no "Clear completed" button (Queue tab has one).
+- Live tab's transcript Text widget is `state="disabled"` — blocks
+  mouse text selection entirely, not just editing.
+- The cloud API key `Entry` (`advanced.py`) has no show/hide toggle.
+- `error_dialog.py` clamps `max(x, 0)` on positioning — forces error
+  dialogs onto the primary monitor even when the app itself is on a
+  secondary monitor with negative coordinates. Same family of bug as
+  this session's tooltip fix (`tooltip.py`, negative-x `wm_geometry`);
+  check whether the same fix pattern applies before assuming it's
+  identical, since this one clamps rather than mis-formats.
+- Hub Setup dialog draws at the OS default position then visibly jumps
+  to center — flicker. Suggested: `withdraw()` before geometry setup,
+  `deiconify()` after centering.
+- `integrations_service.py` reports "no SRT found" even when the user
+  deliberately configured `.json`/`.docx`-only output — should check
+  for any configured output format, not just `.srt`.
+- Tab references use opaque names (`self.t1`, `self.t3` in `app.py`)
+  instead of descriptive ones.
+- Right-click paste menu is bound to `Entry`/`Text` only, not
+  `TCombobox`/`TSpinbox`.
+- Live tab's language list filters out empty-code entries; the
+  Transcribe tab's list doesn't — same conceptual dropdown, different
+  contents between tabs.
+- (Feature-parity suggestion, not a bug) Download tab has slider-based
+  time-range trim; Transcribe tab only has raw text entry for the same
+  concept.
+
+*Part 6 — Readability, not itemized here* (type-safety gaps in
+`live_tab.py`, inconsistent thread-callback style in
+`hardware_wizard.py`, dead imports in `advanced.py`) — lowest priority
+of the six parts; re-derive from a fresh review rather than this stale
+one if it's ever picked up, since readability nits go stale fastest.
 
 Gate: `pyright app core` 0/0/0; full `pytest tests/core -q` (minus the
 pre-existing-broken `test_v08_real_file_e2e.py`, unrelated environment
 issue in `core/model_manager.ensure_model()`, not touched this session)
-green throughout.
+green throughout; full `pytest tests/ --ignore=tests/smoke -q` also
+green before the v1.6.0 asset rebuild below.
 
 ---
 
