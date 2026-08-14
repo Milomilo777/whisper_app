@@ -90,7 +90,12 @@ def bind_tooltip(
             ).pack()
             tip.update_idletasks()
             x, y = _position(tip)
-            tip.wm_geometry(f"+{x}+{y}")
+            # Explicit sign (no literal "+"): Tk's geometry parser reads
+            # "+-500" (a literal "+" followed by a negative number) as
+            # "500px from the right edge", not "-500 from the left" --
+            # a real trap on a secondary monitor placed left of the
+            # primary, where winfo_rootx() is negative.
+            tip.wm_geometry(f"{x:+d}{y:+d}")
             tip.wm_deiconify()
             state["tip"] = tip
         except Exception:  # noqa: BLE001
