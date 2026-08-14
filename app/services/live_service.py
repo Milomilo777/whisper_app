@@ -171,10 +171,11 @@ class LiveTranscriber:
             "language": self.language or None,
         }
         try:
-            assert proc.stdin is not None
+            if proc.stdin is None:
+                raise ValueError("live worker process has no stdin pipe")
             proc.stdin.write(json.dumps(payload) + "\n")
             proc.stdin.flush()
-        except (OSError, ValueError, AssertionError) as e:
+        except (OSError, ValueError) as e:
             with self._lock:
                 self._pending.pop(chunk_id, None)
             raise LiveWorkerError(f"Live worker write failed: {e}") from e
