@@ -59,6 +59,19 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   opened the Live tab. Both now ship by default, like the app's other small
   UI dependencies (`tkinterdnd2`, `python-vlc`), instead of requiring a
   manual `pip install` a non-technical user has no way to run.
+- **Nine fixes from an adversarial frontend review** (`app/` only, isolated
+  from the rest of the repo) — download queue selection was lost on every
+  event tick (now preserved, matching the transcription queue); the yt-dlp
+  auto-update check poisoned its 24h retry backoff on any timeout/failure;
+  download error detection missed yt-dlp's lowercase `[error]` lines;
+  one bad download event could wedge the whole download progress pump;
+  relocating the model hub folder could silently redirect a different
+  model's path to `large-v3`'s cache folder; switching engines mid-job now
+  warns before force-stopping active work instead of silently killing it;
+  a live-worker write path used `assert` for a check that vanishes under
+  `-O`; the transcript viewer's right-click menu could leave a stuck
+  pointer grab; and the hub-setup dialog's "Cancel" button (which doesn't
+  cancel) is now labeled "Skip for now".
 
 ## [1.6.0] — 2026-08-12
 
