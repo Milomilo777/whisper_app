@@ -115,7 +115,13 @@ def test_same_model_does_not_stop_worker(monkeypatch: Any) -> None:
     assert stop_calls["count"] == 0  # no change -> no worker restart
 
 
-def test_google_cloud_stt_save_disables_unsupported_diarization(monkeypatch: Any) -> None:
+def test_google_cloud_stt_save_preserves_diarization(monkeypatch: Any) -> None:
+    """Diarization is a real, working option on this backend (see
+    core/backends/google_cloud_stt.py's SpeakerDiarizationConfig wiring in
+    both Standard and Batch mode) -- _save_and_close must not silently wipe
+    the user's checkbox choice back to False just because this backend is
+    selected. Regression test for a stale guard that predated (or was never
+    reconciled with) the backend's actual diarization support."""
     from app.dialogs import advanced as adv
 
     monkeypatch.setattr(adv, "save_config", lambda _cfg: None)
@@ -138,7 +144,7 @@ def test_google_cloud_stt_save_disables_unsupported_diarization(monkeypatch: Any
 
     adv.AdvancedDialog._save_and_close(dlg)  # type: ignore[arg-type]
 
-    assert cfg["gcloud_stt_diarization"] is False
+    assert cfg["gcloud_stt_diarization"] is True
     # Same backend + same model -> no worker restart (isolates diarization).
     assert stop_calls["count"] == 0
 

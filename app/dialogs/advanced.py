@@ -603,12 +603,21 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Enable local LLM (download Qwen2.5-1.5B ~1 GB on first use)",
             variable=self._ai_enabled,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            ai,
+            "Runs a small language model on this machine — fully offline, "
+            "nothing uploaded. Right now this only improves auto-chapter "
+            "titles below (real sentence-like titles instead of the plain "
+            "heuristic ones); 'Generate auto-chapter markers' must also be "
+            "on. Downloads once (~1 GB), either now via 'Install AI "
+            "model...' or automatically the first time it's needed.",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Button(
             ai, text="Install AI model…",
             command=self._install_ai_model,
         ).grid(row=1, column=0, sticky="w", padx=8, pady=4)
         ttk.Label(
-            ai, text="Powers summary / Q&A / chapter titles when enabled.",
+            ai, text="Currently powers auto-chapter titles only (see below).",
             foreground="#666",
         ).grid(row=1, column=1, columnspan=2, sticky="w", padx=8, pady=4)
         ttk.Checkbutton(
@@ -664,6 +673,14 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Generate auto-chapter markers (writes <name>.chapters.json)",
             variable=self._auto_chapters_enabled,
         ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        help_icon(
+            ai,
+            "Splits the transcript into chapters at natural long pauses "
+            "and writes them to a separate <name>.chapters.json file next "
+            "to the transcript. Titles are a short generic label by "
+            "default, or a real sentence-like title when 'Enable local "
+            "LLM' above is also on.",
+        ).grid(row=5, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Checkbutton(
             ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
             variable=self._voiceprint_enabled,
@@ -877,7 +894,14 @@ class AdvancedDialog(tk.Toplevel):
             download,
             text="Transcribe after download",
             variable=self._auto_transcribe,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=4)
+        help_icon(
+            download,
+            "When on, a finished download is automatically added to the "
+            "Transcription Queue too, using your current Transcribe tab "
+            "settings (language, output formats, etc.) — no extra click "
+            "needed after the download completes.",
+        ).grid(row=0, column=2, sticky="w", padx=8, pady=4)
         ttk.Label(download, text="SponsorBlock — remove these segments:").grid(
             row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 4)
         )
@@ -1077,10 +1101,12 @@ class AdvancedDialog(tk.Toplevel):
         help_icon(
             gc,
             "Labels which speaker said each part of the transcript "
-            "(Speaker 1, Speaker 2, ...). Note: this is cleared "
-            "automatically when you click Save with 'Google Cloud "
-            "Speech-to-Text' selected as the Backend above — that "
-            "combination isn't supported yet.",
+            "(Speaker 1, Speaker 2, ...). Works in both modes above. In "
+            "Batch mode, labels stay consistent across the whole file. In "
+            "Standard (online) mode, audio is sent to Google in ~1-minute "
+            "pieces and the speaker numbering restarts each time, so the "
+            "same person can end up under a different label in different "
+            "parts of the transcript.",
         ).grid(row=7, column=3, sticky="w", padx=(0, 8), pady=4)
 
         # -- live usage / cost estimate -----------------------------------
@@ -1304,15 +1330,6 @@ class AdvancedDialog(tk.Toplevel):
         cfg["gcloud_stt_diarization"] = bool(self._gcloud_diarization.get())
         # NVIDIA Parakeet / FastConformer (local transformers) settings.
         cfg["nvidia_asr_model_id"] = self._nvidia_model_id.get().strip()
-        if cfg.get("transcribe_backend") == "google_cloud_stt":
-            # Google Cloud STT v2 rejects diarization on this recognizer.
-            # Keep the GUI from saving an unsupported combination that would
-            # otherwise fail late during transcription.
-            cfg["gcloud_stt_diarization"] = False
-            try:
-                self._gcloud_diarization.set(False)
-            except Exception:  # noqa: BLE001
-                pass
         cfg["alignment"] = self._alignment.get() or "none"
         cfg["hallucination_detect_enabled"] = bool(self._hallucination_detect.get())
         cfg["demucs_enabled"] = bool(self._demucs_enabled.get())

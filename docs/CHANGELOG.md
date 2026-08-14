@@ -37,9 +37,21 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   sidebar now groups its 11 links under small captions ("Alternate
   engines", "App preferences") so the 3 opt-in cloud/NVIDIA sections read
   as clearly optional rather than blending into one long list.
+- **Advanced dialog: 3 more hover-help gaps closed** — the AI Layer's
+  "Enable local LLM" and "Generate auto-chapter markers" checkboxes and
+  the Downloads section's "Transcribe after download" checkbox now
+  explain themselves on hover, matching every other control in the
+  dialog. The "Enable local LLM" caption also no longer overclaims
+  summary/Q&A support it has no UI for yet.
 
 ### Fixed
 
+- **Advanced dialog silently cleared "Detect speakers" for Google Cloud
+  STT** — saving with that backend selected always reset the diarization
+  checkbox back off, even though the backend has fully supported
+  diarization since it was added. It now saves correctly; the tooltip
+  explains the real caveat instead (speaker numbering restarts each
+  ~1-minute chunk in Standard mode).
 - **Live tab's default "Microphone" source did not work out of the box** —
   `sounddevice` (and, on Windows, `PyAudioWPatch` for the "System audio"
   source) were never in `requirements.txt`, so no shipped install actually

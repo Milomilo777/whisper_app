@@ -5,6 +5,101 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-14 (latest) — Advanced dialog readability pass round 4: a real bug fixed, 3 more hover-help gaps closed
+
+Owner asked to continue the readability pass below more deeply, hands-off:
+pick up the two items the round-3 entry explicitly flagged for "a future
+session" — the possibly-stale `gcloud_stt_diarization` guard, and the AI
+Layer / Downloads hover-help consistency gap — fix whatever is actually
+wrong, and keep going without stopping to ask.
+
+**1. Confirmed and fixed a real bug, not just a stale comment.**
+`AdvancedDialog._save_and_close` (`app/dialogs/advanced.py`) unconditionally
+reset `cfg["gcloud_stt_diarization"]` to `False` whenever
+`transcribe_backend == "google_cloud_stt"`, with a comment claiming
+"Google Cloud STT v2 rejects diarization on this recognizer." Read
+`core/backends/google_cloud_stt.py` end to end to check: diarization is
+fully implemented and has been since the backend's very first commit
+(`9fd5b3b`) — `build_recognition_config` wires a real
+`SpeakerDiarizationConfig` in both Standard and Batch mode, Standard mode
+even namespaces per-chunk speaker labels (`namespace_speaker_labels`) so
+two different people across chunks are never silently merged under the
+same "Speaker 1". `docs/CONFIG.md` already documented
+`gcloud_stt_diarization` as a normal, working option. So the checkbox was
+never actually broken on the backend side — the UI was silently discarding
+the user's own choice every time they clicked Save with this backend
+selected. Removed the clearing block; rewrote the diarization checkbox's
+tooltip to describe the REAL caveat (Standard/chunked mode restarts
+Google's speaker numbering every ~1-minute chunk, so the same person can
+get a different label in different parts of the transcript — Batch mode
+doesn't have this issue, one whole-file request). Updated
+`tests/core/test_advanced_model_change.py`'s
+`test_google_cloud_stt_save_disables_unsupported_diarization` (asserted the
+old, wrong behavior) into `test_google_cloud_stt_save_preserves_diarization`.
+
+**2. Closed the 3 real hover-help gaps, found by auditing every control in
+the dialog against the established pattern** (not by guessing): AI Layer's
+"Enable local LLM" checkbox, AI Layer's "Generate auto-chapter markers"
+checkbox, and Downloads' "Transcribe after download" checkbox each had
+literally zero explanation — neither an inline caption nor a `help_icon` —
+while every sibling control around them had one. Added `help_icon()` calls
+matching the established tone. Deliberately left alone: the "always-visible
+gray caption vs. hover icon" stylistic coexistence (round 3 called this
+by-design), and already-self-explanatory checkboxes (SponsorBlock
+categories, the telemetry opt-out).
+
+**3. Found something bigger while writing the "Enable local LLM" tooltip
+honestly — flagging for a future session, NOT fixed here (deliberately
+out of scope for a copy/hover-help pass):** the existing caption next to
+that checkbox claimed it "Powers summary / Q&A / chapter titles when
+enabled." Traced every consumer of `core.llm.LLMRunner` (`summarise`,
+`action_items`, `ask`, `translate`) across the whole repo
+(`grep`, not a guess): the ONLY wired caller anywhere is
+`core/transcriber.py`'s chapter-title path (`config.get("ai_enabled")` ->
+loads an `LLMRunner` -> passed into `core.chapters.build_chapters` for
+nicer titles). `summarise` / `action_items` / `ask` / `translate` are
+fully implemented and unit-tested (`tests/core/test_llm.py`) but have
+**zero UI entry point anywhere in `app/`** — no button, no menu, no
+dialog, matching PROJECT_INDEX.md's own onboarding-tip note about this.
+Turning "Enable local LLM" on downloads a real ~1 GB model that, today,
+only makes auto-chapter titles nicer — the summary/Q&A/action-items/
+translate capability a user might reasonably expect from "AI Layer" is not
+reachable. Corrected the caption to "Currently powers auto-chapter titles
+only (see below)." so the UI stops overclaiming, and rewrote the
+checkbox's new tooltip the same way. **Not fixed**: building an actual
+Summary/Q&A UI surface (where does it live — transcript viewer toolbar? a
+new dialog? what's the interaction model for "ask a question"?) is a real,
+separate feature-design decision — comparable in size to the Live tab —
+not something to improvise as a side effect of a hover-help pass.
+
+**Verified for real:**
+`pyright app core` 0/0/0. Targeted tests (`test_advanced_model_change.py`,
+`test_fixpack_bl_advanced.py`, `test_advanced_restore_defaults.py`,
+`test_fixpack_C.py`, `test_fixpack_Ib.py`, `test_google_cloud_stt.py`,
+`test_fixpack_gcloud.py`, `test_fixpack_gcloud_test_button_bundled_key.py`)
+all green, then the full split suite (`pytest tests/core -q` and
+`pytest tests/app tests/integrations -q`, split per this file's own
+documented late-suite-thread-pileup flake) both 100% green, exit code 0.
+Real `tk.Tk()` + real `AdvancedDialog` at both this machine's native
+screen and a monkeypatched 1366x768 laptop simulation (this file's own
+documented technique): no horizontal overflow, no pairwise widget-bbox
+overlap in either touched section at either size. Scoped `PrintWindow`
+screenshots (never a blind screen grab, same reasoning as round 3) of the
+AI Layer and Downloads sections, PLUS — the thing round 3's own notes say
+to do and that a screenshot of the parent dialog alone would miss — popped
+open all 4 touched/new tooltips for real (`<Enter>`, pumped past the
+450 ms grace delay, found the popup as the icon's own child Toplevel per
+this file's documented technique, screenshotted that Toplevel
+specifically) and visually confirmed every string renders wrapped and
+readable, not truncated.
+
+**Not done, deliberately out of scope this round:** the Summary/Q&A/
+action-items/translate UI gap in finding 3 above. The AI Layer's "always
+gray caption vs. hover icon" pattern coexistence (round 3 called this
+by-design; still true).
+
+---
+
 ## 🟢 2026-08-14 (latest) — Advanced dialog readability pass, 3 rounds, real screenshots
 
 Owner asked, after the Voice-Pro comparison work below: was that visually
