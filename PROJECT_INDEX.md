@@ -529,9 +529,9 @@ pip install pyright pytest
 ## Structure (auto-refreshed — do not hand-edit this block)
 
 - **Source files tracked:** 441
-- **Structure refreshed:** 2026-08-14T16:06:20
+- **Structure refreshed:** 2026-08-14T18:39:33
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +35 added · ~58 changed · -2 removed
+- **Drift since semantic build:** +35 added · ~63 changed · -2 removed
 
 > ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
 >
