@@ -4061,15 +4061,26 @@ class App(tk.Tk):
         ``_enqueue_watched_file`` (which is now safe because we're
         on the Tk thread). Re-arms itself every 250 ms while the
         app is alive.
+
+        ``_enqueue_watched_file`` is wrapped in its own try/except so
+        one path that keeps raising (e.g. a file the OS holds locked)
+        can't stall every other path queued behind it on every single
+        250 ms tick -- it used to share one try/except with the
+        ``get_nowait()`` loop, so any exception from the enqueue call
+        was caught the same way as the intended ``Empty``-means-stop
+        signal, ending that tick's drain early.
         """
         if self._closing:
             return
-        try:
-            while True:
+        while True:
+            try:
                 path = self._watched_path_queue.get_nowait()
+            except Empty:
+                break
+            try:
                 self._enqueue_watched_file(path)
-        except Exception:  # noqa: BLE001 — Empty + anything else, just stop draining
-            pass
+            except Exception:  # noqa: BLE001
+                logger.exception("Watched-folder enqueue failed for %r", path)
         if not self._closing:
             try:
                 self.after(250, self._drain_watched_paths)
