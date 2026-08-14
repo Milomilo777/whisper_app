@@ -1387,14 +1387,28 @@ class AdvancedDialog(tk.Toplevel):
         # process restarts. stop_all() forces a fresh worker (reading the new
         # backend) on the next transcribe — same mechanism as a model change.
         if _backend_changed:
-            try:
-                self.app.transcription_service.stop_all()
-            except Exception as e:  # noqa: BLE001
-                self.app.log(f"Could not restart the transcription worker: {e}")
-            self.app.log(
-                f"Transcription engine changed to {cfg['transcribe_backend']}. "
-                "The new engine will be used on the next transcription."
-            )
+            # stop_all() is a hard terminate, not the cooperative per-task
+            # Cancel -- if something is actually running, ask first rather
+            # than silently losing more progress than a normal Cancel
+            # would. Declining still saves the new backend above; it just
+            # lets the active job finish on its current worker instead of
+            # forcing a respawn right now.
+            confirm = getattr(self.app, "_confirm_backend_switch", None)
+            if not callable(confirm) or confirm(self):
+                try:
+                    self.app.transcription_service.stop_all()
+                except Exception as e:  # noqa: BLE001
+                    self.app.log(f"Could not restart the transcription worker: {e}")
+                self.app.log(
+                    f"Transcription engine changed to {cfg['transcribe_backend']}. "
+                    "The new engine will be used on the next transcription."
+                )
+            else:
+                self.app.log(
+                    f"Transcription engine changed to {cfg['transcribe_backend']}; "
+                    "the current worker keeps running its active job and "
+                    "will pick up the new engine once it's free."
+                )
         # Refresh the Transcribe-tab engine picker to match the saved backend.
         _refresh = getattr(self.app, "_refresh_engine_selector", None)
         if callable(_refresh):

@@ -175,3 +175,31 @@ def test_backend_change_stops_worker(monkeypatch: Any) -> None:
 
     assert cfg["transcribe_backend"] == "google_cloud_stt"
     assert stop_calls["count"] == 1, "switching the engine must restart the worker"
+
+
+def test_backend_change_skips_stop_all_when_switch_declined(monkeypatch: Any) -> None:
+    """Declining App._confirm_backend_switch (a worker is busy) must still
+    save the new backend but leave the active worker alone -- stop_all() is
+    a hard terminate, not the cooperative per-task Cancel."""
+    from app.dialogs import advanced as adv
+
+    monkeypatch.setattr(adv, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(
+        adv, "catalog_resolve_entry",
+        lambda _cfg, slug: {"name": slug, "url": "u", "md5": "m"},
+    )
+
+    cfg = {"whisper_model": "large-v3", "transcribe_backend": "faster_whisper"}
+    app, stop_calls = _fake_app(cfg)
+    app._confirm_backend_switch = lambda *_a, **_k: False
+    dlg = _advanced_fake(app, chosen_label="Large-v3", slug_map={"Large-v3": "large-v3"})
+    dlg._backend_display = _V(
+        "Google Cloud Speech-to-Text — service account (60 min/mo free)"
+    )
+
+    adv.AdvancedDialog._save_and_close(dlg)  # type: ignore[arg-type]
+
+    # The pick is still saved (the NEXT freshly-spawned worker will use it)...
+    assert cfg["transcribe_backend"] == "google_cloud_stt"
+    # ...but the busy worker was not force-stopped.
+    assert stop_calls["count"] == 0
