@@ -5,7 +5,56 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟡 2026-08-14 (latest) — v1.6.1 release attempted, reverted; version stays 1.6.0
+## 🟢 2026-08-14 (latest) — Codex adversarial review of `app/`, 9 fixes applied
+
+Owner asked for a controlled, scoped review: send only `app/` (the
+frontend) to Codex (`gpt-5.4-mini`) in an isolated sandbox with no
+access to the rest of the repo, get a hostile code review + UX/
+readability critique, then analyze and apply what's actually needed —
+not blindly.
+
+Codex returned 9 correctness findings + 7 UX findings. Verified every
+one against real source first. 8 were real and fixed (commits `01d189d`,
+`4a68e28`, `3387818`, `9587cce`, `e828fb1` — see `docs/CHANGELOG.md` for
+the user-facing list). 1 was checked and disproven: the claimed
+auto-transcribe "flips to transcribing before enqueue succeeds, no
+rollback" — reading the code shows the flip already only happens after
+a successful enqueue.
+
+**UX findings — analysis, not applied** (all point at one root cause:
+too many settings surfaced directly instead of grouped at a coarser
+grain — exactly what 4 rounds of hover-help/nav-sidebar work this same
+day were coping with, not fixing at the root):
+
+1. Transcribe tab, Advanced dialog, and About all expose overlapping
+   settings — three surfaces for the same concepts.
+2. Advanced dialog is still too big; the nav sidebar is a symptom, not
+   a fix.
+3. Download tab is a control-dump (12+ things on one screen).
+4. Transcript viewer does too much in one modal (player + search +
+   editor + speaker tool + JSON editor).
+5. Heavy reliance on hover-only help icons — weak for touch/keyboard/
+   discoverability.
+
+Applied the one safe, scoped item (hub-setup's "Cancel" button, which
+doesn't cancel, relabeled "Skip for now" — commit `3387818`). The rest
+are real product/redesign decisions (which settings move where, whether
+to split dialogs) that need the owner's direction, not a unilateral
+restructure — recommend as a separate, deliberately-scoped session if
+wanted.
+
+Gate: `pyright app core` 0/0/0; full `pytest tests/core -q` and
+`pytest tests/app tests/integrations -q` both green throughout.
+
+Also this session: recorded two durable rules in `CLAUDE.md` after a
+release was cut and a macOS build dispatched without being asked —
+releases now need the owner's explicit go-ahead each time, and macOS
+builds are permanently off-limits (owner: Claude's macOS builds have
+never worked for them). See `CLAUDE.md` for both.
+
+---
+
+## 🟡 2026-08-14 — v1.6.1 release attempted, reverted; version stays 1.6.0
 
 After the round-4 fixes below, a v1.6.1 release was cut (version bump,
 Windows build, tag, `gh release create`) and a macOS CI build was
