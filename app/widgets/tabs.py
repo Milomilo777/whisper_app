@@ -1041,7 +1041,7 @@ def build_tiling_tab(app: "App", parent: ttk.Frame) -> None:
     # Restore the saved monitor selection (spatial indices from core.monitors).
     saved_sel = cfg.get("tiling_selected_monitors") or []
     app.tiling_selected_monitors = [
-        int(i) for i in saved_sel if isinstance(i, int)
+        int(i) for i in saved_sel if isinstance(i, (int, str))
     ]
 
     app.tiling_monitors_info_var = tk.StringVar(value="")
