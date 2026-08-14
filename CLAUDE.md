@@ -107,9 +107,8 @@ v1.3.5 release. Pre-authorised for all future hands-off sessions:
 The following remain forbidden unless the user explicitly
 asks for them in the current session:
 
-  - Building or dispatching a macOS build in ANY form — see the
-    dedicated "macOS builds" section below. This is a hard no, not a
-    "confirm first."
+  - Building or dispatching a macOS build in any form (see "macOS
+    builds — do not build" below) — not a "confirm first," never do it.
   - Code-signing the exe
   - Editing `.git/config`
   - Deleting or force-moving a **published release tag** (`v1.0.3`+ are
@@ -123,34 +122,20 @@ asks for them in the current session:
     "keep every version" rule. The local installers under `dist_installer/`
     + the git version tags remain as the backup, so pruning is recoverable.
 
-## macOS builds — NEVER, under any circumstances (2026-08-14, owner request, repeated)
+## macOS builds — do not build (2026-08-14, owner request, repeated)
 
-Do **not** build, dispatch, or upload a macOS artifact for this project —
-not `platform/macos/pyinstaller/`'s local PyInstaller `.app`/`.dmg`
-pipeline, not `gh workflow run macos-app.yml`, not anything else. This
-applies even when a fix genuinely touches cross-platform `app/`/`core/`
-code and would otherwise qualify under "release assets must track every
-bug fix" above — macOS is a **standing exception** to that rule.
+Never build or dispatch a macOS artifact for this project — not the
+local `platform/macos/pyinstaller/` `.app`/`.dmg` pipeline, not
+`gh workflow run macos-app.yml`. Standing exception to "release assets
+must track every bug fix" above, even for a cross-platform fix.
 
-**Why:** the owner has said this more than once now (most recently
-2026-08-14, after a session dispatched `macos-app.yml` for a v1.6.1
-candidate without asking first): *"نسخه‌های تو اصلا کار نمی‌کنند"* — the
-macOS builds Claude has produced do not work for the owner, despite the
-CI workflow's own smoke test passing and its artifacts having shipped on
-past GitHub releases (v1.5.0, v1.3.9). CI-green is not evidence this is
-fixed — every prior "validated" claim about the macOS pipeline in this
-repo's own docs (PROJECT_INDEX.md, SESSION_HANDOFF_NEXT.md,
-`platform/macos/README.md`) has turned out to be wrong from the owner's
-actual real-machine experience. Treat those claims as unverified/stale
-if you encounter them, not as permission to build macOS again.
+**Why:** the owner has repeatedly said Claude-built macOS artifacts do
+not work for them, regardless of the CI workflow's own passing smoke
+test. Treat this repo's "macOS validated" claims (PROJECT_INDEX.md,
+SESSION_HANDOFF_NEXT.md, `platform/macos/README.md`) as unverified.
 
-**If a session needs to mention macOS status**: say it is not currently
-built by Claude sessions, point at whichever `.dmg` a human last supplied
-(see git history / past releases), and stop there — do not offer to
-build a new one, do not dispatch the workflow "just to check," and do not
-treat an explicit macOS request from someone OTHER than the owner
-(e.g. relayed secondhand) as sufficient — confirm with the owner directly
-first.
+**How to apply:** if macOS status needs mentioning, point at the last
+human-supplied `.dmg` and stop — do not offer or dispatch a new build.
 
 ## Style & scope
 
