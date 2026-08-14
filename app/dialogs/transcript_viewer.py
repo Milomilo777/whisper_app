@@ -788,7 +788,15 @@ class TranscriptViewer(tk.Toplevel):
                 (seg.get("text") or "").strip()
             )
         )
-        menu.tk_popup(event.x_root, event.y_root)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            # tk_popup grabs the pointer for the duration of the popup; a
+            # release is supposed to happen automatically on dismiss, but a
+            # missed one is a known Tk fragility (stuck grabs / unresponsive
+            # UI afterward). grab_release() is a safe no-op if there is
+            # nothing left to release.
+            menu.grab_release()
 
     def _open_json_folder(self) -> None:
         folder = os.path.dirname(self.json_path) or "."
