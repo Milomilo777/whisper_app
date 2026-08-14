@@ -223,14 +223,17 @@ class _PollApp:
             self.download_events.put(e)
         self._closing = False
         self.rearmed = False
+        self.rearm_count = 0
+        self.refresh_count = 0
         self.download_current = None
 
     def after(self, _ms, _cb):  # noqa: ANN001
         # Record that poll re-armed itself (proof the pump survived).
         self.rearmed = True
+        self.rearm_count += 1
 
     def refresh_download_queue(self):
-        pass
+        self.refresh_count += 1
 
     def log(self, *a, **k):  # noqa: ANN002, ANN003
         pass
@@ -284,6 +287,57 @@ def test_poll_one_bad_event_does_not_block_later_good_events():
     DownloadService(app).poll()
     assert task2.progress == 55
     assert app.rearmed is True
+
+
+def test_poll_rearms_exactly_once_per_tick_not_per_event():
+    """Regression guard (2026-08-14, self-caught while fact-checking a
+    Gemini review finding): _dispatch_event used to end with its own
+    unconditional app.after(300, self.poll) call -- left over from when
+    it was split out of poll()'s own body. That meant EVERY drained event
+    scheduled its own independent poll() timer on top of the one poll()
+    itself schedules at the end, so N events in one tick left N+1
+    redundant timers in flight -- compounding every tick a download was
+    actively producing progress/log lines. after() must fire exactly
+    once per poll() call, no matter how many events were in the queue."""
+    tasks = [_Task() for _ in range(5)]
+    app = _PollApp([("progress", t, 10.0 * i) for i, t in enumerate(tasks)])
+    DownloadService(app).poll()
+    assert app.rearm_count == 1
+
+
+def test_poll_refreshes_queue_once_per_tick_not_per_event():
+    """Companion fix: refresh_download_queue() used to run inside the
+    while loop (once per event) instead of once per batch -- wasteful
+    Treeview rebuilds during a fast-progressing download."""
+    tasks = [_Task() for _ in range(5)]
+    app = _PollApp([("progress", t, 10.0 * i) for i, t in enumerate(tasks)])
+    DownloadService(app).poll()
+    assert app.refresh_count == 1
+
+
+def test_poll_skips_refresh_when_queue_was_already_empty():
+    """No events drained -> nothing changed -> no need to rebuild the
+    Treeview at all."""
+    app = _PollApp([])
+    DownloadService(app).poll()
+    assert app.refresh_count == 0
+    assert app.rearm_count == 1  # still re-arms so the pump keeps running
+
+
+def test_poll_survives_refresh_download_queue_raising():
+    """A failure inside refresh_download_queue() itself (e.g. a Tk error
+    while rebuilding rows) must not skip the app.after() re-arm either --
+    same wedge-class risk as a bad event, different call site."""
+    class _BrokenRefreshApp(_PollApp):
+        def refresh_download_queue(self):
+            self.refresh_count += 1
+            raise RuntimeError("boom")
+
+    task = _Task()
+    app = _BrokenRefreshApp([("progress", task, 50.0)])
+    DownloadService(app).poll()
+    assert app.refresh_count == 1
+    assert app.rearm_count == 1
 
 
 # --------------------------------------------------------------------------

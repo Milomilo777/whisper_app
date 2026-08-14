@@ -1392,11 +1392,13 @@ class DownloadService:
         # download work starts during teardown (Audit P2-5).
         if getattr(app, "_closing", False):
             return
+        processed_any = False
         while True:
             try:
                 kind, task, payload = app.download_events.get_nowait()
             except Empty:
                 break
+            processed_any = True
 
             try:
                 self._dispatch_event(app, kind, task, payload)
@@ -1407,7 +1409,17 @@ class DownloadService:
                 # ALL further download progress/done/error events.
                 logger.exception("Download event handling failed for %r", kind)
 
-            app.refresh_download_queue()
+        if processed_any:
+            # Rebuild the Treeview ONCE per tick, after the whole batch is
+            # drained -- not once per event. A single active download can
+            # emit dozens of progress/log lines per tick; rebuilding the
+            # full Treeview that many times in one frame was pure waste.
+            # Guarded the same way as _dispatch_event above: a failure here
+            # must not skip the re-arm below and wedge the pump.
+            try:
+                app.refresh_download_queue()
+            except Exception:  # noqa: BLE001
+                logger.exception("Download queue refresh failed")
 
         app.after(300, self.poll)
 
@@ -1450,10 +1462,8 @@ class DownloadService:
             if app.download_current is task:
                 app.download_current = None
             self.process_queue()
-
-            app.refresh_download_queue()
-
-        app.after(300, self.poll)
+        else:
+            logger.warning("Unrecognized download event kind: %r", kind)
 
     def _recover_saved_path(self, task: "VideoDownloadTask", parsed: str | None) -> str | None:
         """Find the file a finished download actually produced on disk.
