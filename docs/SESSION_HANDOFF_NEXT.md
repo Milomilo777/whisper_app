@@ -5,7 +5,43 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-14 (latest) — Opus adversarial review of `app/`, 8 fixes applied
+## 🔵 2026-08-14 — Two owner requests for the NEXT build (not yet done)
+
+Both came in while the v1.6.0 asset rebuild below was already running;
+owner explicitly said these apply to the next build, not a reason to
+stop the in-flight rebuild. Neither is implemented yet.
+
+1. **Light theme by default, not dark.** `app.py:681`:
+   ```python
+   self.theme_var = tk.StringVar(value=self.app_config.get("theme", "dark"))
+   ```
+   Change the fallback to `"light"`. One-word change, low risk — the
+   `theme_var` value is user-overridable in Settings either way, this
+   only changes what a first-run user with no `config.json` sees.
+
+2. **Video Tiling ("video wall") must not be on/installed by default —
+   owner's exact words**: *"Do not include the video wall feature:
+   must be tik or boxed by default, meaning no installing by default."*
+   **Needs clarification before implementing** — checked the source and
+   the literal reading doesn't map cleanly onto anything that exists:
+   - The only tiling-specific *dependency* is `screeninfo` in
+     `requirements.txt` (~line 72), and it's already optional/lazy —
+     its own comment says `core.monitors` falls back to a stdlib
+     ctypes `EnumDisplayMonitors` enumeration when it's absent, "never
+     crashes the app." There's nothing installed-by-default here to
+     turn off in the way "no installing by default" implies.
+   - The Video Tiling tab itself (`app/widgets/tabs.py`) has no
+     existing enable/disable toggle — it's just always one of the tabs.
+   - Best guess: owner wants the Tiling tab hidden/collapsed behind an
+     opt-in checkbox in Settings, unticked by default (matches "tick or
+     boxed by default"), rather than a dependency/installer change. But
+     this is a guess — confirm with the owner which of these (or
+     something else entirely) is actually wanted before touching
+     anything, rather than implementing the wrong one.
+
+---
+
+## 🟢 2026-08-14 — Opus adversarial review of `app/`, 8 fixes applied
 
 Owner asked for a third review round, same "isolated `app/`, review,
 then I verify + apply if correct" pattern as the Codex and Gemini
