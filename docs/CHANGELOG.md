@@ -4,6 +4,13 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-08-14
+
+> Advanced-dialog readability follow-through + the default Live-tab
+> microphone fix. No new capability — a real bug fix (Google Cloud STT
+> diarization was silently discarded on save) and UX polish accumulated
+> since v1.6.0. pyright `app/ core/` 0/0/0; full hermetic suite green.
+
 ### Added
 
 - **LAN web page: source preview, Reset, Copy-transcript, Recent jobs** —
