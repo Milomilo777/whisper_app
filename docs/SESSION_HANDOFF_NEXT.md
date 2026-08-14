@@ -5,6 +5,20 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟡 2026-08-14 (latest) — v1.6.1 release attempted, reverted; version stays 1.6.0
+
+After the round-4 fixes below, a v1.6.1 release was cut (version bump,
+Windows build, tag, `gh release create`) and a macOS CI build was
+dispatched. The owner stopped both mid-turn: no release wanted yet (more
+work pending first), and macOS must never be built again (see `CLAUDE.md`
+"macOS builds — do not build"). Reverted: the GitHub release + tag
+deleted, the macOS CI run cancelled, the version-bump commits reverted
+(`git revert`, version is back to `1.6.0` everywhere). The round-4 code
+fixes below are unaffected and already shipped to `master`. Next session:
+do not cut a release or touch macOS without the owner asking first.
+
+---
+
 ## 🟢 2026-08-14 (latest) — Advanced dialog readability pass round 4: a real bug fixed, 3 more hover-help gaps closed
 
 Owner asked to continue the readability pass below more deeply, hands-off:
