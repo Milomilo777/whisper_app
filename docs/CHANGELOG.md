@@ -80,6 +80,20 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   `-O`; the transcript viewer's right-click menu could leave a stuck
   pointer grab; and the hub-setup dialog's "Cancel" button (which doesn't
   cancel) is now labeled "Skip for now".
+- **Eight more fixes from a second adversarial review** (same isolated
+  `app/`, this time `claude-opus-4-6-thinking`) — a download-service
+  refactor from the round above had left a duplicate self-re-arming timer
+  that compounded on every progress event; a secondary-monitor tooltip
+  could render on the wrong screen edge (negative-x `wm_geometry`); one
+  locked/failing file in a watched folder could stall every other file
+  queued behind it on every drain tick; the Live tab could raise
+  `UnboundLocalError` inside its own crash handler; the model-download
+  dialog could close with no error shown if the underlying exception had
+  no message; the console's Copy (not Copy All) silently did nothing while
+  the log widget sat disabled; a hand-edited config with quoted monitor
+  indices was silently dropped instead of coerced; and Esc now confirms
+  before cancelling a running transcription or download instead of killing
+  it on one accidental keystroke.
 
 ## [1.6.0] — 2026-08-12
 

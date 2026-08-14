@@ -5,7 +5,79 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-14 (latest) — Self-review round: real running-app QA, 1 bug found + fixed
+## 🟢 2026-08-14 (latest) — Opus adversarial review of `app/`, 8 fixes applied
+
+Owner asked for a third review round, same "isolated `app/`, review,
+then I verify + apply if correct" pattern as the Codex and Gemini
+rounds below — this time with `claude-opus-4-6-thinking` via the
+newly-installed Antigravity CLI (~45 findings, 6 parts: bugs,
+except-pass patterns, architecture, duplication, UX, readability).
+
+**Fixed (8, all pyright-clean + tested — see `docs/CHANGELOG.md`)**:
+the download-service double-re-arm (already caught + fixed in this
+session's own self-review before reading Opus's report — same bug,
+independent discovery); tooltip negative-x `wm_geometry`; watched-folder
+drain stalling behind one bad path; Live tab `UnboundLocalError` in its
+own except-block; model-download dialog swallowing a message-less
+exception; console Copy on a disabled Text widget; hand-edited config
+string monitor-indices; Esc-cancel with no confirmation.
+
+**Verified and deliberately NOT changed** (checked against real source,
+not taken on the review's word):
+- `unbind_all` on mouse-wheel unbind in `advanced.py` — real Tk
+  behavior, but already mitigated: `_teardown_mousewheel()` runs on
+  both close paths specifically because of this, and the dialog is
+  modal (`grab_set()`), so nothing else can be interacted with while
+  it's open anyway.
+- "Permanent loading spinner" after a worker crash — `model_loading`
+  can end up stale, but grepped the entire `app/` tree and **nothing
+  reads that attribute** to drive any widget. No visible spinner
+  exists to get stuck. Overstated by the review.
+- Runtime `self.__class__` mutation for drag-and-drop — accurately
+  described, but it's a deliberate fix with its own comment citing a
+  real prior bug ("silently never registered in v0.7.1"), not an
+  oversight. Not touching working, historically-motivated code for a
+  hypothetical `super()`/`isinstance()` problem with no observed case.
+- Hardware wizard `AttributeError` on `recommended.slug` — **fabricated**.
+  `first_supported_tier()`'s real return type is `Tier`, never `None`
+  (falls back to `tiers[-1]`), and the one call site already has
+  `if not self._tiers: return` immediately above it. Same class of
+  hallucination as two Gemini findings earlier this session — confident,
+  specific, wrong.
+- The `except Exception: pass` pattern flagged ~60+ times across the
+  codebase — real and consistent, but it's this codebase's established,
+  almost always comment-justified convention (seen and used repeatedly
+  this session), not a bug. Rewriting 60+ call sites is a refactor the
+  owner hasn't asked for, not a fix.
+- `bisect_right` assuming sorted segment timestamps in the transcript
+  viewer — real in theory, but the code's own docstring already documents
+  the sorted assumption as a deliberate O(log N)-vs-O(N) tradeoff, and
+  Whisper's own output is always chronological. Low real risk; a
+  load-time sort would remove it cheaply if the owner wants it done.
+
+**Needs an owner decision, not a unilateral fix** — the watched-folder
+dedup in `_enqueue_watched_file` (`app.py`) only blocks re-enqueue while
+an existing entry for the same path is *not yet finished*; once a file
+reaches "finished," a later duplicate/delayed filesystem event for that
+same original write can slip through and re-enqueue it. The review's
+suggested fix (also block "finished") would also block the arguably
+useful case of a genuinely-updated file re-appearing under the same
+name in the watched folder — so this is a product-behavior call, not
+a one-line bug fix. Flagging for next session rather than guessing.
+
+**Not reviewed this round**: Parts 3/4/6 of the report (God-object
+`App` class breakup, ~6 duplicated-code sites, readability nits) are
+refactor-scale, not bugs — out of scope for a "find and fix issues"
+pass on a shipping app. Available as a deliberate follow-up if wanted.
+
+Gate: `pyright app core` 0/0/0; full `pytest tests/core -q` (minus the
+pre-existing-broken `test_v08_real_file_e2e.py`, unrelated environment
+issue in `core/model_manager.ensure_model()`, not touched this session)
+green throughout.
+
+---
+
+## 🟢 2026-08-14 — Self-review round: real running-app QA, 1 bug found + fixed
 
 Owner asked for a second, independent round — this time without Codex,
 approach of my own choosing. Differentiated from the round below on
