@@ -59,6 +59,14 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   opened the Live tab. Both now ship by default, like the app's other small
   UI dependencies (`tkinterdnd2`, `python-vlc`), instead of requiring a
   manual `pip install` a non-technical user has no way to run.
+- **Download tab: typing a Start/End time directly left the position
+  slider stale, and the next drag on either slider silently discarded
+  the typed value.** `_on_download_scale` only ever wrote slider ->
+  field, never the reverse, so a manually-typed time was invisible to
+  the sliders until something moved one and snapped it back to 0:00:00.
+  Typing now moves the matching slider too. Found in a same-day
+  self-review (real running app, not just source reading), verified
+  with a real before/after screenshot.
 - **Nine fixes from an adversarial frontend review** (`app/` only, isolated
   from the rest of the repo) — download queue selection was lost on every
   event tick (now preserved, matching the transcription queue); the yt-dlp

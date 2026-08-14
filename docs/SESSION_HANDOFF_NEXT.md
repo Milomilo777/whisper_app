@@ -5,7 +5,51 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-14 (latest) — Codex adversarial review of `app/`, 9 fixes applied
+## 🟢 2026-08-14 (latest) — Self-review round: real running-app QA, 1 bug found + fixed
+
+Owner asked for a second, independent round — this time without Codex,
+approach of my own choosing. Differentiated from the round below on
+purpose: Codex only did a static read of `app/`; this round also
+**launched the real `App()`** (not a stub, not `gui.py` as a black-box
+subprocess — the same class `app.run()` uses) and drove it: typed into
+fields, dragged sliders, switched tabs, opened Advanced, all via real
+Tk `update()` pumping + `PrintWindow` screenshots (this repo's own
+established technique).
+
+**Found and fixed**: the Download tab's Start/End time fields and their
+paired position sliders only synced one way (slider -> field). Typing a
+time directly left the slider stale; the next drag on EITHER slider
+silently snapped the typed value back to the stale position. Confirmed
+with a real before/after screenshot in the running app (slider knob
+visibly moves after typing "0:00:45"), not just a unit test. Fix +
+tests in `docs/CHANGELOG.md`.
+
+**Also checked and ruled out** (screenshot looked suspicious, verified
+against real widget state before concluding anything): the Transcribe
+tab's engine-status line reads "Checking…" transiently then resolves to
+"✓ Ready" within ~4s (not stuck); the Queue/Download action-bar buttons
+ARE genuinely disabled with nothing selected (`instate(['disabled'])`
+true) — the dark theme just doesn't visually contrast disabled buttons
+much, that's not a bug.
+
+Read through (no other bugs found): `format_service.py`,
+`integrations_service.py`, `model_download.py`, `model_loading.py`,
+`hardware_wizard.py`, `statistics.py`, `console.py`, `tray.py`,
+`observability.py`, `error_dialog.py`, `domain/tasks.py`, `live_tab.py`
+in full, plus the drag-and-drop and watched-folder paths in `app.py`.
+Being honest rather than padding: after this pass, returns were
+diminishing — one minor, low-confidence observation not acted on
+(`_drain_watched_paths` silently drops a single watched-folder file if
+`_enqueue_watched_file` raises on it specifically, no log line; the
+re-arm itself is NOT affected, so it's not the wedge-class bug, just a
+missing log line on a rare path).
+
+Gate: `pyright app core` 0/0/0; full `pytest tests/core -q` and
+`pytest tests/app tests/integrations -q` both green.
+
+---
+
+## 🟢 2026-08-14 — Codex adversarial review of `app/`, 9 fixes applied
 
 Owner asked for a controlled, scoped review: send only `app/` (the
 frontend) to Codex (`gpt-5.4-mini`) in an isolated sandbox with no
