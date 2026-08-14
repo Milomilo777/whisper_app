@@ -79,10 +79,10 @@ affected release assets are rebuilt and re-uploaded — a fix sitting
 only in source control doesn't help a user running the installed app.
 Default: rebuild + `gh release upload vX.Y.Z ... --clobber` the
 Windows Setup-Standard + Portable at minimum (see `docs/BUILD.md`
-"Rebuild without bumping the version"); also rebuild macOS
-(`docs/BUILD.md` "Step 4b") whenever the fix touches non-Windows-
-specific code (i.e. almost always, since `core/` and `app/` are
-cross-platform).
+"Rebuild without bumping the version"). **Do NOT rebuild macOS** —
+see the "macOS builds — NEVER" section below; that rule overrides
+this one for macOS specifically, even though `core/` and `app/` are
+cross-platform.
 
 When a build is about to start (PyInstaller / Inno Setup):
 
@@ -107,6 +107,9 @@ v1.3.5 release. Pre-authorised for all future hands-off sessions:
 The following remain forbidden unless the user explicitly
 asks for them in the current session:
 
+  - Building or dispatching a macOS build in ANY form — see the
+    dedicated "macOS builds" section below. This is a hard no, not a
+    "confirm first."
   - Code-signing the exe
   - Editing `.git/config`
   - Deleting or force-moving a **published release tag** (`v1.0.3`+ are
@@ -119,6 +122,35 @@ asks for them in the current session:
     kept too). 2026-05-26 owner decision — this REVERSES the 2026-05-25
     "keep every version" rule. The local installers under `dist_installer/`
     + the git version tags remain as the backup, so pruning is recoverable.
+
+## macOS builds — NEVER, under any circumstances (2026-08-14, owner request, repeated)
+
+Do **not** build, dispatch, or upload a macOS artifact for this project —
+not `platform/macos/pyinstaller/`'s local PyInstaller `.app`/`.dmg`
+pipeline, not `gh workflow run macos-app.yml`, not anything else. This
+applies even when a fix genuinely touches cross-platform `app/`/`core/`
+code and would otherwise qualify under "release assets must track every
+bug fix" above — macOS is a **standing exception** to that rule.
+
+**Why:** the owner has said this more than once now (most recently
+2026-08-14, after a session dispatched `macos-app.yml` for a v1.6.1
+candidate without asking first): *"نسخه‌های تو اصلا کار نمی‌کنند"* — the
+macOS builds Claude has produced do not work for the owner, despite the
+CI workflow's own smoke test passing and its artifacts having shipped on
+past GitHub releases (v1.5.0, v1.3.9). CI-green is not evidence this is
+fixed — every prior "validated" claim about the macOS pipeline in this
+repo's own docs (PROJECT_INDEX.md, SESSION_HANDOFF_NEXT.md,
+`platform/macos/README.md`) has turned out to be wrong from the owner's
+actual real-machine experience. Treat those claims as unverified/stale
+if you encounter them, not as permission to build macOS again.
+
+**If a session needs to mention macOS status**: say it is not currently
+built by Claude sessions, point at whichever `.dmg` a human last supplied
+(see git history / past releases), and stop there — do not offer to
+build a new one, do not dispatch the workflow "just to check," and do not
+treat an explicit macOS request from someone OTHER than the owner
+(e.g. relayed secondhand) as sufficient — confirm with the owner directly
+first.
 
 ## Style & scope
 
