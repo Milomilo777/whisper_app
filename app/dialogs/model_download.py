@@ -136,7 +136,10 @@ class ModelDownloadDialog(tk.Toplevel):
             self.not_writable_dir = getattr(e, "filename", None) or str(e)
             self.success = False
         except Exception as e:  # noqa: BLE001
-            self.error = str(e)
+            # str(e) can be "" for an exception raised with no message
+            # (e.g. raise ValueError()) -- fall back so `if self.error:`
+            # below still shows a dialog instead of closing silently.
+            self.error = str(e) or repr(e) or "Unknown error"
             self.success = False
         finally:
             self.done = True
