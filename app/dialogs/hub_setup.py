@@ -18,13 +18,14 @@ UX:
   |                                                            |
   |  ☐ Use a different folder I'll pick                        |
   |                                                            |
-  |               [ Use default ]   [ OK ]   [ Cancel ]        |
+  |          [ Use default ]   [ OK ]   [ Skip for now ]       |
   +-----------------------------------------------------------+
 
 * "OK" persists whatever's in the entry box and closes.
 * "Use default" resets the entry to ``core.hub.default_hub_folder()``
   and then closes (same effect as OK with the default value).
-* "Cancel" closes without saving — the next launch will fire the
+* "Skip for now" (formerly labeled "Cancel", which read as "abort" —
+  it does not) closes without saving — the next launch will fire the
   dialog again, but the model loader uses the default value for
   this session so the user can still transcribe.
 
@@ -148,7 +149,11 @@ class HubSetupDialog(tk.Toplevel):
 
         actions = ttk.Frame(body)
         actions.pack(fill="x", pady=(4, 0))
-        ttk.Button(actions, text="Cancel", command=self._on_cancel).pack(
+        # "Cancel" read as "abort" to at least one reviewer, when the real
+        # behavior is "don't decide now" -- it still lets the app proceed
+        # with the default for this session (see _on_cancel's docstring)
+        # and asks again next launch, so a clearer label matches that.
+        ttk.Button(actions, text="Skip for now", command=self._on_cancel).pack(
             side="right", padx=(8, 0)
         )
         ttk.Button(
@@ -231,8 +236,16 @@ class HubSetupDialog(tk.Toplevel):
         self._chosen_path = path
         self._config["hub_folder"] = path
 
-        # Also update the model folder
-        self._config["model_path"] = str(_hub.model_folder_for(path, "faster-whisper-large-v3"))
+        # Also update the model folder -- for whichever model is actually
+        # configured (this dialog also reopens mid-flow to retry a
+        # non-writable folder for a download already in progress, e.g. a
+        # user-picked "medium" model; hardcoding large-v3 here used to
+        # silently redirect model_path at the wrong model's cache folder).
+        model = self._config.get("model")
+        model_name = model.get("name") if isinstance(model, dict) else ""
+        if not isinstance(model_name, str) or not model_name.strip():
+            model_name = "faster-whisper-large-v3"
+        self._config["model_path"] = str(_hub.model_folder_for(path, model_name))
 
         try:
             self._save(self._config)

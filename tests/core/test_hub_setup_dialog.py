@@ -132,6 +132,38 @@ def test_dialog_use_default_resets_entry_and_saves(tk_root, tmp_path, monkeypatc
     assert dlg.saved is True
 
 
+def test_dialog_ok_derives_model_path_from_the_configured_model(tk_root, tmp_path, monkeypatch):
+    """_on_ok() must build model_path for whichever model is actually
+    configured, not hardcode faster-whisper-large-v3.
+
+    Regression guard: this dialog also reopens mid-flow to retry a
+    non-writable folder for a download already in progress (see
+    ModelDownloadDialog._handle_not_writable), which can be for ANY
+    model the user picked -- hardcoding large-v3 here used to silently
+    redirect model_path at the wrong model's cache folder.
+    """
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
+    cfg = {"model": {"name": "faster-whisper-medium"}}
+    dlg = HubSetupDialog(tk_root, cfg, save=lambda _c: None)
+    custom = str(tmp_path / "my_custom_hub")
+    dlg._path_var.set(custom)
+    dlg._on_ok()
+    assert "faster-whisper-medium" in cfg["model_path"]
+    assert "large-v3" not in cfg["model_path"]
+
+
+def test_dialog_ok_falls_back_to_default_model_when_none_configured(tk_root, tmp_path, monkeypatch):
+    """No 'model' key yet (genuine first run) still resolves to the app's
+    real default, matching the pre-fix hardcoded behavior for that case."""
+    monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
+    cfg: dict = {}
+    dlg = HubSetupDialog(tk_root, cfg, save=lambda _c: None)
+    custom = str(tmp_path / "my_custom_hub")
+    dlg._path_var.set(custom)
+    dlg._on_ok()
+    assert "faster-whisper-large-v3" in cfg["model_path"]
+
+
 def test_dialog_cancel_does_not_save(tk_root, tmp_path, monkeypatch):
     monkeypatch.setattr(hub, "default_hub_folder", lambda: tmp_path / hub.HUB_SUBFOLDER_NAME)
     cfg = {"hub_folder": ""}
