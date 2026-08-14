@@ -722,6 +722,16 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
         trim_frame, textvariable=app.download_end_time_var, width=12
     )
     end_entry.grid(row=1, column=1, sticky="w", padx=(4, 8), pady=(2, 0))
+    # Keep the position sliders in sync when Start/End is typed directly
+    # instead of dragged -- see App._sync_download_scale_from_text for why
+    # this matters (a stale slider position silently overwrites a typed
+    # value the next time either knob moves).
+    app.download_start_time_var.trace_add(
+        "write", lambda *_a: app._sync_download_scale_from_text("start")
+    )
+    app.download_end_time_var.trace_add(
+        "write", lambda *_a: app._sync_download_scale_from_text("end")
+    )
     # Position sliders (0 .. video length) that fill the Start/End fields by
     # dragging. Disabled until a video is probed — the format probe calls
     # app.set_download_duration() with the real length (0 = live/unknown).

@@ -2742,6 +2742,45 @@ class App(tk.Tk):
                 if dur > 0 else ""
             )
 
+    def _sync_download_scale_from_text(self, which: str) -> None:
+        """Move the position slider to match its Start/End field after a
+        direct edit (typing, not dragging).
+
+        _on_download_scale only writes slider -> field. Without this, typing
+        a value directly left the slider at its old (usually 0:00:00)
+        position -- invisible until the user later touched EITHER slider,
+        at which point that slider's stale position silently overwrote the
+        just-typed value back to wherever the knob visually still sat.
+        """
+        if getattr(self, "_suppress_scale_cb", False):
+            return
+        dur = getattr(self, "_download_duration", 0.0)
+        if dur <= 0:
+            return
+        scale = getattr(
+            self, "download_start_scale" if which == "start" else "download_end_scale",
+            None,
+        )
+        if scale is None:
+            return
+        var = self.download_start_time_var if which == "start" else self.download_end_time_var
+        try:
+            raw = var.get()
+        except Exception:  # noqa: BLE001
+            return
+        from app.services.download_service import _parse_timecode
+        secs = _parse_timecode(raw)
+        if secs is None:
+            # Mid-typing (e.g. "0:0") or garbled -- leave the slider alone
+            # rather than snapping it to a meaningless position.
+            return
+        secs = max(0.0, min(dur, secs))
+        self._suppress_scale_cb = True
+        try:
+            scale.set(secs)
+        finally:
+            self._suppress_scale_cb = False
+
     def _on_download_scale(self, which: str, value: str) -> None:
         """A position slider moved — write its timecode into the matching
         Start/End field (0:00:00 stays the 'unset' sentinel).

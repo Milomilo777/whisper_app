@@ -407,3 +407,56 @@ def test_download_end_slider_clamps_before_start(App):
     assert a.download_end_time_var.get() == "0:00:15"
     assert a.download_start_time_var.get() == "0:00:15"
     assert a.download_start_scale.values == [15.0]
+
+
+# --- _sync_download_scale_from_text: typing a Start/End field must move
+# the paired slider too (2026-08-14, self-review). Before this fix,
+# _on_download_scale only wrote slider -> field; a value typed directly
+# left the slider at its stale (usually 0:00:00) position, and the next
+# drag on EITHER knob silently snapped the typed value back to wherever
+# that slider still visually sat.
+
+
+def test_typing_start_field_syncs_the_start_slider(App):
+    a = _download_range_app(App)
+    a.download_start_time_var.set("0:00:45")
+    App._sync_download_scale_from_text(a, "start")
+    assert a.download_start_scale.values == [45.0]
+
+
+def test_typing_end_field_syncs_the_end_slider(App):
+    a = _download_range_app(App)
+    a.download_end_time_var.set("0:01:30")
+    App._sync_download_scale_from_text(a, "end")
+    assert a.download_end_scale.values == [90.0]
+
+
+def test_sync_ignores_unparseable_text(App):
+    """Mid-typing / garbled text must not snap the slider to a meaningless
+    position -- it should just leave the slider where it was."""
+    a = _download_range_app(App)
+    a.download_start_time_var.set("garbage")
+    App._sync_download_scale_from_text(a, "start")
+    assert a.download_start_scale.values == []
+
+
+def test_sync_is_a_noop_while_suppressed(App):
+    """_on_download_scale's cross-snap path raises _suppress_scale_cb
+    before writing the OTHER field's var -- the sync must not re-drive a
+    slider that code path is already positioning explicitly (would be
+    redundant at best, a feedback loop at worst)."""
+    a = _download_range_app(App)
+    a._suppress_scale_cb = True
+    a.download_start_time_var.set("0:00:45")
+    App._sync_download_scale_from_text(a, "start")
+    assert a.download_start_scale.values == []
+
+
+def test_sync_ignored_when_duration_unknown(App):
+    """No probed video length yet -- there is nothing meaningful to sync
+    the (disabled) slider to."""
+    a = _download_range_app(App)
+    a._download_duration = 0.0
+    a.download_start_time_var.set("0:00:45")
+    App._sync_download_scale_from_text(a, "start")
+    assert a.download_start_scale.values == []
