@@ -41,6 +41,81 @@ stop the in-flight rebuild. Neither is implemented yet.
 
 ---
 
+## 🟢 2026-08-14 — v1.6.0 Windows assets rebuilt again, verified with a real E2E smoke test (18 more fixes since the 08-12 rebuild)
+
+Continuation of a session that hit the usage cap mid-rebuild; this entry
+closes it out. Since the last in-place `v1.6.0` asset rebuild (2026-08-12,
+the usage-stats fix), 18 more fixes had landed on `master` that touch
+shipped `app/`/`core/` code: the Codex adversarial review (9), the
+self-review round (1, the Download tab slider-sync bug), and the Opus
+adversarial review (8) below. Per `CLAUDE.md`'s "release assets must
+track every bug fix" rule, the Windows assets needed rebuilding again —
+same `v1.6.0` tag, no version bump (confirmed unchanged: `core/__init__.py`,
+`pyproject.toml`, `installer_embed.iss` all still say `1.6.0`).
+
+Followed `docs/BUILD.md` → "Rebuild without bumping the version" exactly.
+Gate: `pyright app core` → 0/0/0 (re-confirmed in this closing pass); the
+full `pytest` gates recorded in the entries below were already green
+before the build started. `build_embed_installer.bat` → ISCC
+`installer_embed.iss` → portable zip, all `EXIT:0`.
+
+**Real E2E smoke test against the actual installed EXE**, per `CLAUDE.md`'s
+"new capabilities need real-hardware testing" rule — `tests/smoke/
+test_exe_real_e2e.py`, silently installed to an isolated `C:\Temp\
+test_v1.6.0_rebuild`, not mocked. Took 3 attempts to get a clean pass:
+
+1. First run (default `sample.wav` fixture) failed:
+   `test_exe_worker_transcribes_real_video` asserted a non-empty SRT but
+   got 0 bytes. Root cause, checked afterward — **not a product bug**:
+   `tests/fixtures/sample.wav` is 1 second of pure silence by design
+   (`generate_sample_wav.py`'s own docstring says so), so a real Whisper
+   model correctly emits zero segments for it. The test's own assertion
+   is what's wrong for this fixture, not the app. Not fixed here (out of
+   scope for a rebuild pass) — flagged below.
+2. Second run, pointed at a real video (`E:\...NWN...mp4`) instead of the
+   silent fixture, failed differently: `Model folder missing:
+   ...\dist_onedir\WhisperProject\hub\models--Systran--faster-whisper-
+   large-v3`. The installed copy reads this machine's real (dev)
+   `%LOCALAPPDATA%\WhisperProject\config.json`, which points `model_path`
+   at an old onedir build folder that no longer has the model on disk.
+3. Backed up that config to `%TEMP%\config_backup_before_test.json`,
+   pointed `model`/`model_path`/`hub_folder` at
+   `faster-distil-whisper-large-v3` (already cached locally under
+   `%LOCALAPPDATA%\WhisperProject\Cache\models\`), re-ran: **2 passed, 1
+   skipped, exit 0** — a real transcription of real speech through the
+   actual freshly-built installer, model load included. Config restored
+   from the backup afterward and diffed byte-identical against the
+   original. Stray outputs cleaned up: the real video's `.srt`/`.json`
+   next to it on `E:\`, and the silent-clip run's empty
+   `tests/fixtures/sample.{srt,json}` (both untracked, 0 bytes / `[]` —
+   deleted, not committed).
+
+Uploaded via `gh release upload v1.6.0 ... --clobber` (Step 4 of the
+`docs/BUILD.md` recipe). Confirmed via `gh release view v1.6.0` — both
+assets now show today's `updatedAt`:
+
+- `WhisperProject-v1.6.0-Setup-Standard.exe` (~226 MB)
+- `WhisperProject-v1.6.0-Portable.zip` (~345 MB)
+
+**Not done, same scope limit as every prior `v1.6.0` rebuild**: macOS was
+NOT touched (see `CLAUDE.md` "macOS builds — do not build"; `v1.5.0`'s
+`.dmg`s remain the newest Mac build).
+
+**Found, not fixed**: `tests/smoke/test_exe_real_e2e.py`'s
+`test_exe_worker_transcribes_real_video` will always fail against the
+default `sample.wav` fixture because that fixture is silence by design —
+either give it a real-speech fixture or stop asserting non-empty output
+for the silence case. Low priority: the real-video variant of the same
+test, used successfully above, is the one that actually exercises
+transcription end to end.
+
+**Next up**: the two owner requests at the top of this file (light theme
+default, Video Tiling default-off clarification) — neither is
+implemented yet; both are explicitly scoped for the build *after* this
+one, not this rebuild.
+
+---
+
 ## 🟢 2026-08-14 — Opus adversarial review of `app/`, 8 fixes applied
 
 Owner asked for a third review round, same "isolated `app/`, review,
