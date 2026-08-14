@@ -248,6 +248,7 @@ def _start(app: Any) -> None:
         # seconds; doing it on the Tk thread would freeze the window.
         from app.services.live_service import LiveTranscriber
 
+        transcriber = None
         try:
             transcriber = LiveTranscriber(
                 app.entry_file, language=language, log=app.log
@@ -263,10 +264,11 @@ def _start(app: Any) -> None:
             session.start()
         except Exception as e:  # noqa: BLE001
             logger.exception("Live session failed to start: %s", e)
-            try:
-                transcriber.stop()  # type: ignore[possibly-unbound]
-            except Exception:  # noqa: BLE001
-                pass
+            if transcriber is not None:
+                try:
+                    transcriber.stop()
+                except Exception:  # noqa: BLE001
+                    pass
             app.post_to_main(lambda: _start_failed(app, e))
             return
         app.post_to_main(lambda: _started(app, transcriber, session))
