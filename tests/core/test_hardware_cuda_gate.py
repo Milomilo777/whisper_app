@@ -127,3 +127,45 @@ def test_hardware_file_cuda_accepted_when_runtime_ok(monkeypatch):
                  "backend": "faster_whisper"},
     )
     assert hw.device_choice_from_hardware_file() == ("cuda", "float16")
+
+
+def test_probe_tiers_restores_gc_state():
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); probe_tiers() does the first
+    import of ctranslate2/onnxruntime/torch on a background thread
+    (app.widgets.hardware_wizard), same risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            hw.probe_tiers()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
+def test_probe_tiers_serializes_concurrent_calls():
+    """A concurrent caller must block on the shared lock, not race
+    through — same contract as the other hardened availability probes."""
+    import threading
+
+    acquired = hw._probe_lock.acquire(timeout=1.0)
+    assert acquired, "test setup: could not acquire the lock"
+    result: dict[str, bool] = {}
+
+    def call():
+        result["done"] = bool(hw.probe_tiers())
+
+    t = threading.Thread(target=call, daemon=True)
+    t.start()
+    t.join(timeout=0.3)
+    try:
+        assert t.is_alive(), "probe_tiers() did not block on the lock"
+    finally:
+        hw._probe_lock.release()
+    t.join(timeout=5.0)
+    assert not t.is_alive(), "probe_tiers() never returned after unlock"
+    assert "done" in result

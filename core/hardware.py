@@ -28,9 +28,11 @@ of the user data so it survives reinstall + roams with a profile.
 """
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -321,19 +323,38 @@ def _probe_cpu() -> list[Tier]:
     )]
 
 
+# app.widgets.hardware_wizard runs probe_tiers() on a fresh daemon thread
+# per re-probe click, and each of the sub-probes below does its own first
+# import of a heavy C-extension package (ctranslate2, onnxruntime, torch).
+# See core/backends/google_cloud_stt.py's matching comment and ADR 0008 in
+# docs/DECISIONS.md for the full story of a real crash this exact risk
+# class caused (2026-08-15): GC firing during — or even briefly after —
+# this kind of import/allocation-heavy work can fault the process. The
+# lock avoids two rapid re-probe clicks racing each other; disabling GC
+# for the whole call is what actually matters.
+_probe_lock = threading.Lock()
+
+
 def probe_tiers() -> list[Tier]:
     """Return every tier the current host supports, best → worst.
 
     CPU int8 is always last and always present so the list is never
     empty; callers can rely on ``tiers[-1]`` as a guaranteed fallback.
     """
-    tiers: list[Tier] = []
-    tiers.extend(_probe_cuda())
-    tiers.extend(_probe_qnn_npu())
-    tiers.extend(_probe_openvino())
-    tiers.extend(_probe_directml())
-    tiers.extend(_probe_cpu())
-    return tiers
+    with _probe_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            tiers: list[Tier] = []
+            tiers.extend(_probe_cuda())
+            tiers.extend(_probe_qnn_npu())
+            tiers.extend(_probe_openvino())
+            tiers.extend(_probe_directml())
+            tiers.extend(_probe_cpu())
+            return tiers
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def first_supported_tier(tiers: list[Tier]) -> Tier:

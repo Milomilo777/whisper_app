@@ -101,6 +101,38 @@ def test_availability_reason_returns_str():
         assert "sherpa-onnx" in reason or "missing" in reason
 
 
+def test_is_available_restores_gc_state():
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); sherpa-onnx is native, same risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            is_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
+def test_availability_reason_also_restores_gc_state():
+    """availability_reason() does its own guarded import via the shared
+    _sherpa_onnx_importable() helper — must not leave GC disabled either."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            availability_reason()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
 def test_diarize_raises_on_missing_models(tmp_path, monkeypatch):
     """When availability_reason() reports something is missing,
     diarize() must raise DiarizationUnavailable rather than crashing

@@ -11,6 +11,7 @@ ggml-large-v3-q5_0.bin`` and is downloaded on demand via
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import shutil
@@ -42,15 +43,34 @@ def default_model_path() -> Path:
     return model_dir() / DEFAULT_MODEL_NAME
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story: a real crash was confirmed (2026-08-15) when GC fired mid-import of
+# a heavy C-extension package's class-registration step, triggered by
+# unrelated allocation pressure elsewhere in the process (not by two threads
+# racing each other — that alone did not reproduce it). pywhispercpp is the
+# same risk class (native ggml bindings), so it gets the same defense
+# pre-emptively. The lock avoids redundant concurrent imports; disabling GC
+# for the import's duration is the part that actually matters. Neither
+# caches the result — an on-demand install must still be picked up.
+_availability_lock = threading.Lock()
+
+
 def is_available() -> bool:
     """True iff pywhispercpp imports cleanly. Doesn't check the model file."""
-    try:
-        import pywhispercpp  # type: ignore[import-not-found] # noqa: F401
-    except Exception:  # noqa: BLE001 — a wrong-arch / missing native DLL
-        # raises OSError/RuntimeError at import, not ImportError; a probe
-        # must degrade to "unavailable", never crash.
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import pywhispercpp  # type: ignore[import-not-found] # noqa: F401
+        except Exception:  # noqa: BLE001 — a wrong-arch / missing native DLL
+            # raises OSError/RuntimeError at import, not ImportError; a probe
+            # must degrade to "unavailable", never crash.
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def availability_reason() -> str:

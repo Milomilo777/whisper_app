@@ -22,8 +22,10 @@ shaped exactly like what the caller already has.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
+import threading
 from typing import Any, Callable
 
 from ._liveness_tick import liveness_tick
@@ -31,13 +33,31 @@ from ._liveness_tick import liveness_tick
 logger = logging.getLogger(__name__)
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
+# heavy C-extension package can fault the process, triggered by unrelated
+# allocation pressure elsewhere in the process — not by concurrent imports
+# alone. stable-ts pulls in torch, the same risk class, so it gets the same
+# two-part defense pre-emptively: the lock avoids redundant concurrent
+# imports, and disabling GC for the import's duration is what actually
+# matters.
+_availability_lock = threading.Lock()
+
+
 def is_available() -> bool:
     """True iff stable-ts imports cleanly."""
-    try:
-        import stable_whisper  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import stable_whisper  # type: ignore[import-not-found] # noqa: F401
+        except ImportError:
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def availability_reason() -> str:

@@ -19,6 +19,23 @@ def test_semantic_available_false_when_missing(monkeypatch):
     assert sm.semantic_available() is False
 
 
+def test_semantic_available_restores_gc_state():
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); sentence-transformers pulls torch,
+    same risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            sm.semantic_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
 # ---------- BLOB pack ----------------------------------------------------------
 
 

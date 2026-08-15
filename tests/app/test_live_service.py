@@ -66,7 +66,8 @@ def wired(monkeypatch):
     )
     lt = LiveTranscriber("gui.py")
     lt.start(wait_ready=False)
-    return lt, proc
+    yield lt, proc
+    _stop_and_join(lt, proc)
 
 
 def _sent(proc: _FakeProc) -> list[dict]:
@@ -85,6 +86,27 @@ def _wait(predicate, timeout=3.0) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def _stop_and_join(lt: LiveTranscriber, proc: _FakeProc) -> None:
+    """Unblock the reader thread and confirm it actually exits.
+
+    A real subprocess's stdout pipe closes on its own once the process
+    exits, which is what makes ``_read_loop``'s ``for line in
+    proc.stdout:`` return. ``_FakeProc``/``_FakeStdout`` do not simulate
+    that, so without this, every test that starts a ``LiveTranscriber``
+    leaves its "live-worker-reader" daemon thread permanently blocked in
+    ``queue.get()`` for the rest of the test process's life — harmless on
+    its own (daemon=True), but dozens of them accumulate across this
+    file's tests and were still alive minutes later when an unrelated
+    real-model test ran near the end of the full suite.
+    """
+    reader = getattr(lt, "_reader", None)
+    proc.stdout.close_stream()  # idempotent even if already closed
+    lt.stop()
+    if reader is not None:
+        reader.join(timeout=2.0)
+        assert not reader.is_alive(), "live-worker-reader thread leaked"
 
 
 # ------------------------------------------------------------- readiness
@@ -141,11 +163,21 @@ def test_language_is_forwarded(monkeypatch):
     )
     lt = LiveTranscriber("gui.py", language="fa")
     lt.start(wait_ready=False)
-    threading.Thread(
+    caller = threading.Thread(
         target=lambda: _swallow(lt.transcribe_chunk, "c.wav"), daemon=True
-    ).start()
+    )
+    caller.start()
     assert _wait(lambda: _sent(proc))
     assert _sent(proc)[0]["language"] == "fa"
+    # Answer the chunk so `caller` returns now instead of blocking for the
+    # full CHUNK_TIMEOUT_S (180s) — it would otherwise still be alive,
+    # waiting, for most of the rest of a full test-suite run.
+    proc.stdout.push({
+        "event": "live_result", "id": _sent(proc)[0]["id"], "text": "",
+    })
+    caller.join(timeout=3.0)
+    assert not caller.is_alive(), "the chunk-caller thread leaked"
+    _stop_and_join(lt, proc)
 
 
 def _swallow(fn, *a):
@@ -284,6 +316,7 @@ def test_non_json_worker_output_is_logged_not_fatal(monkeypatch):
     proc.stdout.push({"event": "ready"})
     lt.wait_ready(timeout=3.0)
     assert any("Traceback" in line for line in logged)
+    _stop_and_join(lt, proc)
 
 
 def test_spawn_failure_is_reported_clearly(monkeypatch):

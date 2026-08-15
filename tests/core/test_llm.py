@@ -21,6 +21,23 @@ def test_runtime_available_false_when_module_missing(monkeypatch):
     assert "llama-cpp-python" in llm.runtime_availability_reason()
 
 
+def test_runtime_available_restores_gc_state():
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); llama-cpp-python is native, same
+    risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            llm.runtime_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
 # ---------- model file presence ------------------------------------------------
 
 

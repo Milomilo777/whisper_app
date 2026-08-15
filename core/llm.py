@@ -28,6 +28,7 @@ can swap to a "feature off" placeholder. No silent partial work.
 """
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
@@ -58,13 +59,31 @@ class LLMUnavailable(RuntimeError):
     """Raised when llama-cpp-python isn't installed."""
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
+# heavy C-extension package can fault the process, triggered by unrelated
+# allocation pressure elsewhere in the process — not by concurrent imports
+# alone. llama-cpp-python is the same risk class (native ggml bindings), so
+# it gets the same two-part defense pre-emptively: the lock avoids
+# redundant concurrent imports, and disabling GC for the import's duration
+# is what actually matters.
+_availability_lock = threading.Lock()
+
+
 def runtime_available() -> bool:
     """True iff llama-cpp-python imports cleanly."""
-    try:
-        import llama_cpp  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import llama_cpp  # type: ignore[import-not-found] # noqa: F401
+        except ImportError:
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def runtime_availability_reason() -> str:

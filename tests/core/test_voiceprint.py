@@ -17,6 +17,23 @@ def test_runtime_available_false_when_missing(monkeypatch):
     assert "pyannote" in vp.runtime_availability_reason()
 
 
+def test_runtime_available_restores_gc_state():
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); pyannote.audio pulls torch, same
+    risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            vp.runtime_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
 def test_enrol_speaker_raises_when_pyannote_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(vp, "runtime_available", lambda: False)
     with pytest.raises(vp.VoiceprintUnavailable):

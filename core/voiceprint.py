@@ -23,10 +23,12 @@ so the diariser keeps working without speaker names.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import math
 import sqlite3
 import struct
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -48,13 +50,31 @@ class VoiceprintUnavailable(RuntimeError):
     """Raised when pyannote.audio isn't installed."""
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
+# heavy C-extension package can fault the process, triggered by unrelated
+# allocation pressure elsewhere in the process — not by concurrent imports
+# alone. pyannote.audio pulls in torch, the same risk class, so it gets the
+# same two-part defense pre-emptively: the lock avoids redundant concurrent
+# imports, and disabling GC for the import's duration is what actually
+# matters.
+_availability_lock = threading.Lock()
+
+
 def runtime_available() -> bool:
     """True iff pyannote.audio imports cleanly."""
-    try:
-        import pyannote.audio  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import pyannote.audio  # type: ignore[import-not-found] # noqa: F401
+        except ImportError:
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def runtime_availability_reason() -> str:

@@ -26,6 +26,22 @@ def test_is_available_returns_false_when_module_missing(alignment_module, monkey
     assert "stable-ts" in alignment_module.availability_reason()
 
 
+def test_is_available_restores_gc_state(alignment_module):
+    """Regression for the 2026-08-15 GC-mid-import crash class (see
+    core/backends/google_cloud_stt.py); stable-ts pulls torch, same risk."""
+    import gc
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            alignment_module.is_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
 def test_refine_raises_when_unavailable(alignment_module, monkeypatch):
     monkeypatch.setattr(alignment_module, "is_available", lambda: False)
     with pytest.raises(RuntimeError, match="stable-ts"):

@@ -1,6 +1,7 @@
 """The Tk root. Wires services + dialogs + widgets together."""
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import sys
@@ -1726,15 +1727,44 @@ class App(tk.Tk):
             cfg_snapshot = dict(self.app_config)
 
             def _probe() -> None:
+                # GC disabled for this ENTIRE probe thread, not just the
+                # engine_status() call — a real crash was confirmed
+                # (2026-08-15, Python 3.14) three times, each narrower fix
+                # disproven by the next instrumented full-suite rerun:
+                # (1) GC firing mid-import inside engine_status() faulted a
+                # C-extension class-registration step; (2) narrowing the
+                # gc.disable() window to just that call "fixed" it once,
+                # then a later rerun faulted one line later in a plain
+                # EngineStatus(...) dataclass construction; (3) widening the
+                # window to the whole engine_status() try/finally "fixed" it
+                # again, then ANOTHER rerun faulted right after gc.enable()
+                # returned, inside the post_to_main() call below. gc.disable
+                # ()/gc.enable() are PROCESS-GLOBAL, not thread-local — every
+                # other thread's allocations pile up ungarbage-collected
+                # while this one holds GC off, so re-enabling it here was
+                # itself triggering an immediate, larger-than-usual
+                # collection at the exact moment this thread kept running.
+                # Holding GC off for the probe's ENTIRE body (including
+                # post_to_main) removes that re-enable-triggers-a-collision
+                # window too. See core/backends/google_cloud_stt.py's
+                # matching comment and ADR 0008 in docs/DECISIONS.md for the
+                # full three-round story — treat this as a mitigation that
+                # has repeatedly needed widening, not a proven-complete fix.
+                was_gc_enabled = gc.isenabled()
+                gc.disable()
                 try:
-                    st = _eng.engine_status(value, cfg_snapshot, deep=True)
-                except Exception as e:  # noqa: BLE001
-                    st = _eng.EngineStatus(value, False, str(e) or "probe failed")
-                # post_to_main, NOT self.after: this runs on a daemon
-                # thread, and off-thread after() raises on Python 3.14.
-                self.post_to_main(
-                    lambda: self._apply_engine_status(value, st)
-                )
+                    try:
+                        st = _eng.engine_status(value, cfg_snapshot, deep=True)
+                    except Exception as e:  # noqa: BLE001
+                        st = _eng.EngineStatus(value, False, str(e) or "probe failed")
+                    # post_to_main, NOT self.after: this runs on a daemon
+                    # thread, and off-thread after() raises on Python 3.14.
+                    self.post_to_main(
+                        lambda: self._apply_engine_status(value, st)
+                    )
+                finally:
+                    if was_gc_enabled:
+                        gc.enable()
 
             threading.Thread(target=_probe, daemon=True).start()
         except Exception:  # noqa: BLE001

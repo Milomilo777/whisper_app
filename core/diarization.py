@@ -22,9 +22,11 @@ beside the exe in onedir mode.
 """
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -46,16 +48,43 @@ def _model_path(filename: str) -> str:
     return os.path.join(bin_dir(), DIARIZATION_SUBDIR, filename)
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
+# heavy C-extension package can fault the process, triggered by unrelated
+# allocation pressure elsewhere in the process — not by concurrent imports
+# alone. sherpa-onnx is the same risk class (native ONNX-runtime bindings),
+# so it gets the same two-part defense pre-emptively: the lock avoids
+# redundant concurrent imports, and disabling GC for the import's duration
+# is what actually matters. Shared by is_available() and
+# availability_reason() (the latter needs its own import too, to tell a
+# missing-package reason apart from a missing-model-file reason) so the
+# guard lives in one place instead of being duplicated.
+_availability_lock = threading.Lock()
+
+
+def _sherpa_onnx_importable() -> bool:
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import sherpa_onnx  # type: ignore[import-untyped] # noqa: F401
+        except Exception:  # noqa: BLE001 — wrong-arch / missing native DLL
+            # can raise OSError/RuntimeError, not ImportError (VLC bug class).
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
+
+
 def is_available() -> bool:
     """True iff sherpa-onnx + both ONNX files are present.
 
     Cheap to call; doesn't actually load the models. Used by the UI
     to decide whether to enable the Diarization checkbox.
     """
-    try:
-        import sherpa_onnx  # type: ignore[import-untyped] # noqa: F401
-    except Exception:  # noqa: BLE001 — wrong-arch / missing native DLL can
-        # raise OSError/RuntimeError, not ImportError (the VLC bug class).
+    if not _sherpa_onnx_importable():
         return False
     return all(
         os.path.isfile(_model_path(f)) for f in (SEGMENTATION_MODEL, EMBEDDING_MODEL)
@@ -64,9 +93,7 @@ def is_available() -> bool:
 
 def availability_reason() -> str:
     """Human-readable reason diarization isn't available, or ``""`` if it is."""
-    try:
-        import sherpa_onnx  # type: ignore[import-untyped] # noqa: F401
-    except Exception:  # noqa: BLE001 — see is_available()
+    if not _sherpa_onnx_importable():
         return "sherpa-onnx Python package not installed"
     for f in (SEGMENTATION_MODEL, EMBEDDING_MODEL):
         if not os.path.isfile(_model_path(f)):

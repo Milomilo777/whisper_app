@@ -24,6 +24,7 @@ verify that fall-through.
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import logging
 import os
@@ -31,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -47,12 +49,30 @@ class SeparatorUnavailable(RuntimeError):
     """Raised when the demucs package isn't installed."""
 
 
+# See core/backends/google_cloud_stt.py's matching comment for the full
+# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
+# heavy C-extension package can fault the process, triggered by unrelated
+# allocation pressure elsewhere in the process — not by concurrent imports
+# alone. demucs pulls in torch, the same risk class, so it gets the same
+# two-part defense pre-emptively: the lock avoids redundant concurrent
+# imports, and disabling GC for the import's duration is what actually
+# matters.
+_availability_lock = threading.Lock()
+
+
 def is_available() -> bool:
-    try:
-        import demucs  # type: ignore[import-not-found] # noqa: F401
-    except ImportError:
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import demucs  # type: ignore[import-not-found] # noqa: F401
+        except ImportError:
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def availability_reason() -> str:

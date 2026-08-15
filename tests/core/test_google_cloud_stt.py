@@ -19,7 +19,9 @@ no service-account JSON in this environment); the owner live-tests that.
 from __future__ import annotations
 
 import datetime as dt
+import gc
 import json
+import threading
 import types
 
 import pytest
@@ -899,3 +901,89 @@ def test_parse_batch_response_no_results_raises():
     with pytest.raises(RuntimeError) as e:
         backend._parse_batch_response(response, "gs://b/x.flac", want_words=False)
     assert "no batch results" in str(e.value).lower()
+
+
+# ------------------------------------------------------- availability hardening
+#
+# Regression coverage for the 2026-08-15 crash: a Windows fatal exception
+# (STATUS_BREAKPOINT) inside proto-plus's message-class creation, when a GC
+# pass landed mid-import of ``google.cloud.speech_v2``. These run the REAL
+# ``runtime_available``/``storage_available`` bodies (no monkeypatch), which
+# is safe and hermetic either way: whether or not the real google-cloud
+# package is installed, the ``ImportError`` path and the success path both
+# go through the same try/finally, so the GC-state assertion holds in both
+# environments without needing the package to be present.
+
+
+def test_runtime_available_restores_gc_state(monkeypatch):
+    """GC must end up exactly as it started, regardless of import outcome."""
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            g.runtime_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()  # never leave GC off for the rest of the suite
+
+
+def test_storage_available_restores_gc_state(monkeypatch):
+    for was_enabled in (True, False):
+        if was_enabled:
+            gc.enable()
+        else:
+            gc.disable()
+        try:
+            g.storage_available()
+            assert gc.isenabled() is was_enabled
+        finally:
+            gc.enable()
+
+
+def test_runtime_available_disables_gc_during_the_import(monkeypatch):
+    """The import itself must run with GC off, not just before/after it."""
+    seen: dict[str, bool] = {}
+
+    real_import = __import__
+
+    def spying_import(name, *a, **kw):
+        if name == "google.cloud.speech_v2":
+            seen["gc_enabled_during_import"] = gc.isenabled()
+        return real_import(name, *a, **kw)
+
+    gc.enable()
+    monkeypatch.setattr("builtins.__import__", spying_import)
+    try:
+        g.runtime_available()
+    finally:
+        gc.enable()
+    assert seen.get("gc_enabled_during_import") is False
+
+
+def test_runtime_available_serializes_concurrent_calls():
+    """A concurrent caller must block on the shared lock, not race through.
+
+    Doesn't reproduce the native crash itself (inherently timing-dependent,
+    not something a unit test should try to pin down) — proves the
+    serialization contract the fix relies on: only one caller is ever
+    inside the import step at a time.
+    """
+    acquired = g._availability_lock.acquire(timeout=1.0)
+    assert acquired, "test setup: could not acquire the lock"
+    result: dict[str, bool] = {}
+
+    def call():
+        result["done"] = g.runtime_available()
+
+    t = threading.Thread(target=call, daemon=True)
+    t.start()
+    t.join(timeout=0.3)
+    try:
+        assert t.is_alive(), "runtime_available() did not block on the lock"
+    finally:
+        g._availability_lock.release()
+    t.join(timeout=3.0)
+    assert not t.is_alive(), "runtime_available() never returned after unlock"
+    assert "done" in result

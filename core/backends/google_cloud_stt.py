@@ -61,6 +61,7 @@ Audio is decoded + chunked to FLAC with the bundled ffmpeg.
 from __future__ import annotations
 
 import datetime as _dt
+import gc
 import json
 import logging
 import os
@@ -135,6 +136,26 @@ NEW_CUSTOMER_CREDIT_USD = 300.0
 
 # ---------------------------------------------------------------- availability
 
+# A REAL crash was observed here (2026-08-15, Python 3.14, protobuf/proto-plus
+# as pulled by google-cloud-speech at the time): the first import of
+# ``google.cloud.speech_v2`` faulted (Windows STATUS_BREAKPOINT) inside
+# proto-plus's message-class creation (``proto/message.py`` ``__new__`` ->
+# ``proto/_file_info.py`` ``ready()``) when a garbage-collection pass landed
+# mid-construction — triggered by unrelated allocation pressure from other
+# threads (a concurrent real faster-whisper transcription, in the observed
+# case), not by two threads importing at once. Confirmed by instrumented
+# reproduction: serializing the import with a lock alone (below) did NOT stop
+# the crash — a SINGLE thread importing alone still faulted when GC fired
+# during the import. Disabling GC for the duration of the import is what
+# actually stops it (verified by a clean full-suite rerun after adding it).
+#
+# The lock is kept anyway (harmless, and still avoids two threads redundantly
+# repeating the same ~1s heavy import), but it is NOT the fix — the
+# ``gc.disable()``/``gc.enable()`` pair below is. Neither caches the result:
+# an on-demand ``core.optional_deps`` install mid-session must still be
+# picked up by the next call.
+_availability_lock = threading.Lock()
+
 
 def runtime_available() -> bool:
     """True iff the google-cloud-speech client imports cleanly.
@@ -143,21 +164,35 @@ def runtime_available() -> bool:
     than ImportError at import time (the VLC bug class), so we degrade to
     "unavailable" on ANY exception rather than crash the worker probe.
     """
-    try:
-        import google.cloud.speech_v2  # type: ignore[import-not-found]  # noqa: F401
-        from google.oauth2 import service_account  # type: ignore[import-not-found]  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import google.cloud.speech_v2  # type: ignore[import-not-found]  # noqa: F401
+            from google.oauth2 import service_account  # type: ignore[import-not-found]  # noqa: F401
+        except Exception:  # noqa: BLE001
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 def storage_available() -> bool:
     """True iff google-cloud-storage imports (needed only for BATCH mode)."""
-    try:
-        import google.cloud.storage  # type: ignore[import-not-found]  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    with _availability_lock:
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            import google.cloud.storage  # type: ignore[import-not-found]  # noqa: F401
+        except Exception:  # noqa: BLE001
+            return False
+        else:
+            return True
+        finally:
+            if was_enabled:
+                gc.enable()
 
 
 # ---------------------------------------------------------------- pure seams
