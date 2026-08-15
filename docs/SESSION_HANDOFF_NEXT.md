@@ -5,25 +5,45 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-15 (latest) — v1.7.0 released
+## 🟢 2026-08-15 (latest) — v1.7.0 released, then a second-pass review found + fixed a real concurrency bug in it
 
 The prior session's uncommitted work (config shrink-guard, GC
 hardening, hotwords fix, VAD checkbox, ELAN DOCTYPE guard, search
 dimension-mismatch fix, google-cloud-speech unbundling, transcript
 viewer edit-timestamp) was reviewed, split into 10 atomic commits, and
-pushed. Version bumped 1.6.0 -> 1.7.0. `pyright app core` and
-`pytest tests/ --ignore=tests/smoke` (2013 passed) both clean.
-Setup-Standard + Portable built and verified against the real
-`tests/smoke/test_exe_real_e2e.py` suite (real video, real large-v3
-model, real transcription — all 3 tests passed/skipped as expected).
-Tagged and published: https://github.com/Milomilo777/whisper_app/releases/tag/v1.7.0
+pushed. Version bumped 1.6.0 -> 1.7.0, tagged, and published.
+
+A follow-up adversarial review (`code-review` skill, high effort) of
+those 12 commits found a real bug in the GC-hardening fix itself: it
+gave every guarded call site its OWN `threading.Lock()`, but
+`gc.disable()`/`gc.enable()` are process-global, so two probes on
+different threads did not actually serialize against each other and
+could still race — reproducing the exact native-fault class the fix
+was meant to prevent. Full report:
+`docs/history/CODE_REVIEW_v1.7.0_2026-08-15.md`. Fixed by factoring the
+guard into one shared `core._gc_import_guard.gc_disabled_import()`
+context manager used everywhere; added
+`tests/core/test_gc_import_guard.py` to regression-test the actual
+race. Also trimmed 3 CHANGELOG.md entries that violated this repo's own
+"1-3 sentences, no root-cause narrative" rule.
+
+Setup-Standard + Portable were REBUILT (not just source-patched) to
+include this fix and re-uploaded to the v1.7.0 release with
+`--clobber`, verified again against the real
+`tests/smoke/test_exe_real_e2e.py` suite. The v1.5.0 macOS
+`.dmg` (Intel/x64-only, not a new build) was also attached directly to
+the v1.7.0 release at the owner's request, so v1.7.0 is now a
+one-stop release for all three platforms.
+
+`pyright app core` and `pytest tests/ --ignore=tests/smoke` (2015
+passed) both clean throughout.
 
 Pending: the old v1.6.0 GitHub release was NOT deleted this round (the
-usual "keep only latest + v1.5.0 for its macOS asset" pruning policy
-applies, but the owner asked to delete it manually later rather than
-now) — `gh release delete v1.6.0 --yes` when ready. macOS was not
-rebuilt (per CLAUDE.md's standing "do not build macOS" rule); v1.5.0
-still holds the only published macOS `.dmg`.
+usual "keep only latest" pruning policy applies, but the owner asked to
+delete it manually later rather than now) — `gh release delete v1.6.0
+--yes` when ready. v1.5.0 could arguably be deleted now too since its
+only remaining asset (the mac dmg) is duplicated onto v1.7.0, but that
+wasn't asked for either — leave it for the owner to decide.
 
 Current state: working tree clean, nothing pending on master.
 
