@@ -83,7 +83,24 @@ def test_system_audio_is_only_offered_when_supported(app, root, monkeypatch):
 
 def test_transcript_starts_empty_and_read_only(built):
     assert live_tab._transcript_text(built) == ""
-    assert str(built.live_text.cget("state")) == "disabled"
+    # state stays "normal" so mouse drag-selection/copy work; typing is
+    # blocked by the <Key> filter instead (see test_blocks_edit below).
+    assert str(built.live_text.cget("state")) == "normal"
+
+
+@pytest.mark.parametrize(
+    ("keysym", "state", "expected"),
+    [
+        ("a", 0, True),          # plain typing -> blocked
+        ("BackSpace", 0, True),  # would delete text -> blocked
+        ("Left", 0, False),      # navigation -> allowed
+        ("Home", 0, False),
+        ("c", 4, False),         # Ctrl+C (state bit 0x4) -> allowed
+        ("a", 4, False),         # Ctrl+A (select all) -> allowed
+    ],
+)
+def test_blocks_edit(keysym, state, expected):
+    assert live_tab._blocks_edit(keysym, state) is expected
 
 
 # -------------------------------------------------------------- language
@@ -167,7 +184,7 @@ def test_appending_text_builds_the_transcript(built):
     live_tab._append_line(built, "hello")
     live_tab._append_line(built, "world")
     assert live_tab._transcript_text(built) == "hello\nworld"
-    assert str(built.live_text.cget("state")) == "disabled", "must stay read-only"
+    assert str(built.live_text.cget("state")) == "normal", "must stay selectable"
 
 
 def test_empty_text_is_ignored(built):

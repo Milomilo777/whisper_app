@@ -34,6 +34,41 @@ _POLL_MS = 200
 _SOURCE_MIC = "Microphone"
 _SOURCE_SYSTEM = "System audio (what you hear)"
 
+# Keys that never modify text -- letting these through even while the
+# transcript is "read-only" keeps navigation, selection-extend, and the
+# Ctrl-combo shortcuts (checked via the modifier bit below) working.
+_NAV_KEYSYMS = frozenset((
+    "Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next",
+    "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R",
+    "Tab", "Escape",
+))
+_CONTROL_MASK = 0x4  # Tk Event.state bit for the Control modifier
+
+
+def _blocks_edit(keysym: str, state: "int | str") -> bool:
+    """True if a keypress with this keysym/modifier-state should be
+    swallowed to stop it from typing into a "read-only but selectable"
+    Text widget. Navigation keys and any Ctrl-combo (copy, select-all,
+    ...) pass through; everything else is blocked.
+    """
+    if isinstance(state, int) and state & _CONTROL_MASK:
+        return False
+    return keysym not in _NAV_KEYSYMS
+
+
+def _make_readonly_but_selectable(text: tk.Text) -> None:
+    """Keep *text* mouse-selectable and copyable without letting the user
+    type into it -- a plain ``state="disabled"`` Text widget blocks mouse
+    drag-selection entirely, not just editing, which was a real reported
+    complaint (a transcript a user cannot select-and-copy by dragging).
+    Programmatic ``insert``/``delete`` (this module's own ``_append``/
+    ``_clear``) are unaffected; only user keystrokes are filtered.
+    """
+    def _filter_key(event: "tk.Event[tk.Text]") -> str | None:
+        return "break" if _blocks_edit(event.keysym, event.state) else None
+
+    text.bind("<Key>", _filter_key)
+
 
 def build_live_tab(app: Any, parent: Any) -> None:
     """Construct the Live tab onto ``parent`` and wire it to ``app``."""
@@ -128,7 +163,8 @@ def build_live_tab(app: Any, parent: Any) -> None:
     out.columnconfigure(0, weight=1)
     out.rowconfigure(0, weight=1)
 
-    app.live_text = tk.Text(out, wrap="word", height=14, state="disabled")
+    app.live_text = tk.Text(out, wrap="word", height=14)
+    _make_readonly_but_selectable(app.live_text)
     app.live_text.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
     bar = ttk.Scrollbar(out, orient="vertical", command=app.live_text.yview)
     bar.grid(row=0, column=1, sticky="ns", padx=(0, 8), pady=8)
@@ -397,9 +433,10 @@ def _append_line(app: Any, text: str) -> None:
     try:
         widget = app.live_text
         at_bottom = widget.yview()[1] >= 0.999
-        widget.configure(state="normal")
+        # Widget stays state="normal" (see _make_readonly_but_selectable);
+        # only the <Key> filter keeps the user from typing into it, so
+        # this insert needs no enable/disable dance around it.
         widget.insert("end", text + "\n")
-        widget.configure(state="disabled")
         # Only follow the tail when the user has not scrolled up to read
         # something earlier — yanking the view is worse than lagging it.
         if at_bottom:
@@ -453,8 +490,6 @@ def _copy(app: Any) -> None:
 def _clear(app: Any) -> None:
     app.live_lines = []
     try:
-        app.live_text.configure(state="normal")
         app.live_text.delete("1.0", "end")
-        app.live_text.configure(state="disabled")
     except Exception:  # noqa: BLE001
         logger.debug("Could not clear the live transcript", exc_info=True)
