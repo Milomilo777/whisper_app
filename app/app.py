@@ -3160,6 +3160,14 @@ class App(tk.Tk):
         self.queue[:] = [t for t in self.queue if t.status not in ("finished", "cancelled", "error")]
         self.refresh()
 
+    def clear_completed_downloads(self) -> None:
+        """Download-tab counterpart to clear_completed() above -- the
+        Queue tab has always had this; the Download tab didn't."""
+        self.download_queue[:] = [
+            t for t in self.download_queue if t.status not in ("finished", "cancelled", "error")
+        ]
+        self.refresh_download_queue()
+
     # Video tiling ------------------------------------------------------------
     def _save_tiling_prefs(self) -> None:
         """Persist the Video Tiling tab choices to config.

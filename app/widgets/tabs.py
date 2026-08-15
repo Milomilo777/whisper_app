@@ -918,6 +918,12 @@ def build_download_tab(app: "App", parent: ttk.Frame) -> None:
     for key in ("pause", "resume", "cancel", "rerun", "remove", "open"):
         app.download_action_buttons[key].pack(side="left", padx=(0, 6))
         app.download_action_buttons[key].state(["disabled"])
+    # Global list action (not tied to a selection), so it lives on the
+    # right like the Queue tab's own "Clear completed" -- mirrors that
+    # button, which this tab was missing.
+    ttk.Button(
+        dl_action_bar, text="Clear completed", command=app.clear_completed_downloads,
+    ).pack(side="right")
     ttk.Label(
         dl_action_bar,
         text="(Pause stops the download but keeps the partial file; "
