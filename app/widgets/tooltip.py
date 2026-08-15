@@ -10,6 +10,7 @@ the popup plumbing.
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any, Callable, Union
 
@@ -137,6 +138,28 @@ def help_icon(parent: tk.Misc, text: TextOrGetter, *, wraplength: int = _WRAP) -
     Pack/grid the returned Label next to a control or a section's title.
     """
     icon = ttk.Label(parent, text=" ⓘ ", foreground="#3a7bd5")
+    # Bumped size + bold (2026-08-15): at the default label font size the
+    # icon was the same weight as surrounding body text and easy to miss
+    # entirely in a dense settings dialog -- confirmed by a real-mouse
+    # hover test where the popup worked perfectly once found, but the
+    # glyph itself blended in. A fresh, unnamed Font clone (not a Tk
+    # *named* font) avoids leaking a global font that a second, unrelated
+    # Tk interpreter (e.g. a later test's own tk.Tk()) wouldn't have.
+    try:
+        base = tkfont.nametofont("TkDefaultFont")
+        base_size = base.cget("size")
+        icon_font = tkfont.Font(
+            family=base.cget("family"),
+            size=base_size + (3 if base_size >= 0 else -3),
+            weight="bold",
+        )
+        icon.configure(font=icon_font)
+        # Keep the Font object alive for as long as the widget is; Tk
+        # drops an unnamed font's backing resource once nothing
+        # references the Python object anymore.
+        icon._help_icon_font_ref = icon_font  # type: ignore[attr-defined]
+    except tk.TclError:
+        pass
     try:
         icon.configure(cursor=_CURSOR)
     except tk.TclError:
