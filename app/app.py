@@ -1595,7 +1595,16 @@ class App(tk.Tk):
             self.log(f"Could not save preference: {e}")
 
     def _save_transcribe_prefs(self) -> None:
-        self.app_config["vad_enabled"] = bool(self.vad_enabled_var.get())
+        # vad_enabled is intentionally NOT written here, same reasoning as
+        # hotwords below: vad_enabled_var has no matching widget on this
+        # tab (build_transcribe_tab's "vars without a matching widget are
+        # simply not packed" note), so it is frozen at whatever
+        # config.json held when the tab was built.
+        # AdvancedDialog._save_and_close's new "Enable VAD" checkbox
+        # (2026-08-15) is the real editor of cfg["vad_enabled"] now —
+        # writing the stale var here would silently revert that checkbox
+        # the moment the user touched the language dropdown or a checkbox
+        # on this tab, the exact same clobbering bug hotwords had.
         self.app_config["word_timestamps"] = bool(self.word_timestamps_var.get())
         if getattr(self, "diarization_var", None) is not None:
             self.app_config["diarization_enabled"] = bool(self.diarization_var.get())

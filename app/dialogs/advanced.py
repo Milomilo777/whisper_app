@@ -161,6 +161,7 @@ class AdvancedDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         cfg = app.app_config
+        self._vad_enabled = tk.BooleanVar(value=bool(cfg.get("vad_enabled", True)))
         self._vad_min_silence = tk.IntVar(value=int(cfg.get("vad_min_silence_ms", 500)))
         self._vad_threshold = tk.DoubleVar(value=float(cfg.get("vad_threshold", 0.5)))
         self._vad_speech_pad = tk.IntVar(value=int(cfg.get("vad_speech_pad_ms", 400)))
@@ -389,9 +390,26 @@ class AdvancedDialog(tk.Toplevel):
         )
         vad.pack(fill="x", pady=(0, 14))
         self._nav_targets.append(("Voice Activity Detection", vad))
-        self._slider_row(vad, "Min silence (ms)", self._vad_min_silence, 100, 2000, 50, 0)
-        self._slider_row(vad, "Threshold", self._vad_threshold, 0.1, 0.9, 0.05, 1, is_float=True)
-        self._slider_row(vad, "Speech pad (ms)", self._vad_speech_pad, 0, 1000, 50, 2)
+        ttk.Checkbutton(
+            vad, text="Enable VAD (skip silent segments)",
+            variable=self._vad_enabled,
+            command=self._sync_vad_controls_state,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(4, 2))
+        help_icon(
+            vad,
+            "On (recommended): silent stretches are detected and skipped "
+            "before the audio reaches the speech model — faster, and it "
+            "stops Whisper from hallucinating text into pure silence.\n\n"
+            "Off: the whole file is sent to the model as-is, silence "
+            "included. The three controls below only matter while this "
+            "is on.",
+        ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=(4, 2))
+        self._vad_control_rows = [
+            self._slider_row(vad, "Min silence (ms)", self._vad_min_silence, 100, 2000, 50, 1),
+            self._slider_row(vad, "Threshold", self._vad_threshold, 0.1, 0.9, 0.05, 2, is_float=True),
+            self._slider_row(vad, "Speech pad (ms)", self._vad_speech_pad, 0, 1000, 50, 3),
+        ]
+        self._sync_vad_controls_state()
 
         # Output formats
         outputs = section_labelframe(
@@ -1150,7 +1168,14 @@ class AdvancedDialog(tk.Toplevel):
         return gc
 
     def _slider_row(self, parent, label: str, var, lo, hi, _step, row: int, *, is_float: bool = False):
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=4)
+        """Build one label/scale/value-echo row; return the 3 widgets.
+
+        Returned so a caller with a parent enable/disable toggle (e.g. the
+        VAD "Enable" checkbox) can grey the whole row out — see
+        ``_sync_vad_controls_state``.
+        """
+        row_label = ttk.Label(parent, text=label)
+        row_label.grid(row=row, column=0, sticky="w", padx=8, pady=4)
         scale = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal", length=240)
         scale.grid(row=row, column=1, sticky="ew", padx=8, pady=4)
         echo_var = tk.StringVar(value=f"{float(var.get()):.2f}" if is_float else str(int(var.get())))
@@ -1159,8 +1184,10 @@ class AdvancedDialog(tk.Toplevel):
             echo_var.set(f"{float(var.get()):.2f}" if is_float else str(int(var.get())))
 
         var.trace_add("write", _refresh)
-        ttk.Label(parent, textvariable=echo_var, width=8).grid(row=row, column=2, padx=8, pady=4)
+        echo_label = ttk.Label(parent, textvariable=echo_var, width=8)
+        echo_label.grid(row=row, column=2, padx=8, pady=4)
         parent.columnconfigure(1, weight=1)
+        return row_label, scale, echo_label
 
     def _show_model_info(self) -> None:
         """Show a small modal with the SELECTED model's description.
@@ -1272,9 +1299,11 @@ class AdvancedDialog(tk.Toplevel):
         field - those are persistent choices a silent reset shouldn't
         touch, not experiments a user wants to undo.
         """
+        self._vad_enabled.set(True)
         self._vad_min_silence.set(500)
         self._vad_threshold.set(0.5)
         self._vad_speech_pad.set(400)
+        self._sync_vad_controls_state()
         self._batch_size.set(16)
         self._hallucination_detect.set(True)
         self._alignment.set("none")
@@ -1287,6 +1316,7 @@ class AdvancedDialog(tk.Toplevel):
 
     def _save_and_close(self) -> None:
         cfg = self.app.app_config
+        cfg["vad_enabled"] = bool(self._vad_enabled.get())
         cfg["vad_min_silence_ms"] = int(self._vad_min_silence.get())
         cfg["vad_threshold"] = round(float(self._vad_threshold.get()), 2)
         cfg["vad_speech_pad_ms"] = int(self._vad_speech_pad.get())
@@ -1476,6 +1506,25 @@ class AdvancedDialog(tk.Toplevel):
             HardwareWizard(self, app=self.app)
         except Exception as e:  # noqa: BLE001
             self.app.log(f"Hardware wizard failed to launch: {e}")
+
+    def _sync_vad_controls_state(self) -> None:
+        """Grey out the three VAD sliders while VAD itself is off.
+
+        Same reasoning as _sync_denoise_level_state: a live control under
+        an unchecked toggle reads as "this applies", which is exactly the
+        confusion this is trying to avoid. Never raises: it runs from a Tk
+        callback, where an exception surfaces as a cryptic background-error
+        dialog.
+        """
+        try:
+            on = bool(self._vad_enabled.get())
+            state = "normal" if on else "disabled"
+            for row_label, scale, echo_label in self._vad_control_rows:
+                row_label.configure(state=state)
+                scale.state(["!disabled"] if on else ["disabled"])
+                echo_label.configure(state=state)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not sync VAD controls state", exc_info=True)
 
     def _sync_denoise_level_state(self) -> None:
         """Grey out the strength picker while denoise is off.

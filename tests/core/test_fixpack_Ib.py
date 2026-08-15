@@ -53,6 +53,7 @@ def _advanced_fake(app, *, batch_size_var) -> types.SimpleNamespace:
     """Build a SimpleNamespace carrying only what _save_and_close reads."""
     return types.SimpleNamespace(
         app=app,
+        _vad_enabled=_V(True),
         _vad_min_silence=_V(500),
         _vad_threshold=_V(0.5),
         _vad_speech_pad=_V(400),

@@ -460,3 +460,74 @@ def test_sync_ignored_when_duration_unknown(App):
     a.download_start_time_var.set("0:00:45")
     App._sync_download_scale_from_text(a, "start")
     assert a.download_start_scale.values == []
+
+
+# --- (h) _save_transcribe_prefs must not clobber Advanced-dialog hotwords ----
+#
+# hotwords_var has no matching widget on the Transcribe tab (see
+# build_transcribe_tab's "vars without a matching widget are simply not
+# packed" note) -- it is frozen at whatever config.json held when the tab
+# was built. AdvancedDialog._save_and_close is the real editor of
+# cfg["hotwords"]. Before the 2026-08-15 fix, _save_transcribe_prefs
+# unconditionally wrote hotwords_var's stale value back into
+# app_config["hotwords"] -- so editing hotwords in Advanced, then merely
+# touching the language dropdown or a checkbox on the Transcribe tab
+# (either one calls this same method), silently reverted the edit and
+# persisted the revert to disk.
+
+
+def _transcribe_prefs_app(App, *, hotwords_var_value, cfg_hotwords):
+    a = App.__new__(App)
+    a.app_config = {"hotwords": cfg_hotwords}
+    a.vad_enabled_var = _Var(True)
+    a.word_timestamps_var = _Var(False)
+    a.hotwords_var = _Var(hotwords_var_value)
+    # Explicit None (not just absent): tk.Misc.__getattr__ (App's base
+    # class) proxies any truly-missing attribute to self.tk, which recurses
+    # forever on a bare App.__new__(App) with no real Tcl interpreter. The
+    # method's own getattr(self, name, None) guards need a REAL attribute
+    # to find so they never fall through to that proxy.
+    a.diarization_var = None
+    a.device_var = None
+    a.compute_type_var = None
+    a.log = lambda *a_, **k: None
+    return a
+
+
+def test_save_transcribe_prefs_does_not_touch_hotwords(App, monkeypatch):
+    monkeypatch.setattr("app.app.save_config", lambda _cfg: None)
+    # hotwords_var still holds whatever was in config.json at app launch;
+    # app_config["hotwords"] already holds a NEWER value an Advanced-dialog
+    # save just wrote. They deliberately differ to prove the stale var
+    # cannot win.
+    a = _transcribe_prefs_app(
+        App,
+        hotwords_var_value="stale startup-time value",
+        cfg_hotwords="fresh value just saved in Advanced",
+    )
+    App._save_transcribe_prefs(a)
+    assert a.app_config["hotwords"] == "fresh value just saved in Advanced"
+
+
+def test_save_transcribe_prefs_still_saves_word_timestamps(App, monkeypatch):
+    """The fix must remove only the vad_enabled/hotwords writes (both now
+    solely owned by AdvancedDialog), not the whole method."""
+    saved = {}
+    monkeypatch.setattr("app.app.save_config", lambda cfg: saved.update(cfg))
+    a = _transcribe_prefs_app(App, hotwords_var_value="x", cfg_hotwords="")
+    a.word_timestamps_var.set(True)
+    App._save_transcribe_prefs(a)
+    assert a.app_config["word_timestamps"] is True
+    assert saved == a.app_config
+
+
+def test_save_transcribe_prefs_does_not_touch_vad_enabled(App, monkeypatch):
+    """vad_enabled_var has no widget either (same shape as hotwords_var,
+    added 2026-08-15 alongside the new Advanced-dialog "Enable VAD"
+    checkbox) -- must not clobber a fresher cfg["vad_enabled"] either."""
+    monkeypatch.setattr("app.app.save_config", lambda _cfg: None)
+    a = _transcribe_prefs_app(App, hotwords_var_value="x", cfg_hotwords="")
+    a.app_config["vad_enabled"] = False  # fresher value, just saved in Advanced
+    a.vad_enabled_var = _Var(True)  # stale startup-time value
+    App._save_transcribe_prefs(a)
+    assert a.app_config["vad_enabled"] is False
