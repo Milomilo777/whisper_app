@@ -5,7 +5,31 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-15 (latest) — added the missing VAD on/off checkbox, and
+## 🟢 2026-08-15 (latest) — v1.7.0 released
+
+The prior session's uncommitted work (config shrink-guard, GC
+hardening, hotwords fix, VAD checkbox, ELAN DOCTYPE guard, search
+dimension-mismatch fix, google-cloud-speech unbundling, transcript
+viewer edit-timestamp) was reviewed, split into 10 atomic commits, and
+pushed. Version bumped 1.6.0 -> 1.7.0. `pyright app core` and
+`pytest tests/ --ignore=tests/smoke` (2013 passed) both clean.
+Setup-Standard + Portable built and verified against the real
+`tests/smoke/test_exe_real_e2e.py` suite (real video, real large-v3
+model, real transcription — all 3 tests passed/skipped as expected).
+Tagged and published: https://github.com/Milomilo777/whisper_app/releases/tag/v1.7.0
+
+Pending: the old v1.6.0 GitHub release was NOT deleted this round (the
+usual "keep only latest + v1.5.0 for its macOS asset" pruning policy
+applies, but the owner asked to delete it manually later rather than
+now) — `gh release delete v1.6.0 --yes` when ready. macOS was not
+rebuilt (per CLAUDE.md's standing "do not build macOS" rule); v1.5.0
+still holds the only published macOS `.dmg`.
+
+Current state: working tree clean, nothing pending on master.
+
+---
+
+## 🟢 2026-08-15 — added the missing VAD on/off checkbox, and
 pre-emptively avoided the exact hotwords-clobbering bug class while
 doing it
 
