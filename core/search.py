@@ -329,6 +329,14 @@ def _semantic_query(
         vec = _blob_to_vector(bytes(r["vector"]), int(r["dim"]))
         if not vec:
             continue
+        if len(vec) != len(qvec):
+            # A stored embedding from a different model/dimension than the
+            # one embedding this query (e.g. the embedding model changed
+            # since this row was indexed) is incompatible, not just noisy —
+            # zip() would silently truncate to the shorter vector and score
+            # it against a meaningless partial dot product. Skip it; a
+            # reindex is what actually fixes this row, not a bogus score.
+            continue
         vnorm = math.sqrt(sum(x * x for x in vec)) or 1.0
         dot = sum(a * b for a, b in zip(qvec, vec))
         score = dot / (qnorm * vnorm)

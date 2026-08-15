@@ -233,6 +233,40 @@ def test_semantic_search_ranks_by_cosine(tmp_path):
         conn.close()
 
 
+def test_semantic_query_skips_dimension_mismatched_rows(tmp_path):
+    """Regression: a stored embedding from a different model/dimension than
+    the query embedder must be skipped, not silently truncated by zip()
+    into a meaningless partial-dot-product score."""
+    p = tmp_path / "t.json"
+    _write_transcript(p, [
+        {"start": 0.0, "end": 1.0, "text": "a cat sat there"},
+        {"start": 1.0, "end": 2.0, "text": "stale row from a different model"},
+    ])
+    conn = _open_db_at(tmp_path)
+    try:
+        sm.index_file(str(p), conn=conn)  # FTS rows only
+        # Row 0: a 4-d embedding matching the current (fake) embedder.
+        conn.execute(
+            "INSERT INTO embeddings (json_path, segment_index, vector, dim) "
+            "VALUES (?, 0, ?, 4)",
+            (str(p), sm._vector_to_blob([1.0, 0.0, 0.0, 0.0])),
+        )
+        # Row 1: an 8-d embedding simulating a stale row indexed by a
+        # previously-used, different-dimension model.
+        conn.execute(
+            "INSERT INTO embeddings (json_path, segment_index, vector, dim) "
+            "VALUES (?, 1, ?, 8)",
+            (str(p), sm._vector_to_blob([1.0] * 8)),
+        )
+        conn.commit()
+        embedder = _FakeEmbedder()  # embeds every query as a 4-d vector
+        hits = sm.search("a cat is friendly", conn=conn, embedder=embedder)
+        assert len(hits) == 1
+        assert "cat" in hits[0].text
+    finally:
+        conn.close()
+
+
 def test_indexed_files_table_tracks_one_row_per_file(tmp_path):
     p = tmp_path / "t.json"
     _write_transcript(p, [{"start": 0.0, "end": 1.0, "text": "x"}])
