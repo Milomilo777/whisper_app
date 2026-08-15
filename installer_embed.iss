@@ -48,10 +48,12 @@ Name: "{commondesktop}\Whisper Project {#MyAppVersion}"; Filename: "{app}\python
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop icon"; GroupDescription: "Shortcuts:"
 Name: "shellext"; Description: "Add 'Transcribe with Whisper Project' to the Windows Explorer right-click menu"; GroupDescription: "Integration:"
-; Video Tiling (video wall) is on by default. Ticking this task drops a
-; no_tiling.flag marker in {app}; the app reads it at startup (core.hub
-; .tiling_tab_enabled) and hides the Video Tiling tab. Unchecked = included.
-Name: "notiling"; Description: "Do NOT include the Video Tiling (video wall) feature"; GroupDescription: "Optional features:"; Flags: unchecked
+; Video Tiling (video wall) is OFF by default (owner request, 2026-08-15):
+; it's a niche multi-monitor live-stream grid most users never touch.
+; Leaving this task unticked drops a no_tiling.flag marker in {app}; the
+; app reads it at startup (core.hub.tiling_tab_enabled) and hides the
+; Video Tiling tab. Ticking the task installs the feature normally.
+Name: "tiling"; Description: "Install the Video Tiling (video wall) feature (advanced; most users don't need this)"; GroupDescription: "Optional features:"; Flags: unchecked
 
 [Registry]
 ; Same shell-extension hook as installer.iss, but the embedded
@@ -134,12 +136,15 @@ end;
 // --------------------------------------------------------------------
 //  Optional "Video Tiling" feature toggle.
 //
-//  Video Tiling is INCLUDED by default. If the user ticks the "notiling"
-//  task, we drop an empty marker file at {app}\no_tiling.flag during
-//  post-install. The app reads it at startup (core.hub.tiling_tab_enabled)
-//  and simply hides the Video Tiling tab — no code is removed, so the
-//  toggle is fully reversible by deleting the marker. The marker is also
-//  swept on uninstall (here + in [UninstallDelete]).
+//  Video Tiling is EXCLUDED by default (owner request, 2026-08-15) --
+//  most users never touch this multi-monitor live-stream grid, so it
+//  should be an opt-IN, not an opt-out. Unless the user ticks the
+//  "tiling" task, we drop an empty marker file at {app}\no_tiling.flag
+//  during post-install. The app reads it at startup
+//  (core.hub.tiling_tab_enabled) and simply hides the Video Tiling tab
+//  -- no code is removed, so the toggle is fully reversible by deleting
+//  the marker. The marker is also swept on uninstall (here + in
+//  [UninstallDelete]).
 // --------------------------------------------------------------------
 
 const
@@ -152,12 +157,12 @@ begin
   if CurStep <> ssPostInstall then
     Exit;
   MarkerPath := ExpandConstant(NoTilingMarker);
-  if WizardIsTaskSelected('notiling') then begin
+  if not WizardIsTaskSelected('tiling') then begin
     if not SaveStringToFile(MarkerPath, '', False) then
       Log('Could not create no_tiling.flag marker at ' + MarkerPath);
   end else begin
-    // Defensive: on a reinstall/upgrade where the user previously opted
-    // out but now wants tiling, make sure a stale marker is gone.
+    // Defensive: on a reinstall/upgrade where the user previously left
+    // Tiling out but now wants it, make sure a stale marker is gone.
     if FileExists(MarkerPath) then
       DeleteFile(MarkerPath);
   end;
