@@ -442,7 +442,7 @@ pyinstaller --noconfirm --clean --distpath dist_onedir whisper_project_onedir.sp
 - Inno Setup 6 / ISCC.exe (Methods B/C — winget install JRSoftware.InnoSetup)
 - python-build-standalone (astral-sh GitHub releases — CPython 3.11.15 install_only tarball, Method C)
 - Windows-native tar.exe/bsdtar (Method C extraction; Git's tar breaks on the C:\ path)
-- requirements.txt runtime deps (faster-whisper, google-cloud-speech, sherpa-onnx, python-docx, reportlab, etc.)
+- requirements.txt runtime deps (faster-whisper, sherpa-onnx, python-docx, reportlab, etc. — NOT google-cloud-speech, which is on-demand only as of 2026-08-15)
 
 **Gotchas**
 - Only TWO deliverables ship: Setup-Standard (installer_embed.iss over embed_build/) and Portable (a zip of that SAME embed_build/ tree, via shutil.make_archive). Portable stopped being a PyInstaller onefile exe at v1.3.2.
@@ -519,9 +519,9 @@ pip install pyright pytest
 - tests/core/conftest.py's autouse _default_offline_backend fixture pins transcribe_backend to faster_whisper for every test, because a dev machine shipping creds/gcloud_stt.json would otherwise silently resolve the default backend to google_cloud_stt and break tests mocking the offline MODEL.
 - tests/app/ is brand new as of 2026-07-04 -- currently only test_transcription_service.py, added specifically to cover the seam that shipped a real word_count=0 bug (GitHub issue #3, closed).
 - docs/history/ and docs/release-notes/ are the result of a 2026-07-04 reorg that moved archived planning docs and all RELEASE_NOTES_vX.Y.Z.md files out of the flat docs/ root into subfolders, each with its own README/index.
-- Two pre-existing test-order-dependent flakes are documented as NOT regressions: tests/core/test_resume_from_cancellation.py fails in isolation but passes under full-suite ordering, and tests/core/test_v08_real_file_e2e.py needs a real hot worker+model.
+- One pre-existing test-order-dependent flake is documented as NOT a regression: tests/core/test_resume_from_cancellation.py fails in isolation but passes under full-suite ordering. (tests/core/test_v08_real_file_e2e.py, the other entry formerly listed here, moved to tests/smoke/ on 2026-08-15 — it needs a real hot worker+model and running it concurrently with the rest of the hermetic suite was implicated in a real native crash; see docs/DECISIONS.md ADR 0008.)
 - CLAUDE.md enforces an English-only repo (no Persian/Arabic/RTL in docs, code comments, or commit messages) because the branch is being prepared for handover to a separate maintainer -- this is a repo-specific rule distinct from any assistant-side language preference.
-- requirements.txt bundles google-cloud-speech/google-cloud-storage unconditionally (it's the default engine when a bundled key ships), while other backends (pywhispercpp, stable-ts, screeninfo, nvidia_asr's transformers/torch/librosa) are optional-only and install on demand via core/optional_deps.py.
+- RESOLVED 2026-08-15 (was a real gotcha before): requirements.txt used to bundle google-cloud-speech/google-cloud-storage unconditionally, left over from when a bundled key made google_cloud_stt the default engine. That key was revoked 2026-08-04 (SECURITY.md) and the default reverted to offline faster-whisper, but requirements.txt/build_embed_installer.bat/the three .spec files' comments weren't updated to match — contradicting docs/CONFIG.md, docs/CLOUD_STT_GOOGLE.md and core/optional_deps.py's own comment, which all already said "on-demand, not bundled." Now removed from requirements.txt; google-cloud-speech/storage install on demand like every other optional backend (pywhispercpp, stable-ts, screeninfo, nvidia_asr's transformers/torch/librosa) via core/optional_deps.py.
 - docs/GAPS_AGAINST_PEERS_2026.md and docs/COMPETITIVE_ANALYSIS_2026.md were both re-audited 2026-07-04 with file:line evidence after a large fraction of their 'missing feature' claims turned out to already be shipped -- trust the 2026-07-04 corrections over the original May-2026 prose in either doc.
 
 ---
@@ -529,10 +529,10 @@ pip install pyright pytest
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 442
-- **Structure refreshed:** 2026-08-15T09:50:23
+- **Source files tracked:** 443
+- **Structure refreshed:** 2026-08-15T19:42:33
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +36 added · ~64 changed · -2 removed
+- **Drift since semantic build:** +38 added · ~90 changed · -3 removed
 
 > ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
 >
@@ -540,7 +540,7 @@ pip install pyright pytest
 
 | Top-level | Source files |
 |---|---|
-| `tests` | 182 |
+| `tests` | 183 |
 | `docs` | 93 |
 | `core` | 67 |
 | `app` | 28 |
@@ -551,6 +551,6 @@ pip install pyright pytest
 | `tools` | 8 |
 | `assets` | 1 |
 
-**By type:** `.py`×281  `.md`×108  `.json`×16  `.yml`×11  `.bat`×5  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.txt`×2  `.ps1`×2  `.toml`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×282  `.md`×108  `.json`×16  `.yml`×11  `.bat`×5  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.txt`×2  `.ps1`×2  `.toml`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->

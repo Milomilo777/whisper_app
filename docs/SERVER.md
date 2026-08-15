@@ -134,6 +134,13 @@ request can't redirect your audio to a cloud service.
   a URL can never be parsed as a yt-dlp flag.
 - **Bounded queue.** Total and queued job counts are capped; once full the
   server replies HTTP 503.
+- **Supreme Master TV (SMTV) scraping is not reachable through this
+  server.** A URL job (`POST /api/jobs` with `{url: ...}`) always goes
+  through the yt-dlp download path (`core.server.jobs.JobManager`'s
+  `_download` callback); `core.integrations.smtv`'s page-scraping is
+  wired only into the desktop GUI's Download tab. A remote LAN/web
+  client cannot trigger it, so this server's threat model does not need
+  to account for that scraper's regex-based HTML parsing.
 
 ## Configuration
 

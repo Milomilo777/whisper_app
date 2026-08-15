@@ -6,9 +6,26 @@ or the Whisper model isn't present.
 
 The tests in this file actually load + run faster-whisper against
 the real audio, so they're meaningfully slower than the rest of
-the unit suite (~ tens of seconds each). They live alongside the
-existing smoke tests because they share the same model-load cost
-and the same gating pattern.
+the unit suite (~ tens of seconds each). They always belonged
+conceptually with the smoke tests (same model-load cost, same
+skip-when-resources-missing gating pattern) but originally lived in
+``tests/core/`` for a shared-fixture reason that no longer applies.
+
+Moved here 2026-08-15 (see ``docs/DECISIONS.md`` ADR 0008 and
+``docs/SESSION_HANDOFF_NEXT.md``): on a machine where both the fixture
+clip and the real model happen to be present, this file used to run for
+real as part of ``run_tests.bat``'s ~700-test "hermetic" suite
+(``pytest tests/ --ignore=tests/smoke``) — concurrently with dozens of
+other tests' leftover threads and any real-model-loading elsewhere in
+the same run. That specific combination (a real faster-whisper load /
+transcribe here, running at the same time as several other heavyweight
+background threads left over from earlier tests) was implicated in a
+real, hard-to-pin-down native crash (Windows STATUS_BREAKPOINT via
+CPython's garbage collector) that resisted several rounds of targeted
+``gc.disable()`` fixes elsewhere in the codebase. Running this file only
+via the separate smoke-test path (never mixed into the hermetic run)
+removes that specific trigger condition regardless of whether the
+underlying GC/threading interaction is ever fully understood.
 """
 from __future__ import annotations
 

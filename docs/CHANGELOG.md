@@ -4,7 +4,93 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editing "Hotwords" in Advanced settings could be silently undone** —
+  saving Advanced settings correctly wrote the new hotwords to disk, but
+  the Transcribe tab kept its own frozen copy of whatever hotwords value
+  existed when the app launched (left over from a UI redesign; that copy
+  has no visible field of its own). Merely changing the language dropdown
+  or the "Identify speakers" / "Word timestamps" checkboxes afterward
+  re-saved preferences using that stale copy, overwriting the fresh
+  Advanced-dialog edit with no warning. Fixed by no longer writing that
+  stale copy back into config.
+
 ### Added
+
+- **Advanced settings: "Enable VAD (skip silent segments)" checkbox** —
+  Voice Activity Detection was always on with no way to turn it off from
+  the desktop app, even though the engine and the optional LAN/web server
+  both already supported disabling it. The three VAD tuning sliders (min
+  silence, threshold, speech pad) now grey out while it's unchecked.
+
+### Security
+
+- **"Convert transcript" ELAN (`.eaf`) import: reject a DOCTYPE** — a
+  crafted `.eaf` with a `DOCTYPE`/entity block could previously hang or
+  balloon memory ("billion laughs") when imported; such files are now
+  refused outright with a clear error. Found during an attacker's-eye
+  pass over the whole codebase; every other input-parsing path checked
+  in that pass (SSRF guard on the online-config URL, zip-slip guard on
+  the model download, upload path/filename sanitising in the LAN server,
+  constant-time token compare) was already hardened.
+
+### Fixed
+
+- **Engine-status / hardware-probe background threads hardened against a
+  native-fault risk class** — switching the transcription engine, opening
+  Advanced, or re-running the Hardware Wizard's probe starts a background
+  readiness check that lazily imports a heavy optional package (Google
+  Cloud Speech, whisper.cpp, NVIDIA Parakeet's transformers/torch,
+  pyannote.audio, sentence-transformers, llama-cpp-python, sherpa-onnx,
+  stable-ts, or the hardware tier probe's ctranslate2/onnxruntime). A real
+  Windows native fault (`STATUS_BREAKPOINT`) was observed and traced to
+  Python's garbage collector running while one of these background
+  threads was doing this allocation-heavy work, under enough concurrent
+  memory pressure elsewhere in the process. Every such probe now disables
+  GC for its risky operation (restoring the caller's prior GC state
+  afterward) as defense in depth — real, valuable hardening, but four
+  rounds of instrumented full-test-suite reproduction showed this
+  mitigation alone could not be proven to fully close the fault under the
+  specific worst-case load a ~700-test run creates (leftover threads from
+  many earlier tests plus a concurrent real model load). The full-suite
+  crash was what actually got resolved — by moving the one test that
+  needed a real model+transcription (`test_v08_real_file_e2e.py`) out of
+  that hermetic run and into `tests/smoke/`, removing the trigger
+  condition rather than continuing to chase GC timing. See ADR 0008 in
+  `docs/DECISIONS.md` for the full, honest multi-round story.
+
+- **Semantic search silently scored dimension-mismatched embeddings** — if
+  a stored embedding's dimension ever differed from the current query
+  embedder's (e.g. after switching sentence-transformers models), the
+  cosine-similarity comparison used `zip()`, which silently truncates to
+  the shorter vector instead of erroring — producing a meaningless but
+  plausible-looking score instead of correctly excluding the stale row.
+  `core.search._semantic_query` now skips a dimension-mismatched row.
+  Found while auditing `core/chapters.py` and `core/search.py` for bugs
+  (both are fully wired into the pipeline but have no discoverable UI
+  entry point yet, so neither has had real usage exercise them).
+
+- **`requirements.txt` no longer bundles `google-cloud-speech` /
+  `google-cloud-storage`** — leftover from when a bundled service-account
+  key made Google Cloud STT the default engine; that key was revoked
+  2026-08-04 (see "Retired: the bundled Google Cloud key" above) and the
+  default reverted to offline faster-whisper, but the eager dependency
+  pin was never cleaned up, contradicting `docs/CONFIG.md` and
+  `docs/CLOUD_STT_GOOGLE.md`, which already documented it as on-demand
+  only. Now genuinely on-demand via `core/optional_deps.py`, like every
+  other optional backend — shrinks a normal install and the shipped
+  Windows installer, and removes the grpc/protobuf stack that most users
+  never touch from every install by default.
+
+### Added
+
+- **Transcript viewer: "Edit timestamp..." (right-click a segment)** —
+  hand-edit a segment's start/end time (HH:MM:SS.mmm). Only that segment
+  changes; a resulting overlap with the previous segment or a sub-1s
+  duration gets a light-orange row highlight as a warning, never a
+  blocked save. Inspired by a comparable faster-whisper GUI's editable
+  timestamp table.
 
 - **Download tab: "Clear completed" button** — the Queue tab has always
   had one; the Download tab was missing the parity button (owner-noticed

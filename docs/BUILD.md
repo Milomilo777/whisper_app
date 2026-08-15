@@ -214,9 +214,14 @@ python -c "import shutil; shutil.make_archive(r'dist_installer\WhisperProject-vX
 and redownloads `embed_build\` from scratch) so the result is not
 sensitive to whatever was left over from a previous build — slower
 than an incremental refresh, but nothing to get wrong. It ends with
-its own sanity imports (full stack, Google Cloud STT, core modules,
-`gui.py` parses) and fails loudly (non-zero exit) if anything's
-missing.
+its own sanity imports (full stack, core modules, `gui.py` parses)
+and fails loudly (non-zero exit) if anything's missing. Google Cloud
+STT's own client libraries (`google-cloud-speech`, `grpc`, protobuf)
+are deliberately NOT part of this bundle — they install on demand via
+`core/optional_deps.py` the first time a user picks their own
+service-account JSON; only the app's lightweight wrapper module
+(`core.backends.google_cloud_stt`, which needs none of those at
+import time) is sanity-checked here.
 
 **Step 4 — update the existing GitHub release's assets in place**
 (same tag, no new tag, no version bump):

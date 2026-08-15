@@ -5,7 +5,455 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟡 2026-08-15 (latest) — config.json truncation incident: root cause
+## 🟢 2026-08-15 (latest) — added the missing VAD on/off checkbox, and
+pre-emptively avoided the exact hotwords-clobbering bug class while
+doing it
+
+Follow-up to the hotwords finding right below. While cataloguing every
+`*_var` in `build_transcribe_tab` with no matching widget (the same
+audit that found the hotwords bug), found `vad_enabled_var` in the same
+shape — AND, unlike `hotwords`, `advanced.py` had never had a widget for
+it either. Net effect: **VAD could not be turned off from the desktop
+app at all**, even though `core.transcriber._vad_parameters()` fully
+respects `config["vad_enabled"]` and the optional LAN/web server already
+exposes it as a per-job toggle (`core/server/httpd.py`'s
+`_OPTION_SPEC`). Owner confirmed via `AskUserQuestion` that this should
+be a real checkbox, not just documented.
+
+Added "Enable VAD (skip silent segments)" to the Advanced dialog's VAD
+section, with the same hover-help ⓘ icon treatment as every other
+control there (owner asked for this explicitly, mid-task) explaining
+what VAD does and what turning it off means. The three tuning sliders
+(min silence / threshold / speech pad) now grey out via a new
+`_sync_vad_controls_state()` (mirrors the existing
+`_sync_denoise_level_state()` pattern exactly) while VAD is unchecked —
+`_slider_row` was changed to return its 3 widgets so the caller can grey
+them, since it had no callers besides the VAD sliders.
+
+**Critical follow-through, not an afterthought:** adding this checkbox
+alone would have re-created the EXACT hotwords bug for `vad_enabled` —
+`vad_enabled_var` still exists on the tab with no widget, and
+`_save_transcribe_prefs` still unconditionally wrote its frozen value
+into `cfg["vad_enabled"]` on every language-dropdown/checkbox touch. Removed
+that write too (same fix shape as hotwords), making `AdvancedDialog` the
+sole owner of `vad_enabled` just like it now is for `hotwords`.
+
+Verified end-to-end against a REAL `tk.Tk()` instance (not just reading
+the code): constructed a real `AdvancedDialog`, confirmed the checkbox
+renders with the exact label text, unchecked it and confirmed via
+`widget.state()` introspection that all three slider rows actually go
+`disabled`, then called the real `_save_and_close` and confirmed
+`vad_enabled: False` lands in `app_config`. Updated 3 existing tests
+(`test_advanced_restore_defaults.py` x2, `test_advanced_model_change.py`)
+whose fake `SimpleNamespace` dialogs needed `_vad_enabled` added, and
+added 2 new ones in `tests/core/test_fixpack_bl_appui.py` proving the
+tab can no longer clobber `vad_enabled` either.
+
+---
+
+## 🟢 2026-08-15 — real data-loss bug found in
+`app/app.py:_save_transcribe_prefs`: Advanced-dialog "Hotwords" edits
+could be silently reverted
+
+Owner asked to go deeper into `app/dialogs/advanced.py` after the GC-crash
+work below wrapped up. Found this by cross-checking every `cfg["..."] =`
+write in `AdvancedDialog._save_and_close` against every `*_var` created in
+`app/widgets/tabs.py`'s `build_transcribe_tab`, looking for a key written
+from two different places.
+
+**The bug:** `build_transcribe_tab` creates `app.hotwords_var` and
+initializes it from `config.json` at app-launch time — but (per that
+function's own "vars without a matching widget are simply not packed"
+comment, a leftover from an earlier UI redesign) never binds it to any
+actual widget, so nothing on the Transcribe tab ever changes it again.
+`App._save_transcribe_prefs` — called every time the language dropdown or
+the "Identify speakers" / "Word timestamps" checkboxes change — used to
+unconditionally write `hotwords_var`'s frozen, possibly months-stale value
+into `app_config["hotwords"]`. `AdvancedDialog._save_and_close` is the
+ONLY real editor of that field. Net effect: edit hotwords in Advanced,
+click Save (correctly written to disk) — then touch the language dropdown
+or either of those two checkboxes on the main tab, and the edit is
+silently reverted and the reverted value gets persisted, with no error,
+no dialog, nothing in the log to explain it.
+
+Confirmed real (not theoretical) by reproducing the OLD code path
+standalone: fed it a "fresh" `app_config["hotwords"]` and a differing
+"stale" `hotwords_var`, called the old logic, and got the stale value
+back. Fixed by removing the `hotwords_var` write from
+`_save_transcribe_prefs` (2 lines) — `device_var`/`compute_type_var` have
+the identical "no matching widget" shape but nothing else ever writes
+`cfg["device"]`/`cfg["compute_type"]`, so they were left alone; only
+`hotwords` had a second, live writer to conflict with. Two new regression
+tests in `tests/core/test_fixpack_bl_appui.py`
+(`test_save_transcribe_prefs_does_not_touch_hotwords`,
+`test_save_transcribe_prefs_still_saves_vad_and_word_timestamps`) using
+the existing `App.__new__(App)` + stubbed-attrs pattern from that file —
+note the gotcha hit while writing them: `getattr(bare_app, "some_var",
+None)` recurses infinitely on a bare `App.__new__(App)` unless the
+attribute is set to a REAL value (even `None`) first, because `tk.Misc`
+(App's base class) proxies any truly-missing attribute to `self.tk`, which
+doesn't exist on an object that never ran `Tk.__init__`.
+
+Also added `test_format_help_covers_every_supported_format` in
+`tests/core/test_fixpack_bl_advanced.py` — a smaller, related finding:
+`advanced.py`'s `_FORMAT_HELP` dict (hover-help text for each output
+format's checkbox) is currently in sync with
+`core.writers.supported_formats()`, matching its own comment's claim, but
+nothing enforced that; a future new output format could silently ship
+with no hover-help and nothing would catch it except a human noticing.
+
+`pyright app core` clean; `app/dialogs/advanced.py` itself was read in
+full and found otherwise well-defended (its own hover-help completeness
+was the only other gap).
+
+---
+
+## 🟢 2026-08-15 — GC-crash chase went 4 rounds deep before the
+REAL fix turned out to be test isolation, not more GC patches; found +
+fixed 6 more instances of the same risk class along the way; one real
+semantic-search bug found too
+
+Owner said "much more token budget, keep going deeper" — used it to
+finish the GC-crash investigation properly (it was NOT actually done,
+despite two earlier "looks fixed" full-suite-clean runs) and to sweep
+the rest of the codebase for the same risk pattern + other bugs.
+
+**The GC crash needed a 3rd round.** Round 1 (lock only) crashed again on
+rerun — proved wrong by evidence, not assumed. Round 2 (`gc.disable()`
+scoped to just the `google.cloud.speech_v2` import inside
+`runtime_available()`) ran a FULL clean suite pass and looked genuinely
+fixed — that's what got reported to the owner as done. It was not: a
+LATER full-suite rerun (verifying a batch of 8 pre-emptive fixes applied
+to other backends) crashed again, same `app.app._probe` thread, but this
+time the fault landed one line AFTER `runtime_available()` had already
+returned — in a plain `EngineStatus(...)` dataclass construction. The
+real failure mode is "GC firing anywhere in this thread while the
+process is under concurrent allocation pressure" (a real faster-whisper
+transcription running on another thread at the time), not "GC firing
+mid-import" specifically. **Round 3**: disable GC for the WHOLE
+`_probe()` thread body in `app/app.py` (not just the import inside
+`engine_status()`), and the same for `core.hardware.probe_tiers()` (the
+Hardware Wizard's re-probe thread, same risk shape:
+ctranslate2/onnxruntime/torch first-import). One full-suite rerun after
+this was clean; reported as looking fixed.
+
+**It was not.** A follow-up rerun crashed AGAIN, same `_probe` thread,
+fault landing one line after round 3's own `gc.enable()` — inside
+`post_to_main()`. **Round 4**: widened the guard to cover `_probe()`'s
+ENTIRE body including `post_to_main()`. Reran — crashed AGAIN, but this
+time the fault frame was `_weakrefset.py` line 15, a CPython-internal
+weakref cleanup callback, with NO `app.py` code anywhere in the visible
+stack — and the concurrently-running thread at that moment was loading
+the REAL Whisper model for `test_v08_real_file_e2e.py`, a thread none of
+these fixes ever touched. **This settled it**: `gc.disable()`/
+`gc.enable()` are process-global, not thread-local — ANY thread crossing
+GC's allocation threshold can trigger a process-wide collection, so
+hardening `_probe()` specifically can never fully close this while some
+OTHER thread (the real model load) can independently trigger the same
+class of fault on its own. No amount of further per-function GC-window
+widening can converge on a complete fix this way.
+
+**Owner was asked directly** (given how much budget this chase had
+already consumed) whether to keep patching, accept the residual risk, or
+isolate the real-model test — and chose isolation. **The actual fix**:
+`test_v08_real_file_e2e.py` moved from `tests/core/` to `tests/smoke/`
+(`git mv`), so it never again runs concurrently with the other ~700
+hermetic tests' leftover threads — removing the trigger condition
+entirely rather than continuing to chase where GC might fire next. This
+needed `tests/core/conftest.py`'s `_isolate_transcriber_globals` autouse
+fixture (which the moved test's module-scoped model fixture relies on)
+promoted to a new `tests/conftest.py` so `tests/smoke/` inherits it too.
+Two full-suite reruns after the move were clean — and this time "clean"
+actually means something, since the trigger condition is provably gone,
+not just absent by chance on that particular run.
+
+The per-function `gc.disable()` hardening from rounds 1-3 is KEPT (real,
+cheap, evidence-based risk reduction for ordinary single-transcription
+usage) but is explicitly not claimed to make the full pytest suite
+crash-proof on its own — that distinction matters and is written up
+honestly in ADR 0008 (updated with all 4 rounds, not just the version
+that turned out to be wrong) and the new ADR 0009 (the test-isolation
+decision), both in `docs/DECISIONS.md`.
+
+**Swept the rest of the codebase for the same risk shape** (a
+lazy-imported heavy C-extension package, checked via an
+`is_available()`/`runtime_available()`-style function, reachable from a
+background thread) and found 6 more instances that had NOT been observed
+to crash yet but do the identical pattern: `core/separator.py` (demucs),
+`core/voiceprint.py` (pyannote.audio), `core/llm.py` (llama-cpp-python),
+`core/diarization.py` (sherpa-onnx — refactored its duplicate raw import
+in `availability_reason()` into a shared `_sherpa_onnx_importable()`
+helper so both call sites got the guard, not just one),
+`core/alignment.py` (stable-ts), and `core/search.py`
+(sentence-transformers, both `semantic_available()` and the actual model
+load in `Embedder._load()`). All got the same lock + `gc.disable()`
+two-part defense pre-emptively, each with its own GC-state-restoration
+regression test.
+
+**Also found and fixed a real bug while reading `core/search.py`
+carefully** (chosen specifically because it — like `core/chapters.py`,
+which turned out clean on inspection — is "fully wired into the pipeline
+but has no discoverable UI entry point yet" per this file's own
+Gotchas, meaning it has never been exercised by a real user, only by
+whatever the test suite happens to cover): `_semantic_query`'s cosine
+similarity used `zip(qvec, vec)`, which silently truncates to the
+shorter vector when a stored embedding's dimension differs from the
+current query embedder's — instead of erroring or excluding the row,
+it produced a meaningless but plausible-looking score. Proved it was
+real (not theoretical) by running the OLD code against a deliberately
+mismatched-dimension row: it returned a bogus extra hit at score
+`0.3536`. Fixed by skipping a dimension-mismatched row outright; new
+regression test `test_semantic_query_skips_dimension_mismatched_rows`
+would have caught this.
+
+**Housekeeping found along the way:** `core/optional_deps.py`'s
+`activate()` docstring had the same stale "google-cloud-speech is now
+bundled" assumption as the requirements.txt entry fixed in the session
+below — corrected. `core/chapters.py`, `core/hallucination.py`,
+`core/history.py`, and `core/server/httpd.py` were all read carefully
+looking for bugs and found clean — well-defended, parameterized SQL,
+already-guarded filename sanitization (NTFS reserved names, `..`,
+control chars), careful multipart-body streaming with no whole-payload
+buffering. Not every file has a bug; these didn't, and that's a real
+(negative) finding worth recording so a future session doesn't re-spend
+effort re-reading them from scratch looking for something that was
+already ruled out.
+
+**Every change in this entry**: `pyright app core` clean (0/0/0) and
+targeted test files clean after each edit, same rigor as every other
+entry in this file. Full-suite reruns are the real proof for the GC fix
+specifically — see above.
+
+---
+
+## 🟢 2026-08-15 — `google-cloud-speech`/`google-cloud-storage`
+demoted from bundled to genuinely on-demand; three years^H^H^H one
+stale `requirements.txt` comment finally reconciled
+
+Owner asked (mid-session, prompted by the native-crash work right below):
+should `google.cloud.speech_v2` be auto-installed at all, or on-demand
+only "to make it lighter"? Left the call to me. Investigated rather than
+guessing, and found a genuine, three-way-confirmed drift:
+
+- `docs/CONFIG.md` and `docs/CLOUD_STT_GOOGLE.md` (user-facing docs) both
+  ALREADY said "installed on demand on first use... not bundled."
+- `core/optional_deps.py`'s own comment ALREADY said "large enough to
+  keep out of the slim embed tree, so it installs on first use."
+- But `requirements.txt` (lines 94-103, pre-fix) pinned
+  `google-cloud-speech>=2.21` / `google-cloud-storage>=2.10` eagerly,
+  with a comment saying this backend "is now the DEFAULT engine when a
+  bundled service-account key ships." That premise stopped being true
+  2026-08-04 (`SECURITY.md`, "Retired: the bundled Google Cloud key" —
+  the shared key was revoked and the default reverted to offline
+  faster-whisper) and nobody went back to remove the now-pointless eager
+  pin. `PROJECT_INDEX.md`'s own Gotchas section had already noticed and
+  described this exact inconsistency without anyone resolving it.
+
+Confirmed via `embed_build/Lib/site-packages/google/cloud/speech_v2`
+actually being present on disk that this wasn't just a stale comment —
+every shipped Windows Setup-Standard/Portable build has genuinely been
+bundling the full grpc/protobuf/google-cloud stack for a backend most
+users never touch, ever since the security fix should have made it
+on-demand-only.
+
+**Changed:** removed the pin from `requirements.txt` (with an updated
+comment explaining why). Removed the now-permanently-failing "sanity
+import check (bundled Google Cloud STT stack)" block from
+`build_embed_installer.bat` (it explicitly imported
+`google.cloud.speech_v2` + `grpc._cython.cygrpc`, which would no longer
+be present — kept the separate "core modules" check, which only imports
+the app's OWN wrapper `core.backends.google_cloud_stt`, confirmed via
+grep to have zero top-level `import google`, so it works fine either
+way). Updated the stale "REQUIRED runtime deps" comment in all three
+`.spec` files (mac/onedir/onefile) to "OPTIONAL" — no functional change
+needed there, their `collect_all(...)` calls were already wrapped in
+`try/except Exception: pass`, so they already degraded gracefully when
+the package is absent; only the comment was wrong. Updated
+`docs/BUILD.md` and two stale `PROJECT_INDEX.md` lines (the
+already-self-aware Gotchas entry, and the requirements.txt deps list) to
+match.
+
+**Verified, not just asserted:** ran `core.backends.google_cloud_stt` and
+`core.backends.availability` through a `builtins.__import__` interceptor
+that raises `ModuleNotFoundError` for `google`/`google.cloud`/`grpc` (no
+real uninstall — this dev machine's own venv was left untouched) —
+confirmed both modules still import cleanly, `runtime_available()` /
+`storage_available()` correctly return `False`, and the deep engine
+probe correctly reports `"Google Cloud client not installed (installs on
+first use)"`. Did NOT rebuild/upload a new installer this session (that's
+a separate, explicit-go-ahead decision per this repo's `CLAUDE.md`
+"Cutting a release needs explicit go-ahead" — flagged to the owner as a
+follow-up, not done unasked).
+
+---
+
+## 🟢 2026-08-15 — attacker's-eye pass over the whole codebase:
+one real gap found (`.eaf` import DOCTYPE) and fixed; rest is already
+hardened
+
+Owner asked to look at the repo from a fresh angle; chose a threat-model
+review (not another correctness/architecture pass) since a lot of the
+existing security hardening was scattered across ad hoc fixes with no
+single place tying it together. Checked with actual grep + code reading,
+not guesswork:
+
+- `core/config.py`'s online-config fetch already restricts the URL
+  scheme to `http`/`https` and caps the response size before buffering
+  it whole — SSRF and memory-exhaustion both already closed.
+- `core/model_manager.py`'s ZIP extraction already has a zip-slip guard.
+- `core/server/jobs.py`'s upload path (`_safe_filename`) already strips
+  traversal and Windows reserved device names; the access token is
+  already compared with `hmac.compare_digest`; `is_safe_url` already
+  blocks loopback/link-local/metadata addresses for URL jobs.
+- **One real gap:** `core/convert.py`'s `.eaf` (ELAN) import used plain
+  `ET.fromstring` on untrusted XML — no defense against a `DOCTYPE`
+  entity-expansion ("billion laughs") file. Fixed by rejecting any
+  `<!DOCTYPE` substring outright (see ADR 0007 in `docs/DECISIONS.md`
+  for why a substring check was chosen over `defusedxml` or an expat
+  handler — the latter's usual recipe doesn't even work on this
+  machine's Python 3.14). Two new regression tests in
+  `tests/core/test_new_formats.py`
+  (`test_elan_doctype_is_rejected_not_expanded`,
+  `test_elan_round_trip_unaffected_by_doctype_guard`); full detail in
+  `docs/CHANGELOG.md` under Security.
+- **Also documented, not a code change:** `docs/SERVER.md` now notes
+  that the SMTV scraper (`core/integrations/smtv.py`) is unreachable
+  through the LAN/web job API — a URL job always goes through yt-dlp,
+  never the scraper — so that server's threat model doesn't need to
+  account for it.
+
+`pyright core/convert.py` (clean) and the two new/touched test files ran
+clean in isolation. The full hermetic suite
+(`python -m pytest tests/ --ignore=tests/smoke -q`) crashed hard on
+BOTH attempts, always around 89% — **unrelated to this session's fix**
+(the crash trace never touches `core/convert.py` or `.eaf` parsing).
+
+**Second finding, same session, fully root-caused and fixed — a real
+native crash in the full-suite run, unrelated to the `.eaf` fix above.**
+Owner said "extra token budget, go ahead" so this got chased to ground
+instead of being left as an open question.
+
+`Windows fatal exception: code 0x80000003` (STATUS_BREAKPOINT), always
+around the 89% mark of `python -m pytest tests/ --ignore=tests/smoke -q`.
+First instrumented read of the crash frame was **misleading**: it looked
+like it came from `faster_whisper/transcribe.py`'s `encode`/
+`detect_language`, called from `tests/core/test_v08_real_file_e2e.py`'s
+`transcribed_clip` fixture — that test is NOT under `tests/smoke/`, it
+self-gates with `pytest.mark.skipif(not SMTV_CLIP.exists(), ...)`, and on
+THIS machine both the real audio fixture and the real ~3 GB model are
+present, so it actually runs a real `core.transcriber.transcribe()` every
+"hermetic" run here (CI never sees this — no model there). That thread
+was real and running, but a full re-read of the crash dump showed the
+**actual** faulting ("Current") thread was a DIFFERENT one: an
+`app.app._probe` daemon thread — one of THREE, all named `_probe`, all
+doing the SAME thing at once.
+
+**Root cause:** `app.app._refresh_engine_status()` spawns a fresh daemon
+thread on every engine-selection change to call
+`core.backends.availability.engine_status(..., deep=True)`. For
+`google_cloud_stt` that reaches
+`core/backends/google_cloud_stt.py:runtime_available()`, which did a bare
+`import google.cloud.speech_v2` with no guard. Three such probe threads
+(left over from three separate `App()` instances constructed earlier in
+the suite and never fully torn down) all hit that import around the same
+moment. The actually-faulting thread was mid-construction of a proto-plus
+message class (`proto/message.py` `__new__` -> `proto/_file_info.py`
+`ready()`, inside `google/cloud/speech_v2/types/cloud_speech.py`'s
+module-level class registration) when a **garbage-collection pass fired
+concurrently** — real allocation pressure from the OTHER real work
+running at the same time (the `test_v08_real_file_e2e.py` transcription
+above, plus the general thread/import pressure from a ~700-test run) —
+and CPython's GC landing mid-construction of that C-extension-backed
+class faulted the process.
+
+**Two rounds of instrumented verification, not just a plausible-sounding
+theory:**
+1. First fix attempt: added `_availability_lock = threading.Lock()`
+   around `runtime_available()`/`storage_available()`, reasoning "two
+   threads racing the same first import is the problem." Reran the full
+   suite — **crashed again, in the exact same place.** The crash dump
+   proved the lock WAS working (the two idle probe threads were correctly
+   parked waiting on it, one was alone inside doing the import) — so a
+   single thread, entirely alone, still faulted when GC fired mid-import.
+   The race-between-threads theory was wrong; disproved by evidence, not
+   assumed.
+2. Real fix: wrap the import in `gc.disable()` / `gc.enable()` (restoring
+   whatever the caller's GC state was before, via `try/finally`), so no
+   GC pass can land mid-construction regardless of what else is running
+   concurrently. Reran the full suite a third time — **clean, 100%, exit
+   0, past the 89% mark with no crash.**
+3. Applied the same two-part defense (lock + `gc.disable()` around the
+   import) pre-emptively to the two other backends with the identical
+   risk shape — `core/backends/whisper_cpp.py`'s `is_available()`
+   (pywhispercpp/ggml native bindings) and
+   `core/backends/availability.py`'s `_import_transformers()`
+   (NVIDIA Parakeet's transformers/torch) — since nothing about the
+   failure mode is specific to protobuf; it is "GC firing mid-registration
+   of any C-extension-backed class," and those two do the same
+   lazy-import-from-a-daemon-thread pattern.
+
+New regression tests (run the REAL function bodies, no monkeypatch —
+hermetic either way since the try/finally covers both the import-succeeds
+and import-fails paths): `tests/core/test_google_cloud_stt.py`
+(`test_runtime_available_restores_gc_state`,
+`test_storage_available_restores_gc_state`,
+`test_runtime_available_disables_gc_during_the_import`,
+`test_runtime_available_serializes_concurrent_calls`) and
+`tests/core/test_backends.py`
+(`test_whisper_cpp_is_available_restores_gc_state`,
+`test_whisper_cpp_is_available_serializes_concurrent_calls`). These prove
+the defensive mechanism (GC state always restored, concurrent callers
+serialize) — they cannot and do not try to reproduce the native fault
+itself, which is inherently timing-dependent. See ADR 0008 in
+`docs/DECISIONS.md` for the general pattern, and `docs/CHANGELOG.md`
+under Security for the shipped-facing summary.
+
+**Separately, also fixed (real but smaller contributing factor):**
+`tests/app/test_live_service.py`'s `wired` fixture started a
+`LiveTranscriber` (which spawns a `live-worker-reader` daemon thread) on
+every one of 13 of its 15 tests and never stopped it — `_FakeProc` doesn't
+simulate a real subprocess's stdout pipe closing on exit, so nothing ever
+unblocked the reader thread's `queue.get()`. One test
+(`test_language_is_forwarded`) also leaked a caller thread blocked for
+the full 180s `CHUNK_TIMEOUT_S`. Fixed with a `_stop_and_join()` teardown
+helper; verified zero leaked threads after the file's full run (was: up
+to ~14). Kept even though the GC-disable fix above is what actually
+stopped the crash — fewer live threads by the time the suite reaches 89%
+is still less scheduling/GC pressure, and a permanently-blocked daemon
+thread per test is a bug on its own regardless of this incident.
+
+One path oddity ruled out along the way (recurred on multiple test
+files, not just the one first noticed): crash/warning frames sometimes
+showed `C:\Users\Owner\Desktop\whisper_project_claude\...` — a directory
+that does **not** exist on this machine — instead of the real
+`C:\Users\Owner\Desktop\whisper_app\...`. Cause: stale `__pycache__`
+`.pyc` files (dated back to before this repo's folder was last
+renamed/moved) whose embedded path CPython kept reusing because their
+mtime/size check against the current `.py` happened to still pass.
+Deleted all `__pycache__` directories under the repo (489 of them,
+gitignored, zero tracked, fully regeneratable, verified with
+`git ls-files | grep __pycache__` returning 0 first) rather than chasing
+them one file at a time. `pyright app core` (0/0/0) and the full suite
+were reconfirmed clean after the cleanup.
+
+**Full-suite crash verification, 5 total runs this session:** run 1
+(pre-fix) crashed. Run 2 (only the `test_live_service.py` thread-leak fix)
+crashed in the same place — proved that fix alone was insufficient. Run 3
+(+ lock-only on `google_cloud_stt.runtime_available`) crashed in the same
+place again — proved the race-between-threads theory wrong. Run 4
+(+ `gc.disable()`/`gc.enable()` on all three backends) completed 100%,
+exit 0, no crash. Run 5 (after adding the regression tests + the
+`__pycache__` cleanup) also completed 100% with no crash, but hit one
+unrelated `_tkinter.TclError: couldn't read file
+".../ttk/scale.tcl"` — re-ran that one test file alone immediately after
+and it passed cleanly 10/10, and the file was confirmed present and
+intact on disk (2787 bytes) moments later, so this reads as a transient
+Windows file-lock/AV-scan blip on this machine, not a real regression —
+noted here in case it recurs and turns out to be a real pattern.
+
+---
+
+## 🟡 2026-08-15 — config.json truncation incident: root cause
 still NOT found after a real, instrumented investigation; a tested
 protective guard + backup is now in place regardless
 
