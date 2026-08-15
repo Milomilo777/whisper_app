@@ -49,6 +49,57 @@ def test_save_then_load_roundtrip(isolated_dirs, monkeypatch):
     assert loaded["parallel_workers"] == 4
 
 
+# ---------------------------------------------------------------- shrink guard
+# 2026-08-15: a real config.json was found silently reduced from ~90 keys
+# to 3 during ordinary use; root cause was never pinned down. save_config()
+# now refuses a drastic shrink relative to what is CURRENTLY on disk and
+# keeps a rotating .bak of the last good state -- covers this incident
+# class regardless of cause. Guarded call must compare against the file,
+# not DEFAULT_CONFIG, so small fixtures written to a FRESH path (every
+# other test in this module) are unaffected.
+
+
+def test_shrink_guard_refuses_drastic_reduction(isolated_dirs):
+    full = dict(cfg.DEFAULT_CONFIG)
+    cfg.save_config(full)  # first write: nothing on disk yet, always allowed
+    on_disk_before = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert len(on_disk_before) == len(full) - len(
+        [k for k in cfg._NON_PERSISTED_KEYS if k in full]
+    )
+
+    tiny = {"cpu_warning_shown": True, "model_path": "", "download_folder": ""}
+    cfg.save_config(tiny)  # must be refused -- looks like data loss, not intent
+
+    on_disk_after = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk_after == on_disk_before, "a drastic shrink must not overwrite the file"
+
+
+def test_shrink_guard_allows_a_reasonable_write_and_backs_up(isolated_dirs):
+    full = dict(cfg.DEFAULT_CONFIG)
+    cfg.save_config(full)
+    first_on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+
+    updated = dict(full)
+    updated["theme"] = "light"  # same key count, one value changed
+    cfg.save_config(updated)
+
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["theme"] == "light"
+
+    backup_path = Path(cfg.config_path() + ".bak")
+    assert backup_path.exists(), "a normal overwrite must leave a .bak of the prior state"
+    backed_up = json.loads(backup_path.read_text(encoding="utf-8"))
+    assert backed_up == first_on_disk
+
+
+def test_shrink_guard_does_not_block_a_fresh_small_write(isolated_dirs):
+    # No file on disk yet -- a small dict here is a normal test fixture,
+    # not evidence of data loss, and must be written normally.
+    cfg.save_config({"hub_folder": "", "model_path": ""})
+    on_disk = json.loads(Path(cfg.config_path()).read_text(encoding="utf-8"))
+    assert on_disk["hub_folder"] == ""
+
+
 def test_hub_choice_survives_save_load_cycle(isolated_dirs, monkeypatch):
     """End-to-end regression: the first-run hub picker must take effect.
 

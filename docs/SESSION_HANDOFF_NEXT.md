@@ -5,9 +5,68 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🔴 2026-08-15 (latest) — OPEN, UNSOLVED: something silently truncated the
-real user config.json to 3 keys during this session's frontend testing —
-needs investigation, not just the recovery already done
+## 🟡 2026-08-15 (latest) — config.json truncation incident: root cause
+still NOT found after a real, instrumented investigation; a tested
+protective guard + backup is now in place regardless
+
+Owner asked to actually solve the open bug below, not just document it.
+Spent real effort on it: patched `core.config.save_config` with a
+stack-trace-logging wrapper (patched onto the `core.config` module
+BEFORE importing `app.app`, so every module-level `from core.config
+import save_config` elsewhere picks up the wrapper too) and reproduced,
+against a throwaway isolated config file (never the real one), FOUR
+separate scenarios drawn from this session's actual script history:
+1. Real `App()` + `AdvancedDialog()`, force-foregrounded, hover a help
+   icon, reposition the dialog to a negative-X secondary monitor, destroy.
+2. The same, but with `tk.Misc.winfo_screenwidth`/`winfo_screenheight`
+   monkeypatched to simulate a 1366x768 laptop (matches one of the
+   scripts from the original incident window that did this).
+3. TWO App() instances in separate OS processes running concurrently
+   against the SAME shared config file (a "real app already open" race
+   theory).
+4. The original, never-foregrounded script variant (window sitting
+   behind an unrelated one) that started this whole investigation.
+
+**Every one of the four reproduced the SAME single, entirely normal
+save** — `App._maybe_quiet_update_check` (`app.py:4124`) stamping
+`last_update_check` and persisting the FULL config on the Tk main
+thread the first time `after()`-driven `update()` processing runs after
+launch. Never a small/truncated write. Also re-confirmed structurally
+that `core.config.load_config()` cannot return a small dict
+(`merge_config_sources()` always starts from a full copy of
+`DEFAULT_CONFIG`), grepped every `save_config(`/`config_path()` call
+site in the whole repo (including `gui.py`'s `--safe-mode` handler,
+which only renames the file aside and never fires without that flag),
+and traced the full async update-check chain
+(`_run_update_check` → daemon thread → `_on_update_result`) end to end —
+no other write path exists there either.
+
+**Root cause: still not found.** This is an honest miss, not a false
+"fixed" claim — four faithful, instrumented reproductions across
+plausible theories (screen-size simulation, negative-monitor geometry,
+concurrent processes, unforegrounded window) all came back clean. If it
+recurs, the next lead worth trying: keep the SAME stack-trace-wrapper
+technique (`trace_config_bug.py` etc. are still in this session's
+scratchpad, not committed) but let a real, everyday session run for a
+long stretch of ACTUAL use (not scripted test bursts) with the tracer
+attached, since every reproduction attempt here was a short, scripted
+burst — if this is genuinely timing/race-dependent, a short script may
+just not give it enough real wall-clock time to manifest.
+
+**What IS shipped, tested, and real:** `core.config.save_config()` now
+refuses to write a config with drastically fewer keys (below 40%) than
+whatever is CURRENTLY on disk, logging an error instead of silently
+overwriting real settings with apparent data loss — and, on every normal
+(non-refused) write, keeps a rotating `config.json.bak` of the prior
+state. Compares against the on-disk file, not a hardcoded key count, so
+none of the ~20+ existing tests that intentionally save small dicts to a
+FRESH path needed to change (nothing on disk yet to shrink from). Three
+new tests added (`test_shrink_guard_*` in `tests/core/test_config.py`)
+covering: a drastic shrink is refused and the file is untouched; a
+normal-size write proceeds and leaves a correct `.bak`; a small write to
+a fresh path (no baseline) is unaffected. This protects against a
+recurrence of THIS incident class regardless of whether the original
+trigger is ever found.
 
 While root-causing the hover-help issue below (constructing a real
 `App()` + `AdvancedDialog()` in-process, several separate script runs,
@@ -31,36 +90,12 @@ because the old path would make ANY real transcription on this machine
 fail with "Model folder missing" — confirmed exactly that error message
 during this session's E2E smoke test before the fix.
 
-**Ruled out** (checked against real source, not guessed):
-- `core.config.load_config()` cannot structurally return a small dict —
-  `merge_config_sources()` always starts from a full `json.loads(json.dumps(DEFAULT_CONFIG))`
-  baseline (~50 keys) before merging online/local on top.
-- `core.hub.is_hub_configured()` is permissive (any non-empty
-  `hub_folder` string counts) and the original config had one set, so
-  the first-run hub-setup-dialog code path returns early and never runs.
-- Both `save_config(cfg)` call sites in `app/dialogs/advanced.py` are
-  inside the Save button's own handler, not triggered by construction
-  or `.destroy()`.
-- `core/backends/google_cloud_stt.py`'s `_accumulate_usage()` save site
-  only fires after real billable Google Cloud STT API usage, which
-  never happened this session.
-
-**Not found**: the actual trigger. Working theory, unconfirmed: some
-code path reachable during plain `App()` + `AdvancedDialog()`
-construction/teardown (no Save click) calls `save_config()` with a
-small, ad-hoc dict rather than the full `self.app_config` — but a
-targeted grep across the obvious call sites didn't turn it up. Given
-`save_config()`'s signature takes any `dict[str, Any]`, the cleanest way
-to actually catch this red-handed next time: temporarily wrap/log inside
-`save_config()` itself (stack trace + `len(config)` whenever `len(config)
-< 10`, say) and reproduce by repeating this session's exact script
-sequence (real `App()`, real `AdvancedDialog(app)`, hover interactions,
-`.destroy()`, no Save click) against a throwaway config.json.
-
-**Why this matters**: this is silent, undetected data loss triggered by
-completely passive UI interaction (no Save, no explicit "reset" action)
-— a real user could hit this from ordinary use, not just from scripted
-testing. Treat as a real, unresolved bug, not just a testing footgun.
+See the top of this entry for the full list of what was ruled out and
+the guard now shipped. `core.hub.is_hub_configured()` was also checked
+and ruled out separately: it's permissive (any non-empty `hub_folder`
+string counts, folder existence not checked) and the original config
+had one set, so the first-run hub-setup-dialog path returns early and
+never runs — not a contributor here either.
 
 ---
 

@@ -1001,6 +1001,40 @@ def save_config(config: dict[str, Any]) -> None:
         to_persist["download_folder"] = _persistable_download_folder(config)
         for key in _NON_PERSISTED_KEYS:
             to_persist.pop(key, None)
+
+        # Guard + backup (2026-08-15, after a real incident: config.json
+        # was found silently reduced from ~90 keys to 3 during ordinary
+        # use; the root cause was never pinned down despite a real,
+        # repeated investigation — see docs/SESSION_HANDOFF_NEXT.md).
+        # Compares against what is CURRENTLY on disk, not a hardcoded
+        # key count, so a deliberately-small dict written to a fresh
+        # path (every test fixture in tests/core/test_config.py etc.)
+        # is unaffected — there is nothing on disk yet to shrink from.
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                if (
+                    isinstance(existing, dict)
+                    and len(existing) >= 10
+                    and len(to_persist) < len(existing) * 0.4
+                ):
+                    logger.error(
+                        "save_config() refused: new config has %d keys vs "
+                        "%d currently on disk at %s -- this looks like "
+                        "data loss, not an intentional shrink. Not "
+                        "writing.",
+                        len(to_persist), len(existing), path,
+                    )
+                    return
+                # Only reachable when the size looks reasonable: keep one
+                # rotating backup of the last good state before
+                # overwriting it. Best-effort -- never let a backup
+                # failure block the actual save.
+                shutil.copy2(path, path + ".bak")
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
+
         fd, tmp_path = tempfile.mkstemp(
             prefix=".config-", suffix=".tmp", dir=directory
         )
