@@ -32,7 +32,8 @@ A settings-safety and stability release on top of v1.6.0.
   stable-ts, or the hardware tier probe) could occasionally crash the
   whole app if Python's garbage collector ran at the wrong moment during
   the import. Every such probe now disables garbage collection for that
-  one operation.
+  one operation, under one shared lock so two probes on different
+  threads cannot undo each other's protection.
 - **Semantic search could silently mis-score a stale index row** after
   switching embedding models. It now skips a dimension-mismatched row
   instead of scoring a meaningless partial comparison.
@@ -59,10 +60,10 @@ A settings-safety and stability release on top of v1.6.0.
   Python; choose where models are stored on first run).
 - **Portable** (Windows) — a ZIP of the same tree; extract and run
   `Run Whisper Project.bat`, no install.
-
-> macOS: no new build this round. The v1.5.0 release still has
-> `WhisperProject-v1.5.0-macOS-x64.dmg` (Intel/x64-only) for Mac users
-> until a future session rebuilds it.
+- **macOS** — `WhisperProject-v1.5.0-macOS-x64.dmg` (Intel/x64-only) is
+  attached to this release too, carried forward from v1.5.0 unchanged;
+  no new macOS build was done this round, so it does not include any
+  v1.6.0/v1.7.0 fix.
 
 ## Notes
 

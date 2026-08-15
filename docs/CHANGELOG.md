@@ -52,6 +52,12 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
   for its risky operation. See ADR 0008 in `docs/DECISIONS.md` for the
   full investigation.
 
+- **That same GC-import guard used 10 separate locks instead of one
+  shared lock**, so two probes on different threads did not actually
+  serialize against each other and could still race. Found in a
+  second-pass review; factored into one shared
+  `core._gc_import_guard.gc_disabled_import()`.
+
 - **Semantic search silently scored dimension-mismatched embeddings** —
   a stored embedding from a different model/dimension than the current
   query embedder was compared anyway via `zip()`, which silently
