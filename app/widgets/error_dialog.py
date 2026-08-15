@@ -96,7 +96,22 @@ def show_error(
     try:
         x = parent.winfo_rootx() + (parent.winfo_width() - top.winfo_width()) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - top.winfo_height()) // 2
-        top.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        # Only clamp to a non-negative position when the parent itself is
+        # on the PRIMARY monitor -- winfo_screenwidth/height describe just
+        # that display, so clamping unconditionally would yank this dialog
+        # onto the wrong screen for a parent window living on a secondary
+        # monitor placed to the left of the primary (negative root
+        # coordinates). Same family of bug already fixed for tooltip.py's
+        # popup positioning; same fix shape.
+        screen_w = parent.winfo_screenwidth()
+        screen_h = parent.winfo_screenheight()
+        if 0 <= parent.winfo_rootx() < screen_w and 0 <= parent.winfo_rooty() < screen_h:
+            x = max(x, 0)
+            y = max(y, 0)
+        # Explicit sign (no literal "+"): Tk's geometry parser reads
+        # "+-500" as "500px from the right edge", not "-500 from the
+        # left" -- a real trap once x/y can legitimately be negative.
+        top.wm_geometry(f"{x:+d}{y:+d}")
     except tk.TclError:
         pass
     try:
