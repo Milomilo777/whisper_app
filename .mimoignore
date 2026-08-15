@@ -1,7 +1,0 @@
-creds/
-embed_build/
-dist_installer/
-*.dmg
-*.exe
-*.zip
-*.png
