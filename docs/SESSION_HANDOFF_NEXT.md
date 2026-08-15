@@ -5,7 +5,121 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🟢 2026-08-15 — Hover-help root-caused + fixed for real; both 2026-08-14
+owner requests closed; a small frontend UX pass; Desktop folder organized
+
+Owner gave a full session to "generously and carefully" review the
+frontend, especially Advanced Settings, because earlier sessions had
+claimed the hover-help (?) icons were done and verified, but the owner
+personally saw nothing when actually using the app. Explicit instruction
+to use external tools to debug, not just source-read.
+
+**Root cause, found with a real OS-level mouse test (not Tk's synthetic
+`event_generate`, which every earlier verification pass relied on):**
+launched the real `App()` + `AdvancedDialog` in-process, used raw Win32
+`SetCursorPos` (genuine OS input, indistinguishable from a real mouse)
+plus `PIL.ImageGrab` screenshots to check whether a human would actually
+see the tooltip. First attempt showed the dialog sitting silently BEHIND
+an unrelated File Explorer window (the launcher process never took OS
+foreground) — a test-harness artifact, fixed by force-foregrounding via
+`SetForegroundWindow` + `AttachThreadInput`. With that fixed, the
+mechanism worked correctly, including on this machine's negative-X
+secondary monitor. The REAL bug: the "ⓘ" icon (`app/widgets/tooltip.py`
+`help_icon()`) was the same font size/weight as surrounding body text —
+technically present, easy to miss entirely in a dense settings dialog.
+Fixed by cloning the default font 3pt larger + bold for the icon only
+(anonymous `tkfont.Font`, not a Tk *named* font, so it can't collide
+across separate `tk.Tk()` interpreters in tests). Re-verified with the
+same real-mouse+screenshot technique, and checked for new overflow at a
+simulated 1366x768 screen (still fits at the documented 1100px design
+width). This single shared function is used by every hover-help icon in
+the app (tabs, Advanced dialog, Live tab, transcript viewer), so the fix
+applies everywhere at once.
+
+**Both 2026-08-14 "two owner requests" below are now done:**
+1. Light theme default — `core/config.py`'s real `DEFAULT_CONFIG["theme"]`
+   changed from `"dark"` to `"light"` (the `app.py` `.get(..., "dark")`
+   fallback was also updated for consistency, though it's normally
+   shadowed by DEFAULT_CONFIG already having the key). Existing users'
+   own saved `config.json` is untouched either way.
+2. Video Tiling install default — owner clarified mid-session: the
+   installer's existing "notiling" Task (already shipped since ~v1.3.6)
+   was worded as a confusing double-negative ("Do NOT include the Video
+   Tiling feature") and defaulted to INSTALLED. Reworded to a plain
+   positive opt-in ("Install the Video Tiling (video wall) feature
+   (advanced; most users don't need this)"), unticked by default = NOT
+   installed. `installer_embed.iss` only ([Tasks] + the `[Code]` marker
+   logic); `installer.iss` (unshipped Compact pipeline) never had this
+   toggle at all, left alone. Compiled with ISCC as a syntax-only check
+   (embed_build was already on disk from a prior session) — compiled
+   clean, output deleted immediately after, nothing published.
+
+**Also fixed, found while auditing the same bug family / the open Part-5
+UX backlog further down this file:**
+- `app/widgets/error_dialog.py` — same negative-monitor clamp bug as the
+  tooltip fix (`max(x, 0)` forces a dialog onto the primary monitor even
+  when its parent lives on a secondary monitor with negative coordinates).
+  Now only clamps when the parent itself is confirmed on the primary
+  display, same pattern as tooltip.py.
+- Live tab transcript (`app/widgets/live_tab.py`) — `state="disabled"`
+  blocked ALL mouse interaction, not just typing, so the transcript could
+  not be selected/copied by dragging. Now stays `state="normal"`; a
+  `<Key>` filter (pure, unit-tested `_blocks_edit()`) blocks typing while
+  letting navigation and Ctrl-combos (copy, select-all) through.
+- Download tab was missing the "Clear completed" button the Queue tab has
+  had all along — added `App.clear_completed_downloads()` + the button.
+
+**Desktop folder organized** (owner asked to review "from Desktop down
+through all subdirectories," not just the repo): loose files sitting
+next to `whisper_project_direct_download_v2\` on the Desktop sorted into
+two new subfolders, `archive_reports_and_notes\` (old bug-hunt report,
+the 3 Persian project-report .docx files, one more .docx) and
+`scratch_experiments\` (a standalone Nemotron test script, unrelated to
+the shipped `nvidia_asr`/Parakeet backend). Left alone deliberately:
+`README.md` (correctly describes this folder, stays put), the git bundle
+backup (named in that same README, stays put), the `00 new job\` folder
+(contains a colleague's notes with a private server URL — see
+`CLAUDE.md`'s "No stats-viewer URL in docs" rule, left untouched rather
+than risk scattering sensitive correspondence), `transcription_stats.php`
+(same reason, must never enter the repo), and a JSON file that looks like
+a Google Cloud service-account key (`crucial-context-*.json`, 2.3 KB,
+right size/shape for one) — never opened/read, just flagged for the
+owner to relocate/secure if it's live. Also removed `.mimoignore` from
+the repo itself (dead config for MiMo-Code, which is permanently
+uninstalled per the owner's global instructions — nothing reads this
+file anymore).
+
+**Verified for real:** `pyright app core` → 0 errors/0 warnings/0
+informations. `pytest tests/core -q --ignore=tests/core/test_v08_real_file_e2e.py`
+(that one file is a pre-existing, already-documented environment-only
+break, unrelated to anything touched here) → exit 0, no failures.
+`pytest tests/app tests/integrations -q` → exit 0, no failures (includes
+updated `tests/app/test_live_tab.py` assertions + a new `test_blocks_edit`
+parametrized test for the Live tab fix).
+
+**Not done this session — real backlog, not forgotten:**
+- Release assets were NOT rebuilt/re-uploaded for any of the fixes above.
+  Per `CLAUDE.md`'s 2026-08-14 "cutting a release needs explicit
+  go-ahead" rule, that needs the owner to actually ask for it — flagging
+  per the separate "release assets must track every bug fix" rule rather
+  than assuming.
+- The rest of the Part-5 UX backlog further down this file (Advanced
+  dialog h-scroll at <1100px, transcript viewer minsize on 768p, one-at-
+  a-time Replace, modal CPU-warning messagebox, multi-URL-drop only
+  queues the first, cloud API key show/hide toggle, Hub Setup dialog
+  center-jump flicker, integrations_service "no SRT found" over-fires,
+  right-click paste menu missing on Combobox/Spinbox, Live vs Transcribe
+  language-list filtering inconsistency) — real, but out of scope for
+  this pass; re-check line numbers before acting, several files have
+  moved since that list was written.
+- macOS was not touched (per `CLAUDE.md`, never build/dispatch it).
+
+---
+
 ## 🔵 2026-08-14 — Two owner requests for the NEXT build (not yet done)
+
+**Closed out above (2026-08-15) — kept here only as the historical
+record of the original ask.**
 
 Both came in while the v1.6.0 asset rebuild below was already running;
 owner explicitly said these apply to the next build, not a reason to

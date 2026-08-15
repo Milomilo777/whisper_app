@@ -6,6 +6,10 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Added
 
+- **Download tab: "Clear completed" button** — the Queue tab has always
+  had one; the Download tab was missing the parity button (owner-noticed
+  gap while reviewing the frontend, 2026-08-15).
+
 - **LAN web page: source preview, Reset, Copy-transcript, Recent jobs** —
   picking a file now shows an instant local audio/video preview; a Reset
   button clears the form back to defaults; the transcript view has a
@@ -46,6 +50,29 @@ All notable changes to this project. Follows [Keep a Changelog](https://keepacha
 
 ### Fixed
 
+- **Hover-help icons were technically working but easy to miss** — the
+  owner reported seeing no tooltips despite earlier sessions saying this
+  was done. Root-caused with a real OS-level mouse-move + screenshot test
+  (not Tk's synthetic events, which earlier sessions relied on): the
+  popup mechanism itself was fine, but the "ⓘ" glyph was the same size
+  and weight as body text. Now bigger and bold everywhere it's used
+  (Advanced dialog, all tabs, Live tab, transcript viewer).
+- **Installer: Video Tiling defaulted to installed, worded as a
+  confusing double-negative** ("Do NOT include the Video Tiling
+  feature", unticked by default = installed). Now a plain, positively
+  worded opt-in checkbox, unticked by default = not installed (owner
+  request, 2026-08-15).
+- **Error dialogs could open on the wrong monitor** — the same
+  negative-coordinate clamping bug already fixed for tooltips
+  (`max(x, 0)` yanks a dialog onto the primary monitor even when its
+  parent window lives on a secondary monitor placed to its left).
+  `error_dialog.py` now only clamps when the parent itself is on the
+  primary display.
+- **Live tab transcript couldn't be selected/copied by dragging the
+  mouse** — `state="disabled"` blocks all mouse interaction on a Tk
+  Text widget, not just typing. It now stays selectable/copyable; a
+  `<Key>` filter blocks typing instead (Ctrl+C/Ctrl+A and navigation
+  keys still pass through).
 - **Advanced dialog silently cleared "Detect speakers" for Google Cloud
   STT** — saving with that backend selected always reset the diarization
   checkbox back off, even though the backend has fully supported
