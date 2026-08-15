@@ -186,10 +186,10 @@ def test_whisper_cpp_cancel_short_circuits(backends_module):
 # core/backends/google_cloud_stt.py's matching comment for the full story):
 # GC firing mid-import of a heavy C-extension package faulted the process.
 # pywhispercpp is the same risk class, so is_available() got the same
-# lock + gc.disable() defense pre-emptively. These run the REAL
-# is_available() body (no monkeypatch) — hermetic either way, since the
-# ImportError path (pywhispercpp need not be installed here) and the
-# success path both go through the same try/finally.
+# shared-lock + gc.disable() defense pre-emptively (core/_gc_import_guard.py).
+# These run the REAL is_available() body (no monkeypatch) — hermetic either
+# way, since the ImportError path (pywhispercpp need not be installed here)
+# and the success path both go through the same guard.
 
 
 def test_whisper_cpp_is_available_restores_gc_state():
@@ -212,9 +212,10 @@ def test_whisper_cpp_is_available_restores_gc_state():
 def test_whisper_cpp_is_available_serializes_concurrent_calls():
     import threading
 
+    from core._gc_import_guard import _lock as guard_lock
     from core.backends import whisper_cpp as wc
 
-    acquired = wc._availability_lock.acquire(timeout=1.0)
+    acquired = guard_lock.acquire(timeout=1.0)
     assert acquired, "test setup: could not acquire the lock"
     result: dict[str, bool] = {}
 
@@ -227,7 +228,7 @@ def test_whisper_cpp_is_available_serializes_concurrent_calls():
     try:
         assert t.is_alive(), "is_available() did not block on the lock"
     finally:
-        wc._availability_lock.release()
+        guard_lock.release()
     t.join(timeout=3.0)
     assert not t.is_alive(), "is_available() never returned after unlock"
     assert "done" in result

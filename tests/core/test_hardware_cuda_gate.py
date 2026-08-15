@@ -152,7 +152,9 @@ def test_probe_tiers_serializes_concurrent_calls():
     through — same contract as the other hardened availability probes."""
     import threading
 
-    acquired = hw._probe_lock.acquire(timeout=1.0)
+    from core._gc_import_guard import _lock as guard_lock
+
+    acquired = guard_lock.acquire(timeout=1.0)
     assert acquired, "test setup: could not acquire the lock"
     result: dict[str, bool] = {}
 
@@ -165,7 +167,7 @@ def test_probe_tiers_serializes_concurrent_calls():
     try:
         assert t.is_alive(), "probe_tiers() did not block on the lock"
     finally:
-        hw._probe_lock.release()
+        guard_lock.release()
     t.join(timeout=5.0)
     assert not t.is_alive(), "probe_tiers() never returned after unlock"
     assert "done" in result

@@ -28,7 +28,6 @@ of the user data so it survives reinstall + roams with a profile.
 """
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import os
@@ -38,6 +37,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
+from ._gc_import_guard import gc_disabled_import
 from .config import user_data_dir
 
 
@@ -323,38 +323,26 @@ def _probe_cpu() -> list[Tier]:
     )]
 
 
-# app.widgets.hardware_wizard runs probe_tiers() on a fresh daemon thread
-# per re-probe click, and each of the sub-probes below does its own first
-# import of a heavy C-extension package (ctranslate2, onnxruntime, torch).
-# See core/backends/google_cloud_stt.py's matching comment and ADR 0008 in
-# docs/DECISIONS.md for the full story of a real crash this exact risk
-# class caused (2026-08-15): GC firing during — or even briefly after —
-# this kind of import/allocation-heavy work can fault the process. The
-# lock avoids two rapid re-probe clicks racing each other; disabling GC
-# for the whole call is what actually matters.
-_probe_lock = threading.Lock()
-
-
 def probe_tiers() -> list[Tier]:
     """Return every tier the current host supports, best → worst.
 
     CPU int8 is always last and always present so the list is never
     empty; callers can rely on ``tiers[-1]`` as a guaranteed fallback.
+
+    app.widgets.hardware_wizard runs this on a fresh daemon thread per
+    re-probe click, and each of the sub-probes below does its own first
+    import of a heavy C-extension package (ctranslate2, onnxruntime,
+    torch) -- see core/_gc_import_guard.py for why the whole call runs
+    under a shared, process-wide GC-disable guard.
     """
-    with _probe_lock:
-        was_enabled = gc.isenabled()
-        gc.disable()
-        try:
-            tiers: list[Tier] = []
-            tiers.extend(_probe_cuda())
-            tiers.extend(_probe_qnn_npu())
-            tiers.extend(_probe_openvino())
-            tiers.extend(_probe_directml())
-            tiers.extend(_probe_cpu())
-            return tiers
-        finally:
-            if was_enabled:
-                gc.enable()
+    with gc_disabled_import():
+        tiers: list[Tier] = []
+        tiers.extend(_probe_cuda())
+        tiers.extend(_probe_qnn_npu())
+        tiers.extend(_probe_openvino())
+        tiers.extend(_probe_directml())
+        tiers.extend(_probe_cpu())
+        return tiers
 
 
 def first_supported_tier(tiers: list[Tier]) -> Tier:

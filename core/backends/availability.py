@@ -14,16 +14,11 @@ startup — see the ``deep`` flag on :func:`engine_status`.
 """
 from __future__ import annotations
 
-import gc
 import os
-import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-# Guards the first import of a heavy C-extension optional dependency
-# (currently just transformers/torch, see ``_import_transformers``) so two
-# concurrent engine-status probe threads never race through it together.
-_heavy_import_lock = threading.Lock()
+from .._gc_import_guard import gc_disabled_import
 
 # (friendly label, transcribe_backend value) — also the display order. Offline
 # engines stay first; the two cloud options spell out their auth model so a
@@ -195,25 +190,12 @@ def _import_transformers() -> None:
     """Isolated so tests can monkeypatch the real-import step directly
     instead of fighting sys.modules / import machinery.
 
-    A real crash was confirmed (2026-08-15, Python 3.14) in the sibling
-    ``google.cloud.speech_v2`` import: GC firing mid-import faulted inside
-    a heavy C-extension package's class-registration step, triggered by
-    unrelated allocation pressure elsewhere in the process — not by two
-    threads importing at once (that alone did not reproduce it).
-    ``transformers``/``torch`` is the same risk class, so it gets the same
-    two-part defense pre-emptively: the lock avoids redundant concurrent
-    imports, and disabling GC for the import's duration is the part that
-    actually matters. See ``core/backends/google_cloud_stt.py``'s matching
-    comment for the full story.
+    ``transformers``/``torch`` is a heavy C-extension package -- see
+    core/_gc_import_guard.py for why the import runs under a shared,
+    process-wide GC-disable guard.
     """
-    with _heavy_import_lock:
-        was_enabled = gc.isenabled()
-        gc.disable()
-        try:
-            import transformers  # type: ignore  # noqa: F401
-        finally:
-            if was_enabled:
-                gc.enable()
+    with gc_disabled_import():
+        import transformers  # type: ignore  # noqa: F401
 
 
 def _nvidia_asr_status(cfg: Mapping[str, Any]) -> EngineStatus:

@@ -22,18 +22,17 @@ the embeddings live in their own table.
 """
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import math
 import os
 import re
 import sqlite3
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from ._gc_import_guard import gc_disabled_import
 from .config import user_data_dir
 
 logger = logging.getLogger(__name__)
@@ -48,32 +47,22 @@ def search_db_path() -> Path:
 
 # ---------------------------------------------------------------- availability
 
-# See core/backends/google_cloud_stt.py's matching comment for the full
-# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
-# heavy C-extension package can fault the process, triggered by unrelated
-# allocation pressure elsewhere in the process — not by concurrent imports
-# alone. sentence-transformers pulls in torch, the same risk class, so both
-# it (here) and the model load in Embedder._load() below get the same
-# two-part defense pre-emptively: the lock avoids redundant concurrent
-# imports, and disabling GC for the import's duration is what actually
-# matters.
-_availability_lock = threading.Lock()
-
 
 def semantic_available() -> bool:
-    """True iff sentence-transformers (or a minimal substitute) is importable."""
-    with _availability_lock:
-        was_enabled = gc.isenabled()
-        gc.disable()
+    """True iff sentence-transformers (or a minimal substitute) is importable.
+
+    sentence-transformers pulls in torch, a heavy C-extension package --
+    see core/_gc_import_guard.py for why this import (and the model load
+    in Embedder._load() below) runs under a shared, process-wide
+    GC-disable guard.
+    """
+    with gc_disabled_import():
         try:
             import sentence_transformers  # type: ignore[import-not-found] # noqa: F401
         except ImportError:
             return False
         else:
             return True
-        finally:
-            if was_enabled:
-                gc.enable()
 
 
 def semantic_availability_reason() -> str:
@@ -372,15 +361,9 @@ class Embedder:
             return
         if not semantic_available():
             raise RuntimeError(semantic_availability_reason())
-        with _availability_lock:
-            was_enabled = gc.isenabled()
-            gc.disable()
-            try:
-                from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
-                self._model = SentenceTransformer(self.model_name)
-            finally:
-                if was_enabled:
-                    gc.enable()
+        with gc_disabled_import():
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
+            self._model = SentenceTransformer(self.model_name)
 
     def embed(self, text: str) -> list[float]:
         self._load()

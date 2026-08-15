@@ -28,7 +28,6 @@ can swap to a "feature off" placeholder. No silent partial work.
 """
 from __future__ import annotations
 
-import gc
 import json
 import logging
 import os
@@ -39,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from ._gc_import_guard import gc_disabled_import
 from .config import user_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -59,31 +59,20 @@ class LLMUnavailable(RuntimeError):
     """Raised when llama-cpp-python isn't installed."""
 
 
-# See core/backends/google_cloud_stt.py's matching comment for the full
-# story (a real crash was confirmed 2026-08-15): GC firing mid-import of a
-# heavy C-extension package can fault the process, triggered by unrelated
-# allocation pressure elsewhere in the process — not by concurrent imports
-# alone. llama-cpp-python is the same risk class (native ggml bindings), so
-# it gets the same two-part defense pre-emptively: the lock avoids
-# redundant concurrent imports, and disabling GC for the import's duration
-# is what actually matters.
-_availability_lock = threading.Lock()
-
-
 def runtime_available() -> bool:
-    """True iff llama-cpp-python imports cleanly."""
-    with _availability_lock:
-        was_enabled = gc.isenabled()
-        gc.disable()
+    """True iff llama-cpp-python imports cleanly.
+
+    llama-cpp-python wraps native ggml bindings, a heavy C-extension
+    package -- see core/_gc_import_guard.py for why the import runs
+    under a shared, process-wide GC-disable guard.
+    """
+    with gc_disabled_import():
         try:
             import llama_cpp  # type: ignore[import-not-found] # noqa: F401
         except ImportError:
             return False
         else:
             return True
-        finally:
-            if was_enabled:
-                gc.enable()
 
 
 def runtime_availability_reason() -> str:

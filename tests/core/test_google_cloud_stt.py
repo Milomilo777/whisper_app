@@ -970,7 +970,9 @@ def test_runtime_available_serializes_concurrent_calls():
     serialization contract the fix relies on: only one caller is ever
     inside the import step at a time.
     """
-    acquired = g._availability_lock.acquire(timeout=1.0)
+    from core._gc_import_guard import _lock as guard_lock
+
+    acquired = guard_lock.acquire(timeout=1.0)
     assert acquired, "test setup: could not acquire the lock"
     result: dict[str, bool] = {}
 
@@ -983,7 +985,7 @@ def test_runtime_available_serializes_concurrent_calls():
     try:
         assert t.is_alive(), "runtime_available() did not block on the lock"
     finally:
-        g._availability_lock.release()
+        guard_lock.release()
     t.join(timeout=3.0)
     assert not t.is_alive(), "runtime_available() never returned after unlock"
     assert "done" in result

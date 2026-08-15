@@ -11,7 +11,6 @@ ggml-large-v3-q5_0.bin`` and is downloaded on demand via
 """
 from __future__ import annotations
 
-import gc
 import logging
 import os
 import shutil
@@ -21,6 +20,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from .._gc_import_guard import gc_disabled_import
 from .._liveness_tick import liveness_tick
 from ..config import user_cache_dir
 from .base import Backend, LanguageInfo
@@ -43,23 +43,15 @@ def default_model_path() -> Path:
     return model_dir() / DEFAULT_MODEL_NAME
 
 
-# See core/backends/google_cloud_stt.py's matching comment for the full
-# story: a real crash was confirmed (2026-08-15) when GC fired mid-import of
-# a heavy C-extension package's class-registration step, triggered by
-# unrelated allocation pressure elsewhere in the process (not by two threads
-# racing each other — that alone did not reproduce it). pywhispercpp is the
-# same risk class (native ggml bindings), so it gets the same defense
-# pre-emptively. The lock avoids redundant concurrent imports; disabling GC
-# for the import's duration is the part that actually matters. Neither
-# caches the result — an on-demand install must still be picked up.
-_availability_lock = threading.Lock()
-
-
 def is_available() -> bool:
-    """True iff pywhispercpp imports cleanly. Doesn't check the model file."""
-    with _availability_lock:
-        was_enabled = gc.isenabled()
-        gc.disable()
+    """True iff pywhispercpp imports cleanly. Doesn't check the model file.
+
+    pywhispercpp wraps native ggml bindings, a heavy C-extension package --
+    see core/_gc_import_guard.py for why the import runs under a shared,
+    process-wide GC-disable guard. Not cached -- an on-demand install must
+    still be picked up by the next call.
+    """
+    with gc_disabled_import():
         try:
             import pywhispercpp  # type: ignore[import-not-found] # noqa: F401
         except Exception:  # noqa: BLE001 — a wrong-arch / missing native DLL
@@ -68,9 +60,6 @@ def is_available() -> bool:
             return False
         else:
             return True
-        finally:
-            if was_enabled:
-                gc.enable()
 
 
 def availability_reason() -> str:
