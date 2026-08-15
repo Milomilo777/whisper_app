@@ -91,8 +91,9 @@ def resolve_app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-# Marker file the Standard installer drops into the {app} directory when
-# the user ticks "do NOT include Video Tiling" at install time. Its mere
+# Marker file the Standard installer drops into the {app} directory
+# unless the user ticks "Install the Video Tiling (video wall) feature"
+# at install time (opt-in, off by default since 2026-08-15). Its mere
 # presence disables the in-app Video Tiling tab; it is never written by
 # the app itself. In a source / dev checkout the repo root won't contain
 # it, so tiling stays on for developers.
