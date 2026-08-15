@@ -91,11 +91,17 @@ _icon = _icns if os.path.isfile(_icns) else None
 _creds_key = os.path.join(_REPO_ROOT, 'creds', 'gcloud_stt.json')
 creds_datas = [(_creds_key, 'creds')] if os.path.isfile(_creds_key) else []
 
-# google-cloud-speech + google-cloud-storage + grpcio are now REQUIRED
-# runtime deps — the Google Cloud STT backend is the default engine.
-# collect_all gathers datas + binaries (the native grpc .so!) + every
-# submodule of these namespace-package stacks, which PyInstaller's static
-# analysis cannot fully discover on its own.
+# google-cloud-speech + google-cloud-storage + grpcio are OPTIONAL — not in
+# requirements.txt, not installed by default (see the comment above the
+# now-removed pin in requirements.txt and SECURITY.md's "Retired: the
+# bundled Google Cloud key"). They install on demand via
+# core/optional_deps.py the first time a user picks their own
+# service-account JSON, so a normal build environment usually will NOT have
+# them. When they ARE present (e.g. a maintainer machine that installed them
+# manually), collect_all gathers datas + binaries (the native grpc .so!) +
+# every submodule of these namespace-package stacks, which PyInstaller's
+# static analysis cannot fully discover on its own. The try/except below
+# makes their absence a silent no-op, not a build failure.
 _gcloud_datas, _gcloud_binaries, _gcloud_hidden = [], [], []
 for _pkg in ('grpc', 'google.cloud.speech_v2', 'google.cloud.storage',
              'google.api_core', 'google.auth', 'google.oauth2',

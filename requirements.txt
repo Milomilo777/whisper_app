@@ -92,15 +92,22 @@ stable-ts>=2.17
 # Advanced > Backend. See docs/CLOUD_STT.md.
 
 # REAL Google Cloud Speech-to-Text v2 backend
-# (transcribe_backend="google_cloud_stt"). This is now the DEFAULT engine
-# when a bundled service-account key ships, so the client libraries are
-# BUNDLED (pinned here) rather than installed on demand: it removes the
-# first-use install wait and, crucially, the grpcio native extension is
-# then built for the embed's own Python so it can never be shadowed by a
-# stale, wrong-Python pylibs cache. core/optional_deps.py keeps the
-# on-demand install path as a fallback for source runs without these.
-google-cloud-speech>=2.21
-google-cloud-storage>=2.10
+# (transcribe_backend="google_cloud_stt") is intentionally NOT listed here.
+# It used to be pinned/bundled because a maintainer-owned service-account
+# key shipped with the app and made this the DEFAULT engine, so paying the
+# install weight up front removed the first-use wait. That key was revoked
+# and its bundling permanently removed 2026-08-04 (see SECURITY.md,
+# "Retired: the bundled Google Cloud key") — the default engine is now
+# unconditionally offline faster-whisper, so google_cloud_stt only ever
+# runs for a user who deliberately picked their OWN service-account JSON in
+# Advanced > Backend. Paying grpc/protobuf/google-cloud's real install
+# weight (and keeping it current on every source install) for a backend
+# most users never touch no longer earns its cost. core/optional_deps.py's
+# on-demand install (google-cloud-speech + google-cloud-storage together,
+# so the cheaper GCS batch mode works without a second install) is now the
+# ONLY install path, matching what docs/CLOUD_STT_GOOGLE.md's "Testing the
+# connection" section already told users ("not bundled, to keep the base
+# install small") before requirements.txt caught up to it.
 
 # --- Notes -----------------------------------------------------------
 # * tkinter ships with the Windows Python installer. On Linux install

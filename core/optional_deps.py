@@ -92,12 +92,14 @@ def activate() -> None:
 
     Idempotent; call once at startup and after a successful install.
 
-    The extras dir is APPENDED, not prepended: a library that ships bundled
-    in the slim tree (e.g. google-cloud-speech, now bundled so the default
-    cloud engine works out of the box) must win over a stale on-demand copy
-    in the user pylibs cache. A previous prepend let a pylibs grpcio built
-    for a different Python shadow the healthy bundled one and crash the
-    import. Bundled wins; on-demand fills only what isn't shipped (torch).
+    The extras dir is APPENDED, not prepended: any library that DOES ship
+    bundled in the slim tree (python-docx, reportlab — google-cloud-speech
+    used to be one of these before 2026-08-15, see the comment above the
+    now-removed pin in requirements.txt) must win over a stale on-demand
+    copy in the user pylibs cache. A previous prepend let a pylibs grpcio
+    built for a different Python shadow a healthy bundled one and crash the
+    import. Bundled wins when something is bundled; on-demand fills in
+    whatever the slim tree doesn't ship (torch, google-cloud-speech, etc.).
     """
     d = extras_dir()
     if os.path.isdir(d) and d not in sys.path:
