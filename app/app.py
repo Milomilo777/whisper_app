@@ -678,7 +678,7 @@ class App(tk.Tk):
         send_launch_ping_async()
         self._ui_logger = get_ui_logger()
         logger.info("App startup; theme=%s", self.app_config.get("theme", "dark"))
-        self.theme_var = tk.StringVar(value=self.app_config.get("theme", "dark"))
+        self.theme_var = tk.StringVar(value=self.app_config.get("theme", "light"))
         sv_ttk.set_theme(_resolve_theme(self.theme_var.get()))
         self.parallel_workers = max(1, int(self.app_config.get("parallel_workers", 2)))
         self.next_worker_id = 1

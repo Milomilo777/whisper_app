@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
     # brave/chrome/chromium/edge/firefox/opera/safari/vivaldi/whale,
     # optionally with yt-dlp's :PROFILE suffix.
     "cookies_from_browser": "",
-    "theme": "dark",
+    "theme": "light",
     "log_level": "INFO",
     # R3: set once the first time a one-time "running on CPU (slower)"
     # warning has been shown, so it never nags again. Defaulted here so
