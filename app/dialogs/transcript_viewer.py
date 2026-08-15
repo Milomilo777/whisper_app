@@ -12,6 +12,11 @@
     text in memory; "Save Changes" writes back via the JSON writer.
   - Right-click on a speaker cell → "Rename speaker..." rewrites
     every segment with the same speaker label.
+  - Right-click on a segment → "Edit timestamp..." hand-edits that
+    segment's start/end time (HH:MM:SS.mmm). Only that one segment
+    changes — nothing downstream re-flows. A segment that now overlaps
+    the previous one, or is under 1s long, gets a light-orange row
+    background as a warning (purely visual; never blocks saving).
   - Word-confidence colour coding when a segment carries ``words``
     with probabilities.
   - Filler-word remove tool (one-click button) strips ``uh``, ``um``,
@@ -165,6 +170,75 @@ def _seg_float(seg: dict[str, Any], key: str, default: float = 0.0) -> float:
         return float(seg.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _fmt_hms_ms(seconds: float) -> str:
+    """``HH:MM:SS.mmm`` — millisecond-precision timestamp for the
+    "Edit timestamp" dialog. Separate from :func:`_fmt_hms` (which the
+    segment-list Time column uses) because the list only needs
+    whole-second granularity, but hand-editing a segment's start/end
+    needs sub-second precision to be useful."""
+    seconds = max(0.0, float(seconds))
+    total_ms = round(seconds * 1000)
+    h, rem_ms = divmod(total_ms, 3_600_000)
+    m, rem_ms = divmod(rem_ms, 60_000)
+    s, ms = divmod(rem_ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def _parse_hms_ms(text: str) -> float | None:
+    """Parse ``HH:MM:SS.mmm``, ``MM:SS.mmm``, or bare seconds into a
+    float second count. Returns ``None`` on anything unparseable (a
+    typo, empty field, negative value) so the caller can show a
+    friendly inline error instead of crashing on a hand-typed value."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if ":" not in text:
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+        return value if value >= 0 else None
+    raw_parts = text.split(":")
+    if len(raw_parts) not in (2, 3):
+        return None
+    try:
+        parts = [float(p) for p in raw_parts]
+    except ValueError:
+        return None
+    if any(p < 0 for p in parts):
+        return None
+    if len(parts) == 2:
+        h = 0.0
+        m, s = parts
+    else:
+        h, m, s = parts
+    return h * 3600 + m * 60 + s
+
+
+def _segment_has_timing_issue(segments: list[dict[str, Any]], idx: int) -> bool:
+    """True when segment ``idx`` overlaps the previous segment's end,
+    or its own duration is under 1 second.
+
+    Purely a visual cue (light-orange row background) so a manual
+    timestamp edit that produces something odd is easy to spot — it
+    never blocks saving. Mirrors the same two conditions the reference
+    app (faster-whisper-GUI) flags after an in-place timestamp edit.
+    """
+    if idx < 0 or idx >= len(segments):
+        return False
+    seg = segments[idx]
+    start = _seg_float(seg, "start")
+    end = _seg_float(seg, "end", start)
+    if end - start < 1.0:
+        return True
+    if idx > 0:
+        prev = segments[idx - 1]
+        prev_end = _seg_float(prev, "end", _seg_float(prev, "start"))
+        if start < prev_end:
+            return True
+    return False
 
 
 def _segment_min_probability(seg: dict[str, Any]) -> float | None:
@@ -492,7 +566,10 @@ class TranscriptViewer(tk.Toplevel):
             "Segment list colours: green/amber/red text is the model's "
             "confidence (high/medium/low). A light-red row background "
             "means the hallucination detector flagged that segment as "
-            "suspect. Yellow highlight marks the segment now playing.",
+            "suspect. A light-orange row background means its timing "
+            "overlaps the previous segment or is under 1s (usually "
+            "after a manual 'Edit timestamp...' edit). Yellow "
+            "highlight marks the segment now playing.",
         ).pack(side="right", padx=(0, 12))
 
         # Body: left = segment list, right = media controls
@@ -521,6 +598,12 @@ class TranscriptViewer(tk.Toplevel):
         # Light-red background so the row stands out at a glance; the
         # confidence foreground colour layers on top normally.
         self.tree.tag_configure("suspect", background="#ffe0e0")
+        # Light-orange background for a segment that overlaps the
+        # previous one or is under 1s long — set after a manual
+        # "Edit timestamp..." edit produces something odd. "suspect"
+        # (hallucination) takes visual priority when both apply, since
+        # tags earlier in the applied tuple win ties in ttk.Treeview.
+        self.tree.tag_configure("ts_warn", background="#ffe6b3")
         vsb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
@@ -717,9 +800,12 @@ class TranscriptViewer(tk.Toplevel):
             # detector flagged this segment. Layer underneath karaoke
             # 'active' so playback highlight still wins on the active
             # row.
-            base_tags: tuple[str, ...] = conf_tags
+            warn_tags: tuple[str, ...] = (
+                ("ts_warn",) if _segment_has_timing_issue(self.segments, idx) else ()
+            )
+            base_tags: tuple[str, ...] = warn_tags + conf_tags
             if seg.get("suspect"):
-                base_tags = ("suspect",) + conf_tags
+                base_tags = ("suspect",) + warn_tags + conf_tags
             # Re-layer the karaoke 'active' tag on top of the
             # confidence + suspect colours when this row is the
             # currently-playing segment.
@@ -783,6 +869,10 @@ class TranscriptViewer(tk.Toplevel):
                 label=f"Rename '{speaker}' (everywhere)...",
                 command=lambda s=speaker: self._rename_speaker(s),
             )
+        menu.add_command(
+            label="Edit timestamp...",
+            command=lambda i=idx: self._open_edit_timestamp(i),
+        )
         menu.add_command(
             label="Copy text", command=lambda: self._copy_to_clipboard(
                 (seg.get("text") or "").strip()
@@ -865,6 +955,11 @@ class TranscriptViewer(tk.Toplevel):
                 f"Renamed {renamed} segment(s). Use Save changes (Ctrl+S) to write.",
                 parent=self,
             )
+
+    def _open_edit_timestamp(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self.segments):
+            return
+        EditTimestampDialog(self, idx)
 
     def _remove_fillers(self) -> None:
         if not messagebox.askyesno(
@@ -1260,9 +1355,12 @@ class TranscriptViewer(tk.Toplevel):
                 conf = ("conf_med",)
             else:
                 conf = ("conf_low",)
+        warn: tuple[str, ...] = (
+            ("ts_warn",) if _segment_has_timing_issue(self.segments, idx) else ()
+        )
         if seg.get("suspect"):
-            return ("suspect",) + conf
-        return conf
+            return ("suspect",) + warn + conf
+        return warn + conf
 
     def _update_karaoke(self, t_seconds: float) -> None:
         """Refresh the active segment + word highlight from the playhead.
@@ -1365,6 +1463,82 @@ class TranscriptViewer(tk.Toplevel):
                 self.vlc_instance.release()
             except Exception:  # noqa: BLE001
                 pass
+        self.destroy()
+
+
+class EditTimestampDialog(tk.Toplevel):
+    """Small modal to hand-edit one segment's start/end time.
+
+    Opened from the segment right-click menu ("Edit timestamp...").
+    Fields take ``HH:MM:SS.mmm``; bare seconds (``83.5``) also parse.
+    Only this one segment changes — matching the reference app
+    (faster-whisper-GUI)'s own per-row editable table, this does NOT
+    shift any other segment's timestamps. A resulting overlap or
+    sub-1s duration just gets a visual warning (see ``ts_warn`` tag),
+    it never blocks saving.
+    """
+
+    def __init__(self, viewer: "TranscriptViewer", seg_idx: int) -> None:
+        super().__init__(viewer)
+        self.viewer = viewer
+        self.seg_idx = seg_idx
+        seg = viewer.segments[seg_idx]
+        self.title("Edit timestamp")
+        self.transient(viewer)
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+        start_default = _seg_float(seg, "start")
+        end_default = _seg_float(seg, "end", start_default)
+        self.start_var = tk.StringVar(value=_fmt_hms_ms(start_default))
+        self.end_var = tk.StringVar(value=_fmt_hms_ms(end_default))
+
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(body, text="Start (HH:MM:SS.mmm)").grid(
+            row=0, column=0, sticky="w", pady=4
+        )
+        start_entry = ttk.Entry(body, textvariable=self.start_var, width=16)
+        start_entry.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Label(body, text="End (HH:MM:SS.mmm)").grid(
+            row=1, column=0, sticky="w", pady=4
+        )
+        ttk.Entry(body, textvariable=self.end_var, width=16).grid(
+            row=1, column=1, sticky="w", padx=(6, 0)
+        )
+
+        self.error_var = tk.StringVar(value="")
+        ttk.Label(body, textvariable=self.error_var, foreground="#a00000").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        )
+
+        btns = ttk.Frame(body)
+        btns.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(btns, text="Save", command=self._save).pack(side="left", padx=4)
+        ttk.Button(btns, text="Cancel", command=self.destroy).pack(side="left", padx=4)
+
+        self.bind("<Return>", lambda _e: self._save())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        start_entry.focus_set()
+        start_entry.selection_range(0, "end")
+
+    def _save(self) -> None:
+        start = _parse_hms_ms(self.start_var.get())
+        end = _parse_hms_ms(self.end_var.get())
+        if start is None or end is None:
+            self.error_var.set(
+                "Enter a valid time: HH:MM:SS.mmm, MM:SS.mmm, or plain seconds."
+            )
+            return
+        if end <= start:
+            self.error_var.set("End must be after start.")
+            return
+        seg = self.viewer.segments[self.seg_idx]
+        seg["start"] = start
+        seg["end"] = end
+        self.viewer._dirty = True
+        self.viewer._populate_listbox()
         self.destroy()
 
 

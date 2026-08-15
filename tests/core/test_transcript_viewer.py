@@ -486,6 +486,166 @@ def test_strip_fillers_collapses_space_before_punctuation():
 # regardless of whether libvlc or a display is present.
 
 
+# --- manual timestamp editing (Edit timestamp... right-click menu) --------
+
+
+def test_fmt_hms_ms_and_parse_round_trip():
+    from app.dialogs.transcript_viewer import _fmt_hms_ms, _parse_hms_ms
+
+    assert _fmt_hms_ms(0.0) == "00:00:00.000"
+    assert _fmt_hms_ms(3661.5) == "01:01:01.500"
+    assert _parse_hms_ms("01:01:01.500") == pytest.approx(3661.5)
+    # MM:SS.mmm (no hour component) also parses.
+    assert _parse_hms_ms("01:01.500") == pytest.approx(61.5)
+    # Bare seconds.
+    assert _parse_hms_ms("83.25") == pytest.approx(83.25)
+
+
+def test_parse_hms_ms_rejects_garbage():
+    from app.dialogs.transcript_viewer import _parse_hms_ms
+
+    assert _parse_hms_ms("") is None
+    assert _parse_hms_ms("   ") is None
+    assert _parse_hms_ms("not a time") is None
+    assert _parse_hms_ms("-5") is None
+    assert _parse_hms_ms("1:2:3:4") is None
+    assert _parse_hms_ms("-1:00:00") is None
+
+
+def test_segment_has_timing_issue_flags_overlap_and_short_duration():
+    from app.dialogs.transcript_viewer import _segment_has_timing_issue
+
+    segs = [
+        {"start": 0.0, "end": 2.0},
+        {"start": 1.0, "end": 3.0},   # overlaps segment 0's end (2.0)
+        {"start": 3.0, "end": 3.5},   # under 1s duration
+        {"start": 4.0, "end": 6.0},   # clean
+    ]
+    assert _segment_has_timing_issue(segs, 0) is False
+    assert _segment_has_timing_issue(segs, 1) is True
+    assert _segment_has_timing_issue(segs, 2) is True
+    assert _segment_has_timing_issue(segs, 3) is False
+    # Out-of-range indices are just False, never raise.
+    assert _segment_has_timing_issue(segs, -1) is False
+    assert _segment_has_timing_issue(segs, 99) is False
+
+
+def test_viewer_edit_timestamp_updates_only_that_segment(tmp_path):
+    """EditTimestampDialog._save must rewrite only the targeted
+    segment's start/end and flag the viewer dirty — neighbouring
+    segments must not shift."""
+    from app.dialogs.transcript_viewer import TranscriptViewer, EditTimestampDialog
+
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "a"},
+        {"start": 1.0, "end": 2.0, "text": "b"},
+        {"start": 2.0, "end": 3.0, "text": "c"},
+    ]
+    p = tmp_path / "ets.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            dlg = EditTimestampDialog(viewer, 1)
+            dlg.start_var.set("00:00:05.000")
+            dlg.end_var.set("00:00:06.500")
+            dlg._save()
+            assert viewer.segments[1]["start"] == pytest.approx(5.0)
+            assert viewer.segments[1]["end"] == pytest.approx(6.5)
+            # Neighbours untouched.
+            assert viewer.segments[0]["start"] == 0.0
+            assert viewer.segments[0]["end"] == 1.0
+            assert viewer.segments[2]["start"] == 2.0
+            assert viewer.segments[2]["end"] == 3.0
+            assert viewer._dirty is True
+        finally:
+            from app.dialogs import transcript_viewer as tv_mod
+            tv_mod.messagebox.askyesno = lambda *a, **kw: True  # type: ignore[attr-defined]
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_viewer_edit_timestamp_rejects_end_before_start(tmp_path):
+    """An invalid edit (end <= start) must show an inline error and
+    leave the segment's timestamps untouched — no crash, no silent
+    corruption."""
+    from app.dialogs.transcript_viewer import TranscriptViewer, EditTimestampDialog
+
+    segs = [{"start": 1.0, "end": 2.0, "text": "a"}]
+    p = tmp_path / "ets_bad.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            dlg = EditTimestampDialog(viewer, 0)
+            dlg.start_var.set("00:00:05.000")
+            dlg.end_var.set("00:00:03.000")  # end before start
+            dlg._save()
+            assert viewer.segments[0]["start"] == 1.0
+            assert viewer.segments[0]["end"] == 2.0
+            assert viewer._dirty is False
+            assert "after start" in dlg.error_var.get()
+
+            # Garbage input also rejected, not crashed.
+            dlg.start_var.set("garbage")
+            dlg.end_var.set("00:00:03.000")
+            dlg._save()
+            assert viewer.segments[0]["start"] == 1.0
+            assert viewer._dirty is False
+        finally:
+            from app.dialogs import transcript_viewer as tv_mod
+            tv_mod.messagebox.askyesno = lambda *a, **kw: True  # type: ignore[attr-defined]
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_viewer_timing_warning_tag_after_edit(tmp_path):
+    """After an edit makes a segment overlap its neighbour, the tree
+    row must carry the 'ts_warn' tag; a clean edit must not."""
+    from app.dialogs.transcript_viewer import TranscriptViewer, EditTimestampDialog
+
+    segs = [
+        {"start": 0.0, "end": 2.0, "text": "a"},
+        {"start": 5.0, "end": 7.0, "text": "b"},
+    ]
+    p = tmp_path / "ets_warn.json"
+    p.write_text(json.dumps(segs), encoding="utf-8")
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, str(p))
+        viewer.withdraw()
+        try:
+            children = viewer.tree.get_children()
+            assert "ts_warn" not in viewer.tree.item(children[1], "tags")
+
+            # Edit segment 1 to start before segment 0's end (1.0 < 2.0).
+            dlg = EditTimestampDialog(viewer, 1)
+            dlg.start_var.set("00:00:01.000")
+            dlg.end_var.set("00:00:07.000")
+            dlg._save()
+
+            children = viewer.tree.get_children()
+            assert "ts_warn" in viewer.tree.item(children[1], "tags")
+        finally:
+            from app.dialogs import transcript_viewer as tv_mod
+            tv_mod.messagebox.askyesno = lambda *a, **kw: True  # type: ignore[attr-defined]
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
 def test_fmt_mmss_basic_and_hour_rollover():
     from app.dialogs.transcript_viewer import _fmt_mmss
 
