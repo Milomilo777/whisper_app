@@ -264,6 +264,22 @@ def _parse_otr(path: str) -> list[dict]:
     return _parse_cue_format(srt_text, path)
 
 
+def _safe_fromstring(text: str) -> ET.Element:
+    """``ET.fromstring`` that refuses a DOCTYPE in an ``.eaf`` being imported.
+
+    Stdlib ``ElementTree``/expat has no built-in limit on entity expansion,
+    so an attacker-crafted ``.eaf`` with a DOCTYPE can mount a "billion
+    laughs" (or XXE) attack. Both require a literal ``<!DOCTYPE`` token (the
+    XML grammar's ``doctypedecl`` production is case-sensitive), so a plain
+    substring check rejects both without adding a ``defusedxml`` dependency
+    or reaching into expat internals whose exposure differs across Python's
+    C-accelerated vs. pure-Python ``ElementTree.XMLParser``.
+    """
+    if "<!DOCTYPE" in text:
+        raise ET.ParseError("DOCTYPE declarations are not allowed in .eaf input")
+    return ET.fromstring(text)
+
+
 def _parse_eaf(text: str, path: str) -> list[dict]:
     """Parse an ELAN ``.eaf`` (XML): TIME_ORDER slots + ALIGNABLE_ANNOTATIONs.
 
@@ -277,7 +293,7 @@ def _parse_eaf(text: str, path: str) -> list[dict]:
     is time-aligned in EAF.
     """
     try:
-        root = ET.fromstring(text)
+        root = _safe_fromstring(text)
     except ET.ParseError as e:
         raise ConvertError(f"{path} is not valid XML: {e}") from e
 

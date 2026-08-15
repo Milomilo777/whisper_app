@@ -110,6 +110,33 @@ def test_elan_invalid_xml_raises(tmp_path):
         convert.parse_to_segments(str(p))
 
 
+def test_elan_doctype_is_rejected_not_expanded(tmp_path):
+    # A "billion laughs" / XXE-shaped DOCTYPE must be refused outright, not
+    # parsed (which would either hang/exhaust memory or read external state).
+    bomb = (
+        '<?xml version="1.0"?>'
+        "<!DOCTYPE ANNOTATION_DOCUMENT ["
+        '<!ENTITY lol "lol">'
+        '<!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">'
+        "]>"
+        "<ANNOTATION_DOCUMENT>&lol2;</ANNOTATION_DOCUMENT>"
+    )
+    p = tmp_path / "bomb.eaf"
+    p.write_text(bomb, encoding="utf-8")
+    with pytest.raises(convert.ConvertError, match="DOCTYPE"):
+        convert.parse_to_segments(str(p))
+
+
+def test_elan_round_trip_unaffected_by_doctype_guard(tmp_path):
+    # The DOCTYPE guard must not false-positive on ordinary output from this
+    # app's own writer (which never emits a DOCTYPE).
+    body = elan.write(SEGMENTS)
+    assert "<!DOCTYPE" not in body
+    p = tmp_path / "clean.eaf"
+    p.write_text(body, encoding="utf-8")
+    assert len(convert.parse_to_segments(str(p))) == 2
+
+
 # --- InqScribe -----------------------------------------------------------------
 
 def test_inqscribe_write_format():
