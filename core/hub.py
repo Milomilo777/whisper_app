@@ -105,7 +105,8 @@ def tiling_tab_enabled() -> bool:
 
     Returns ``True`` unless a ``no_tiling.flag`` marker file sits in the
     install ``{app}`` directory (see :func:`resolve_app_dir`). The installer
-    creates that marker only when the user opted out of Video Tiling.
+    creates that marker unless the user opts in to the "Video Tiling"
+    task (excluded by default since 2026-08-15).
 
     Any filesystem error is swallowed and treated as "enabled" so a quirky
     path / permission problem can never block app startup — the feature
