@@ -528,10 +528,10 @@ pip install pyright pytest
 <!-- AUTO-INDEX:STRUCTURE:START -->
 ## Structure (auto-refreshed — do not hand-edit this block)
 
-- **Source files tracked:** 443
-- **Structure refreshed:** 2026-08-14T22:13:18
+- **Source files tracked:** 442
+- **Structure refreshed:** 2026-08-15T09:50:23
 - **Semantic sections last built:** 2026-07-04T15:30:21
-- **Drift since semantic build:** +37 added · ~64 changed · -2 removed
+- **Drift since semantic build:** +36 added · ~64 changed · -2 removed
 
 > ⚠️ **STALE** — the source tree changed a lot since the semantic sections were built. Re-run `/project-index` to regenerate purposes / gotchas / subsystem maps.
 >
@@ -539,7 +539,7 @@ pip install pyright pytest
 
 | Top-level | Source files |
 |---|---|
-| `tests` | 183 |
+| `tests` | 182 |
 | `docs` | 93 |
 | `core` | 67 |
 | `app` | 28 |
@@ -550,6 +550,6 @@ pip install pyright pytest
 | `tools` | 8 |
 | `assets` | 1 |
 
-**By type:** `.py`×281  `.md`×108  `.json`×17  `.yml`×11  `.bat`×5  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.txt`×2  `.ps1`×2  `.toml`×1  `.js`×1  `.rb`×1
+**By type:** `.py`×281  `.md`×108  `.json`×16  `.yml`×11  `.bat`×5  `.spec`×4  `.html`×4  `.sh`×4  `.iss`×2  `.txt`×2  `.ps1`×2  `.toml`×1  `.js`×1  `.rb`×1
 
 <!-- AUTO-INDEX:STRUCTURE:END -->
