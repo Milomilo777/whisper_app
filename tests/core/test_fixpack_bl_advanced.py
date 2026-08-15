@@ -119,3 +119,25 @@ def test_download_now_skips_when_already_downloaded(monkeypatch: Any) -> None:
 
     assert calls == [], "already-downloaded path must not close the dialog"
     assert after_calls["count"] == 0
+
+
+def test_format_help_covers_every_supported_format():
+    """Every core.writers.supported_formats() key must have a hover-help
+    entry in the output-format checkbox grid.
+
+    Both ``_FORMAT_HELP.get(name, "")`` and ``_FORMAT_LABELS.get(name,
+    name.upper())`` degrade gracefully (empty tooltip / generic uppercase
+    label) rather than crashing when a key is missing, so a future new
+    output format silently landing with no hover-help would not be caught
+    by anything except this test — see the 2026-08-14 comment in
+    app/dialogs/advanced.py: "Every key from
+    core.writers.supported_formats() must appear here."
+    """
+    from app.dialogs import advanced as adv
+    from core.writers import supported_formats
+
+    fmts = set(supported_formats())
+    missing_help = fmts - set(adv._FORMAT_HELP)
+    assert not missing_help, (
+        f"new output format(s) {missing_help} have no _FORMAT_HELP entry"
+    )
