@@ -2,9 +2,17 @@
 
 All notable changes to this project. Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.7.0] — 2026-08-15
 
 ### Fixed
+
+- **`save_config()` refuses a drastic silent shrink and keeps a backup** —
+  a real config.json was found silently reduced from ~90 keys to 3 keys
+  during ordinary use this cycle; the root cause was not pinned down
+  despite a real, instrumented investigation. Saving now refuses to
+  write a config with under 40% of the key count currently on disk
+  (logging an error instead), and keeps a rotating `config.json.bak` of
+  the last good state on every normal write.
 
 - **Editing "Hotwords" in Advanced settings could be silently undone** —
   saving Advanced settings correctly wrote the new hotwords to disk, but

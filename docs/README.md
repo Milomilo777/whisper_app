@@ -38,10 +38,11 @@ fits into one of five buckets.
 
 Newest first:
 
+- [release-notes/RELEASE_NOTES_v1.7.0.md](release-notes/RELEASE_NOTES_v1.7.0.md)
 - [release-notes/RELEASE_NOTES_v1.6.0.md](release-notes/RELEASE_NOTES_v1.6.0.md)
 - [release-notes/RELEASE_NOTES_v1.5.0.md](release-notes/RELEASE_NOTES_v1.5.0.md)
 - [release-notes/RELEASE_NOTES_v1.4.0.md](release-notes/RELEASE_NOTES_v1.4.0.md)
-- see [release-notes/](release-notes/) for the full history (v0.7.0 through v1.6.0, 20 releases)
+- see [release-notes/](release-notes/) for the full history (v0.7.0 through v1.7.0, 21 releases)
 
 ## Development state
 
