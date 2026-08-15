@@ -1606,8 +1606,15 @@ class App(tk.Tk):
             self.app_config["device"] = self.device_var.get()
         if getattr(self, "compute_type_var", None) is not None:
             self.app_config["compute_type"] = self.compute_type_var.get()
-        if getattr(self, "hotwords_var", None) is not None:
-            self.app_config["hotwords"] = self.hotwords_var.get().strip()
+        # hotwords is intentionally NOT written here. hotwords_var has no
+        # matching widget on this tab (see build_transcribe_tab's "vars
+        # without a matching widget are simply not packed" note) — it is
+        # frozen at whatever config.json held when the tab was built, and
+        # AdvancedDialog._save_and_close is the only real editor of
+        # cfg["hotwords"]. Writing hotwords_var's stale value here used to
+        # silently clobber a hotwords edit made in Advanced the moment the
+        # user touched the language dropdown or a checkbox on this tab
+        # afterward — a real, confirmed data-loss bug (2026-08-15).
         try:
             save_config(self.app_config)
         except Exception as e:
