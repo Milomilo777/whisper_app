@@ -14,7 +14,9 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DEFAULT_VIDEO = Path(r"E:\3029-NWN-Daily-Scroll-2m_0002.mp4")
+DEFAULT_VIDEO = Path(
+    "E:\\3224 NWN Master\u2019s Inner Peace Talks, July 29, 2026 e2 (720p)_0002.mp4"
+)
 DEFAULT_MODEL_PARENT = (
     Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
     / "WhisperProject" / "Cache" / "models"

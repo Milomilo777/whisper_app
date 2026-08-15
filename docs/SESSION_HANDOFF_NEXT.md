@@ -5,6 +5,103 @@ this repo. Read this file before anything else.
 
 ---
 
+## 🔴 2026-08-15 (latest) — OPEN, UNSOLVED: something silently truncated the
+real user config.json to 3 keys during this session's frontend testing —
+needs investigation, not just the recovery already done
+
+While root-causing the hover-help issue below (constructing a real
+`App()` + `AdvancedDialog()` in-process, several separate script runs,
+never clicking Save, never touching the Advanced dialog's Save/Cancel
+buttons), the REAL `%LOCALAPPDATA%\WhisperProject\config.json` on this
+dev machine was found reduced from ~50 keys down to exactly 3:
+`cpu_warning_shown`, `model_path: ""`, `download_folder: ""`. Caught by
+luck — this session happened to have read+recorded the full original
+file content near its start (reproduced in full in the previous
+handoff entries' context and restored from that transcript, not from a
+timely backup — none existed yet at the point the truncation happened).
+
+**Restored** (verified against this session's own earlier read of the
+file, byte-for-byte reconstruction) with one deliberate change kept:
+`model_path` no longer points at
+`dist_onedir\WhisperProject\hub\models--Systran--faster-whisper-large-v3`
+(that folder doesn't exist — a pre-existing, unrelated stale path, not
+caused by anything this session touched) but at the real cached copy
+under `%LOCALAPPDATA%\WhisperProject\Cache\models\...`. Left this fix in
+because the old path would make ANY real transcription on this machine
+fail with "Model folder missing" — confirmed exactly that error message
+during this session's E2E smoke test before the fix.
+
+**Ruled out** (checked against real source, not guessed):
+- `core.config.load_config()` cannot structurally return a small dict —
+  `merge_config_sources()` always starts from a full `json.loads(json.dumps(DEFAULT_CONFIG))`
+  baseline (~50 keys) before merging online/local on top.
+- `core.hub.is_hub_configured()` is permissive (any non-empty
+  `hub_folder` string counts) and the original config had one set, so
+  the first-run hub-setup-dialog code path returns early and never runs.
+- Both `save_config(cfg)` call sites in `app/dialogs/advanced.py` are
+  inside the Save button's own handler, not triggered by construction
+  or `.destroy()`.
+- `core/backends/google_cloud_stt.py`'s `_accumulate_usage()` save site
+  only fires after real billable Google Cloud STT API usage, which
+  never happened this session.
+
+**Not found**: the actual trigger. Working theory, unconfirmed: some
+code path reachable during plain `App()` + `AdvancedDialog()`
+construction/teardown (no Save click) calls `save_config()` with a
+small, ad-hoc dict rather than the full `self.app_config` — but a
+targeted grep across the obvious call sites didn't turn it up. Given
+`save_config()`'s signature takes any `dict[str, Any]`, the cleanest way
+to actually catch this red-handed next time: temporarily wrap/log inside
+`save_config()` itself (stack trace + `len(config)` whenever `len(config)
+< 10`, say) and reproduce by repeating this session's exact script
+sequence (real `App()`, real `AdvancedDialog(app)`, hover interactions,
+`.destroy()`, no Save click) against a throwaway config.json.
+
+**Why this matters**: this is silent, undetected data loss triggered by
+completely passive UI interaction (no Save, no explicit "reset" action)
+— a real user could hit this from ordinary use, not just from scripted
+testing. Treat as a real, unresolved bug, not just a testing footgun.
+
+---
+
+## 🟢 2026-08-15 (latest) — v1.6.0 Windows assets rebuilt + verified with
+a real E2E smoke test (all of today's fixes below, in place, no version
+bump)
+
+Owner asked to rebuild and replace the v1.6.0 release assets with
+everything fixed today. Followed `docs/BUILD.md` → "Rebuild without
+bumping the version" exactly: version confirmed unchanged (`1.6.0` in
+`core/__init__.py`, `pyproject.toml`, `installer_embed.iss`),
+`build_embed_installer.bat` (full fresh rebuild, all sanity imports
+passed) → ISCC `installer_embed.iss` (262s) → portable zip via
+`shutil.make_archive`.
+
+**Real E2E smoke test against the actual freshly-built installer**
+(`tests/smoke/test_exe_real_e2e.py`), silently installed to an isolated
+`C:\Temp\test_v1.6.0_rebuild_20260815` (cleaned up after): 2 passed, 1
+skipped (the onefile-only size check, expected). Real transcription of a
+real ~2-minute video (`E: ...NWN Master's Inner Peace Talks... _0002.mp4`
+— the CLAUDE.md-documented default test video no longer exists on this
+machine; this is the smallest real-speech clip found on `E:\` instead,
+worth updating `tests/smoke/conftest.py`'s `DEFAULT_VIDEO` to next time
+someone's in there) produced a real non-empty SRT+JSON. Output files
+cleaned up from `E:\` afterward.
+
+**Bonus real-world confirmation of today's installer fix**: the silent
+install used NO explicit `/TASKS` override (true defaults, exactly what
+a real user's silent/default install does) and correctly produced
+`{app}\no_tiling.flag` — confirming the Video Tiling task really is
+unticked by default now, not just correct on paper.
+
+Uploaded via `gh release upload v1.6.0 ... --clobber`; confirmed via
+`gh release view v1.6.0` — both assets now show `2026-08-15T02:33:07Z`:
+- `WhisperProject-v1.6.0-Setup-Standard.exe` (~226 MB)
+- `WhisperProject-v1.6.0-Portable.zip` (~329 MB)
+
+**Not done**: macOS (per `CLAUDE.md`, never build/dispatch it).
+
+---
+
 ## 🟢 2026-08-15 — Hover-help root-caused + fixed for real; both 2026-08-14
 owner requests closed; a small frontend UX pass; Desktop folder organized
 
