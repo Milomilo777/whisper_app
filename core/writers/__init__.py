@@ -25,6 +25,7 @@ from typing import Callable
 
 from . import (
     ass,
+    bilingual_srt,
     docx_writer,
     elan,
     express_scribe,
@@ -40,6 +41,13 @@ from . import (
     txt,
     vtt,
 )
+
+# bilingual_srt is deliberately NOT in WRITERS/BINARY_WRITERS below: every
+# other entry follows the frozen ``write(segments, audio_path) -> str``
+# contract, but a bilingual cue needs a second, per-segment translations
+# list that doesn't fit that shape (see core/writers/bilingual_srt.py's
+# docstring). It's imported here only so it's a proper package member;
+# the transcript viewer's AI panel calls bilingual_srt.write() directly.
 
 WriterFn = Callable[[list[dict], str], str]
 BinaryWriterFn = Callable[[list[dict], str], bytes]

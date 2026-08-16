@@ -1106,25 +1106,18 @@ def _run_post_pipeline(
 
 
 def _maybe_get_llm_runner() -> Any | None:
-    """Return a loaded LLMRunner when the AI Layer is on, else None.
+    """Return a loaded LLM runner when the AI Layer is on, else None.
 
-    Wraps every failure mode (dep missing, model file missing, load
-    error) so a broken LLM never blocks transcription.
+    Delegates to core.llm.build_runner_from_config, which also honours
+    ``llm_provider`` ("local" Qwen vs. a "remote" OpenAI-compatible
+    endpoint) — so a chapter-titling pass benefits from whichever
+    provider the user configured, the same as the transcript viewer's
+    AI panel. Wraps every failure mode (dep missing, model file
+    missing, load error) so a broken LLM never blocks transcription.
     """
-    if not config.get("ai_enabled", False):
-        return None
     try:
         from . import llm as _llm
-        if not _llm.runtime_available():
-            return None
-        model_path = (config.get("ai_model_path") or "").strip()
-        if not model_path:
-            model_path = str(_llm.default_model_path())
-        if not _llm.is_model_present(Path(model_path)):
-            return None
-        runner = _llm.LLMRunner(_llm.LLMConfig(model_path=model_path))
-        runner.load()
-        return runner
+        return _llm.build_runner_from_config(config)
     except Exception:  # noqa: BLE001
         return None
 

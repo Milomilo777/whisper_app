@@ -671,3 +671,37 @@ def test_repo_configuration_json_agrees_with_default_stats_url():
     repo_root = Path(__file__).resolve().parents[2]
     published = json.loads((repo_root / "configuration.json").read_text(encoding="utf-8"))
     assert published["stats_url"] == cfg.DEFAULT_CONFIG["stats_url"]
+
+
+# ---------- remote LLM provider defaults + noisy-audio preset --------------
+
+
+def test_default_config_local_llm_provider_needs_no_network():
+    """A fresh install must default to the offline provider — "remote"
+    would silently need a network call + a key the user hasn't set yet."""
+    assert cfg.DEFAULT_CONFIG["llm_provider"] == "local"
+    assert cfg.DEFAULT_CONFIG["llm_remote_api_key"] == ""
+    assert cfg.DEFAULT_CONFIG["llm_remote_model"] == ""
+
+
+def test_noisy_audio_preset_keys_all_exist_in_default_config():
+    """Every key the preset sets must be a real, typed DEFAULT_CONFIG
+    key — a typo here would silently write an orphan key that
+    load_config()'s type-coercion pass can't validate."""
+    for key, value in cfg.NOISY_AUDIO_PRESET.items():
+        assert key in cfg.DEFAULT_CONFIG, f"{key!r} is not a real config key"
+        assert isinstance(value, type(cfg.DEFAULT_CONFIG[key]))
+
+
+def test_noisy_audio_preset_turns_on_cleanup_and_detection():
+    preset = cfg.NOISY_AUDIO_PRESET
+    assert preset["vad_enabled"] is True
+    assert preset["denoise_enabled"] is True
+    assert preset["hallucination_detect_enabled"] is True
+    # Fixed "medium", not "auto" — the whole point of clicking the preset
+    # is to force cleanup to actually run rather than re-measure and
+    # possibly decide "off" again.
+    assert preset["denoise_level"] == "medium"
+    # More conservative than the plain default (0.5): noisy audio's real
+    # risk is background noise misread AS speech, not speech missed.
+    assert preset["vad_threshold"] > cfg.DEFAULT_CONFIG["vad_threshold"]

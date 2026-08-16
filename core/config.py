@@ -232,6 +232,25 @@ DEFAULT_CONFIG = {
     # default cache path under ``user_cache_dir()/llm/``).
     "ai_enabled": False,
     "ai_model_path": "",
+    # Which LLM implementation ``ai_enabled`` turns on. "local" (default)
+    # is the bundled-on-first-use Qwen2.5-1.5B above; "remote" sends the
+    # same 4 prompts (summarise/action items/ask/translate) to a
+    # user-configured OpenAI-compatible ``/chat/completions`` endpoint —
+    # the real OpenAI API, or a self-hosted server (Ollama/LM
+    # Studio/vLLM) or third-party proxy (OpenRouter). See core/llm.py's
+    # RemoteLLMRunner. Local stays the default so a fresh install has no
+    # network dependency for this feature.
+    "llm_provider": "local",
+    # llm_remote_model is deliberately blank — the whole point of "remote"
+    # is the user names their OWN model (this app has no business
+    # defaulting to a specific paid model id on their account). The
+    # Advanced dialog's help text shows examples (gpt-4o-mini, etc.).
+    "llm_remote_base_url": "https://api.openai.com/v1",
+    "llm_remote_model": "",
+    # Stored in CLEARTEXT here, consistent with cloud_stt_api_key /
+    # gcloud_stt_credentials_json / server_token above — config.json is
+    # per-user under %LOCALAPPDATA%\WhisperProject and is not encrypted.
+    "llm_remote_api_key": "",
     # v0.8 Phase 3 — auto-chapter markers in the JSON sidecar. Pure
     # heuristic by default; if ai_enabled + LLM loaded, chapter titles
     # are LLM-generated.
@@ -357,6 +376,34 @@ DEFAULT_CONFIG = {
         "macos": "https://evermeet.cx/ffmpeg/getrelease/ffplay/zip",
         "linux": "",
     },
+}
+
+
+# One-click "this recording is noisy" bundle for the Advanced dialog's AI
+# Layer section — sets several independent knobs (VAD / denoise /
+# hallucination) to values reasonable for non-studio audio in one action,
+# instead of making the user hand-tune five sliders across three sections.
+# Reasoning per key:
+#   vad_threshold  — raised from the 0.5 default to 0.6: a noisy recording
+#     has few TRUE silences, so the risk is background noise getting
+#     misclassified AS speech (which then feeds the hallucination
+#     detector junk), not real speech getting skipped. A higher
+#     confidence bar before calling something "speech" is the safer
+#     direction here.
+#   denoise_level  — fixed at "medium" rather than "auto": "auto" measures
+#     the file and may pick "off" for material that only sounds noisy to
+#     a human ear; the user clicking this button IS the signal that
+#     cleanup should actually run.
+#   demucs_enabled is deliberately NOT part of this preset — it's a heavy
+#     opt-in dependency (pulls torch) and a big download; a one-click
+#     preset silently starting that is a worse surprise than leaving it
+#     for the user to opt into separately.
+NOISY_AUDIO_PRESET: dict[str, Any] = {
+    "vad_enabled": True,
+    "vad_threshold": 0.6,
+    "denoise_enabled": True,
+    "denoise_level": "medium",
+    "hallucination_detect_enabled": True,
 }
 
 

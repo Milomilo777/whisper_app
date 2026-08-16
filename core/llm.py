@@ -1,7 +1,8 @@
-"""Local LLM panel — Qwen2.5-1.5B-Instruct via llama-cpp-python.
+"""LLM panel — local Qwen2.5-1.5B-Instruct, or a remote OpenAI-compatible
+endpoint the user points at themselves.
 
-The AI Layer (v0.8 Phase 2) provides offline post-processing of a
-finished transcript:
+The AI Layer (v0.8 Phase 2) provides post-processing of a finished
+transcript, from either provider:
 
   * **Summarise**  — bullet-point digest of the conversation.
   * **Action items** — extracted as a JSON list (GBNF-constrained).
@@ -9,22 +10,35 @@ finished transcript:
   * **Translate**  — language-pair translation through the LLM, so
     we don't need a separate NLLB model.
 
-Design choices:
+Two providers, chosen via ``config["llm_provider"]`` ("local" is the
+default):
 
-  * **Download-on-first-use**, NOT bundled. Qwen2.5-1.5B Q4_K_M is
+  * :class:`LLMRunner` — Qwen2.5-1.5B-Instruct via llama-cpp-python,
+    **download-on-first-use**, NOT bundled. Qwen2.5-1.5B Q4_K_M is
     ~1 GB; bundling pushes Portable from 450 MB → 1.45 GB. Instead
     a one-click "Enable AI features" button downloads the model
     into ``user_cache_dir()/llm/``. The wizard reports
     :func:`is_model_present` so the UI can show "Install AI model"
-    vs "Ready" states.
-  * **Lazy import** of llama-cpp-python so the module is safe to
-    import even when the optional dep isn't installed.
-  * **Singleton model** — ``LLMRunner`` keeps one llama_cpp.Llama
+    vs "Ready" states. **Lazy import** of llama-cpp-python so the
+    module is safe to import even when the optional dep isn't
+    installed. **Singleton model** — keeps one llama_cpp.Llama
     instance to avoid the multi-second reload cost on every call.
+  * :class:`RemoteLLMRunner` — any OpenAI-compatible
+    ``/chat/completions`` endpoint the user configures with their own
+    base URL, model name, and API key (the real OpenAI API, or a
+    self-hosted server such as Ollama/LM Studio/vLLM, or a third-party
+    proxy like OpenRouter). No local model, no extra dependency —
+    every call is one ``urllib.request`` HTTP round trip.
 
-When ``llama-cpp-python`` isn't installed, every public function
-either returns ``None`` / raises :class:`LLMUnavailable` so the UI
-can swap to a "feature off" placeholder. No silent partial work.
+:func:`build_runner_from_config` picks the configured provider so
+callers (the auto-chapter titler, the transcript viewer's AI panel)
+don't need to know which one is active — both expose the same 4-method
+surface.
+
+When neither provider is available/configured, every public function
+either returns ``None`` / raises :class:`LLMUnavailable` /
+:class:`RemoteLLMError` so the UI can swap to a "feature off"
+placeholder. No silent partial work.
 """
 from __future__ import annotations
 
@@ -33,6 +47,7 @@ import logging
 import os
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -193,6 +208,49 @@ class LLMConfig:
     seed: int = 42
 
 
+# ---------------------------------------------------------------- prompts
+#
+# Shared between LLMRunner and RemoteLLMRunner so the two providers ask
+# the model the same question — only the transport (_chat) differs.
+
+
+def _summarise_prompt(text: str, max_bullets: int) -> str:
+    return (
+        f"Summarise the following transcript in at most {max_bullets} "
+        "concise bullet points. Keep proper names and technical terms "
+        "verbatim. Do not invent details that aren't in the source.\n\n"
+        f"Transcript:\n\"\"\"\n{text}\n\"\"\""
+    )
+
+
+def _action_items_prompt(text: str) -> str:
+    return (
+        "Extract the actionable to-do items from this transcript. "
+        "Respond ONLY with a JSON array of strings. If there are "
+        "no actions, respond with []. Do not include any prose.\n\n"
+        f"Transcript:\n\"\"\"\n{text}\n\"\"\""
+    )
+
+
+def _ask_prompt(text: str, question: str) -> str:
+    return (
+        "Answer the question using ONLY information from the transcript "
+        "below. If the answer isn't in the transcript, say "
+        "\"Not in transcript.\"\n\n"
+        f"Transcript:\n\"\"\"\n{text}\n\"\"\"\n\n"
+        f"Question: {question}"
+    )
+
+
+def _translate_prompt(text: str, target_language: str) -> str:
+    return (
+        f"Translate the following text into {target_language}. "
+        "Preserve proper names and technical terms verbatim. "
+        "Respond with only the translation, no explanations.\n\n"
+        f"\"\"\"\n{text}\n\"\"\""
+    )
+
+
 class LLMRunner:
     """Wraps a single llama_cpp.Llama instance.
 
@@ -260,14 +318,8 @@ class LLMRunner:
 
     def summarise(self, transcript_text: str, *, max_bullets: int = 8) -> str:
         """Bullet-point summary of the transcript."""
-        prompt = (
-            f"Summarise the following transcript in at most {max_bullets} "
-            "concise bullet points. Keep proper names and technical terms "
-            "verbatim. Do not invent details that aren't in the source.\n\n"
-            f"Transcript:\n\"\"\"\n{transcript_text}\n\"\"\""
-        )
         return self._chat(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": _summarise_prompt(transcript_text, max_bullets)}],
             max_tokens=600,
         )
 
@@ -278,42 +330,23 @@ class LLMRunner:
         an empty list rather than guessing — the UI surfaces that
         as "no action items detected".
         """
-        prompt = (
-            "Extract the actionable to-do items from this transcript. "
-            "Respond ONLY with a JSON array of strings. If there are "
-            "no actions, respond with []. Do not include any prose.\n\n"
-            f"Transcript:\n\"\"\"\n{transcript_text}\n\"\"\""
-        )
         raw = self._chat(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": _action_items_prompt(transcript_text)}],
             max_tokens=400,
         )
         return _parse_json_list(raw)
 
     def ask(self, transcript_text: str, question: str) -> str:
-        prompt = (
-            "Answer the question using ONLY information from the transcript "
-            "below. If the answer isn't in the transcript, say "
-            "\"Not in transcript.\"\n\n"
-            f"Transcript:\n\"\"\"\n{transcript_text}\n\"\"\"\n\n"
-            f"Question: {question}"
-        )
         return self._chat(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": _ask_prompt(transcript_text, question)}],
             max_tokens=400,
         )
 
     def translate(
         self, text: str, *, target_language: str = "English"
     ) -> str:
-        prompt = (
-            f"Translate the following text into {target_language}. "
-            "Preserve proper names and technical terms verbatim. "
-            "Respond with only the translation, no explanations.\n\n"
-            f"\"\"\"\n{text}\n\"\"\""
-        )
         return self._chat(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": _translate_prompt(text, target_language)}],
             max_tokens=max(256, int(len(text.split()) * 1.5)),
         )
 
@@ -351,3 +384,211 @@ def _parse_json_list(raw: str) -> list[str]:
     if not isinstance(data, list):
         return []
     return [str(item) for item in data if isinstance(item, (str, int, float))]
+
+
+# ---------------------------------------------------------------- remote runner
+
+
+class RemoteLLMError(RuntimeError):
+    """Raised when a remote OpenAI-compatible endpoint call fails."""
+
+
+@dataclass
+class RemoteLLMConfig:
+    """Connection details for a user-supplied OpenAI-compatible endpoint.
+
+    Works with the real OpenAI API, or any self-hosted / third-party
+    server that speaks the same ``POST {base_url}/chat/completions``
+    shape (Ollama, LM Studio, vLLM, OpenRouter, ...). ``api_key`` may
+    be blank for a local server that doesn't require one.
+    """
+    base_url: str
+    model: str
+    api_key: str = ""
+    timeout: float = 120.0
+
+
+class RemoteLLMRunner:
+    """Same 4-method surface as :class:`LLMRunner`, over HTTP.
+
+    Duck-type compatible with LLMRunner so callers (core.chapters'
+    title_chapters_with_llm, the transcript viewer's AI panel) don't
+    need to know which provider is active. No local model, no GPU/CPU
+    inference cost here — every call is one HTTP request via the
+    stdlib ``urllib.request`` (no new third-party dependency, matching
+    core/backends/cloud_stt.py's transport style).
+    """
+
+    def __init__(self, cfg: RemoteLLMConfig) -> None:
+        self.cfg = cfg
+
+    def is_loaded(self) -> bool:
+        # Nothing to "load" for an HTTP client — always ready to try.
+        return True
+
+    def load(self) -> None:
+        return None
+
+    def unload(self) -> None:
+        return None
+
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int = 512,
+        temperature: float = 0.3,
+    ) -> str:
+        base = self.cfg.base_url.rstrip("/")
+        url = f"{base}/chat/completions"
+        payload = {
+            "model": self.cfg.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.cfg.api_key:
+            headers["Authorization"] = f"Bearer {self.cfg.api_key}"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.cfg.timeout) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:  # noqa: BLE001
+                pass
+            raise RemoteLLMError(
+                f"{url} returned HTTP {e.code}: {body or e.reason}"
+            ) from e
+        except urllib.error.URLError as e:
+            raise RemoteLLMError(f"Could not reach {url}: {e.reason}") from e
+        try:
+            data = json.loads(raw.decode("utf-8"))
+            return str(data["choices"][0]["message"]["content"] or "").strip()
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            raise RemoteLLMError(
+                f"{url} returned an unexpected response shape: {e}"
+            ) from e
+
+    def summarise(self, transcript_text: str, *, max_bullets: int = 8) -> str:
+        return self._chat(
+            [{"role": "user", "content": _summarise_prompt(transcript_text, max_bullets)}],
+            max_tokens=600,
+        )
+
+    def action_items(self, transcript_text: str) -> list[str]:
+        raw = self._chat(
+            [{"role": "user", "content": _action_items_prompt(transcript_text)}],
+            max_tokens=400,
+        )
+        return _parse_json_list(raw)
+
+    def ask(self, transcript_text: str, question: str) -> str:
+        return self._chat(
+            [{"role": "user", "content": _ask_prompt(transcript_text, question)}],
+            max_tokens=400,
+        )
+
+    def translate(self, text: str, *, target_language: str = "English") -> str:
+        return self._chat(
+            [{"role": "user", "content": _translate_prompt(text, target_language)}],
+            max_tokens=max(256, int(len(text.split()) * 1.5)),
+        )
+
+
+# ---------------------------------------------------------------- factory
+
+
+def build_runner_from_config(
+    config: dict[str, Any],
+) -> "LLMRunner | RemoteLLMRunner | None":
+    """Construct the configured LLM runner, or ``None`` when unavailable.
+
+    Reads ``ai_enabled`` (master on/off) and ``llm_provider``
+    ("local"/"remote") plus that provider's own settings. Never
+    raises: every failure mode (dep missing, model file missing,
+    remote endpoint not yet configured) returns ``None`` so callers
+    can treat "no runner" as "skip this optional step" uniformly,
+    whether it's the auto-chapter titler in core.transcriber or the
+    transcript viewer's AI panel.
+    """
+    if not config.get("ai_enabled", False):
+        return None
+    provider = str(config.get("llm_provider") or "local").strip().lower()
+    if provider == "remote":
+        base_url = (config.get("llm_remote_base_url") or "").strip()
+        model = (config.get("llm_remote_model") or "").strip()
+        if not base_url or not model:
+            return None
+        return RemoteLLMRunner(RemoteLLMConfig(
+            base_url=base_url,
+            model=model,
+            api_key=(config.get("llm_remote_api_key") or "").strip(),
+        ))
+    try:
+        if not runtime_available():
+            return None
+        model_path = (config.get("ai_model_path") or "").strip()
+        if not model_path:
+            model_path = str(default_model_path())
+        if not is_model_present(Path(model_path)):
+            return None
+        runner = LLMRunner(LLMConfig(model_path=model_path))
+        runner.load()
+        return runner
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def translate_segments(
+    runner: Any,
+    segments: list[dict[str, Any]],
+    *,
+    target_language: str = "English",
+    progress_cb: Callable[[int, int], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> list[str]:
+    """Translate each segment's text independently — one call per segment.
+
+    A single whole-transcript :meth:`translate` call is faster but
+    doesn't guarantee a 1:1 line count with the source segments — an
+    LLM can merge or reword across boundaries, especially a small
+    local model. The bilingual-subtitle writer needs an EXACT
+    per-cue pairing, so this trades speed for that guarantee.
+
+    Returns a list the same length as ``segments``. An empty source
+    segment or a translation failure yields ``""`` at that index
+    rather than raising, so one bad segment doesn't discard an
+    otherwise-good pass; ``progress_cb(done, total)`` (if given) is
+    called after every segment, and ``cancel_event`` (if set)
+    short-circuits the remaining segments to ``""``.
+    """
+    out: list[str] = []
+    total = len(segments)
+    for i, seg in enumerate(segments):
+        if cancel_event is not None and cancel_event.is_set():
+            out.append("")
+        else:
+            text = (seg.get("text") or "").strip()
+            if not text:
+                out.append("")
+            else:
+                try:
+                    out.append(runner.translate(text, target_language=target_language))
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("translate_segments: segment %d failed: %s", i, e)
+                    out.append("")
+        if progress_cb is not None:
+            try:
+                progress_cb(i + 1, total)
+            except Exception:  # noqa: BLE001
+                pass
+    return out

@@ -1,6 +1,8 @@
 """Tests for the local LLM panel (download + runner + parsing)."""
 from __future__ import annotations
 
+import email.message
+import io
 import json
 import sys
 import types
@@ -256,3 +258,242 @@ def test_parse_json_list_coerces_numbers_to_strings():
 
 def test_parse_json_list_rejects_non_array():
     assert llm._parse_json_list('{"key": "value"}') == []
+
+
+# ---------- RemoteLLMRunner ------------------------------------------------
+
+
+class _FakeHTTPResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return None
+
+
+def _chat_completion_body(content: str) -> bytes:
+    return json.dumps(
+        {"choices": [{"message": {"content": content}}]}
+    ).encode("utf-8")
+
+
+def test_remote_runner_chat_posts_expected_payload(monkeypatch):
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["headers"] = dict(req.header_items())
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return _FakeHTTPResponse(_chat_completion_body("hi there"))
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    runner = llm.RemoteLLMRunner(
+        llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="gpt-4o-mini", api_key="sk-test")
+    )
+    out = runner._chat([{"role": "user", "content": "hello"}])
+    assert out == "hi there"
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert captured["body"]["model"] == "gpt-4o-mini"
+    assert captured["headers"].get("Authorization") == "Bearer sk-test"
+
+
+def test_remote_runner_chat_omits_auth_header_when_key_blank(monkeypatch):
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = dict(req.header_items())
+        return _FakeHTTPResponse(_chat_completion_body("ok"))
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    runner = llm.RemoteLLMRunner(
+        llm.RemoteLLMConfig(base_url="http://localhost:11434/v1", model="llama3")
+    )
+    runner._chat([{"role": "user", "content": "hello"}])
+    assert "Authorization" not in captured["headers"]
+
+
+def test_remote_runner_strips_trailing_slash_from_base_url(monkeypatch):
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        return _FakeHTTPResponse(_chat_completion_body("ok"))
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    runner = llm.RemoteLLMRunner(
+        llm.RemoteLLMConfig(base_url="https://example.com/v1/", model="m")
+    )
+    runner._chat([{"role": "user", "content": "hi"}])
+    assert captured["url"] == "https://example.com/v1/chat/completions"
+
+
+def test_remote_runner_http_error_becomes_remote_llm_error(monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise llm.urllib.error.HTTPError(
+            req.full_url, 401, "Unauthorized", email.message.Message(),
+            io.BytesIO(b'{"error":"bad key"}'),
+        )
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="m"))
+    with pytest.raises(llm.RemoteLLMError, match="401"):
+        runner._chat([{"role": "user", "content": "hi"}])
+
+
+def test_remote_runner_url_error_becomes_remote_llm_error(monkeypatch):
+    def fake_urlopen(req, timeout=None):
+        raise llm.urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="http://localhost:1234/v1", model="m"))
+    with pytest.raises(llm.RemoteLLMError, match="Could not reach"):
+        runner._chat([{"role": "user", "content": "hi"}])
+
+
+def test_remote_runner_malformed_response_becomes_remote_llm_error(monkeypatch):
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeHTTPResponse(b"not json"),
+    )
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="m"))
+    with pytest.raises(llm.RemoteLLMError, match="unexpected response"):
+        runner._chat([{"role": "user", "content": "hi"}])
+
+
+def test_remote_runner_action_items_parses_json_array(monkeypatch):
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeHTTPResponse(_chat_completion_body('["a", "b"]')),
+    )
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="m"))
+    assert runner.action_items("transcript") == ["a", "b"]
+
+
+def test_remote_runner_translate_and_ask(monkeypatch):
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeHTTPResponse(_chat_completion_body("Bonjour")),
+    )
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="m"))
+    assert runner.translate("Hello", target_language="French") == "Bonjour"
+    assert runner.ask("transcript", "what?") == "Bonjour"
+    assert runner.is_loaded() is True
+    runner.load()  # no-op, must not raise
+    runner.unload()  # no-op, must not raise
+
+
+# ---------- build_runner_from_config ---------------------------------------
+
+
+def test_build_runner_returns_none_when_ai_disabled():
+    assert llm.build_runner_from_config({"ai_enabled": False}) is None
+
+
+def test_build_runner_local_returns_none_without_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "runtime_available", lambda: True)
+    cfg = {"ai_enabled": True, "llm_provider": "local", "ai_model_path": str(tmp_path / "missing.gguf")}
+    assert llm.build_runner_from_config(cfg) is None
+
+
+def test_build_runner_local_returns_runner_when_model_present(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "runtime_available", lambda: True)
+    fake_module = types.ModuleType("llama_cpp")
+    fake_module.Llama = MagicMock()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_module)
+    model_file = tmp_path / "m.gguf"
+    with model_file.open("wb") as f:  # >100 MB sanity floor (is_model_present)
+        f.seek(101_000_000)
+        f.write(b"\0")
+    cfg = {"ai_enabled": True, "llm_provider": "local", "ai_model_path": str(model_file)}
+    runner = llm.build_runner_from_config(cfg)
+    assert isinstance(runner, llm.LLMRunner)
+
+
+def test_build_runner_remote_returns_none_without_base_url_or_model():
+    cfg = {"ai_enabled": True, "llm_provider": "remote", "llm_remote_base_url": "", "llm_remote_model": ""}
+    assert llm.build_runner_from_config(cfg) is None
+    cfg2 = {
+        "ai_enabled": True, "llm_provider": "remote",
+        "llm_remote_base_url": "https://api.openai.com/v1", "llm_remote_model": "",
+    }
+    assert llm.build_runner_from_config(cfg2) is None
+
+
+def test_build_runner_remote_returns_configured_runner():
+    cfg = {
+        "ai_enabled": True,
+        "llm_provider": "remote",
+        "llm_remote_base_url": "https://api.openai.com/v1",
+        "llm_remote_model": "gpt-4o-mini",
+        "llm_remote_api_key": "sk-abc",
+    }
+    runner = llm.build_runner_from_config(cfg)
+    assert isinstance(runner, llm.RemoteLLMRunner)
+    assert runner.cfg.base_url == "https://api.openai.com/v1"
+    assert runner.cfg.model == "gpt-4o-mini"
+    assert runner.cfg.api_key == "sk-abc"
+
+
+# ---------- translate_segments ----------------------------------------------
+
+
+class _StubRunner:
+    def __init__(self, fail_on: set[str] | None = None):
+        self.calls: list[str] = []
+        self.fail_on = fail_on or set()
+
+    def translate(self, text: str, *, target_language: str = "English") -> str:
+        self.calls.append(text)
+        if text in self.fail_on:
+            raise RuntimeError("boom")
+        return f"[{target_language}] {text}"
+
+
+def test_translate_segments_maps_1_to_1():
+    segs = [{"text": "hello"}, {"text": "world"}]
+    out = llm.translate_segments(_StubRunner(), segs, target_language="French")
+    assert out == ["[French] hello", "[French] world"]
+
+
+def test_translate_segments_blank_source_yields_blank_without_calling_runner():
+    runner = _StubRunner()
+    segs = [{"text": ""}, {"text": "  "}, {"text": "hi"}]
+    out = llm.translate_segments(runner, segs)
+    assert out == ["", "", "[English] hi"]
+    assert runner.calls == ["hi"]
+
+
+def test_translate_segments_one_failure_does_not_abort_the_rest():
+    runner = _StubRunner(fail_on={"bad"})
+    segs = [{"text": "good1"}, {"text": "bad"}, {"text": "good2"}]
+    out = llm.translate_segments(runner, segs)
+    assert out == ["[English] good1", "", "[English] good2"]
+
+
+def test_translate_segments_calls_progress_cb_with_running_totals():
+    calls: list[tuple[int, int]] = []
+    segs = [{"text": "a"}, {"text": "b"}, {"text": "c"}]
+    llm.translate_segments(_StubRunner(), segs, progress_cb=lambda done, total: calls.append((done, total)))
+    assert calls == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_translate_segments_cancel_event_short_circuits_remaining():
+    import threading
+    cancel = threading.Event()
+    runner = _StubRunner()
+
+    def translate_then_cancel(text, *, target_language="English"):
+        cancel.set()
+        return f"[{target_language}] {text}"
+
+    runner.translate = translate_then_cancel  # type: ignore[method-assign]
+    segs = [{"text": "first"}, {"text": "second"}, {"text": "third"}]
+    out = llm.translate_segments(runner, segs, cancel_event=cancel)
+    assert out == ["[English] first", "", ""]
