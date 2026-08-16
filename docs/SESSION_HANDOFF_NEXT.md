@@ -5,7 +5,87 @@ this repo. Read this file before anything else.
 
 ---
 
-## 🟢 2026-08-15 (latest) — v1.7.0 released, then a second-pass review found + fixed a real concurrency bug in it
+## 🟢 2026-08-16 (latest) — competitor feature audit: wired 3 unused engines into the UI, added a remote LLM provider + bilingual export + noisy-audio preset
+
+Owner sent a list of 19 similar Whisper-transcription GitHub projects
+and asked for a capability scan; the comparison went into a private
+Claude Artifact, and the resulting punch list is now
+`docs/roadmap/COMPETITOR_FEATURE_AUDIT.md` (9 items evaluated and
+deliberately left undone — read that file before picking up any of
+them, it has the effort/priority reasoning per item).
+
+The owner picked 6 items to implement this session:
+
+- **The 3 highest-value ones turned out to be "wire up code that
+  already existed."** `core/llm.py` (summarise/action items/ask/
+  translate) and `core/search.py` (FTS5 full-text search) were fully
+  built with zero UI callers before this session — confirmed by
+  `grep`, not by trusting the project index's own summary of itself.
+  Same story for `core.chapters`' `<name>.chapters.json` sidecar: the
+  pipeline wrote it, nothing ever read it back. All three now have a
+  real UI surface: the transcript viewer gained a 3-tab notebook
+  (Media / **Chapters** / **AI Tools**) on its right panel, and
+  `Help > Search transcripts...` opens a new search dialog.
+- **Bilingual subtitle export** (`core/writers/bilingual_srt.py`) —
+  original + translated line per cue, translated one segment at a
+  time (not the whole transcript in one call) specifically so the
+  cue count stays exactly aligned with the source.
+- **Remote LLM provider** (`core.llm.RemoteLLMRunner`) — the owner
+  explicitly asked for "anyone can use their own OpenAI key and
+  model." Advanced Settings' AI Layer section now has a Local/Remote
+  provider picker; Remote sends the same 4 prompts to any
+  OpenAI-compatible `/chat/completions` endpoint the user configures
+  (works with the real OpenAI API, or Ollama/LM Studio/vLLM/OpenRouter
+  if pointed at one).
+- **Noisy-audio preset** (`core.config.NOISY_AUDIO_PRESET`) — one
+  button that sets VAD threshold + denoise + hallucination-detection
+  to values reasonable for non-studio audio, instead of five
+  hand-tuned sliders across three dialog sections.
+
+A mid-session audit of one candidate ("custom prompt/hotwords") turned
+out to already exist in Advanced Settings — corrected in the
+COMPETITOR_FEATURE_AUDIT.md writeup rather than duplicated.
+
+**Real-hardware verification** (per this repo's CLAUDE.md rule): drove
+the actual `App()` — not a headless import — through every new window
+and screenshotted each one via the win32-foreground technique already
+documented in this file's transcript_viewer gotchas. Found and fixed
+one real bug this way that pyright and the hermetic pytest suite both
+missed: the search dialog's results Treeview was constructed with the
+right PARENT widget but grid-placed via `in_=` into a different frame,
+which held correct data (`tree.get_children()` was right, pytest
+passed) but rendered **completely blank** — no header, no rows,
+nothing on screen. Fixed by giving the tree/scrollbar their normal
+direct parent, matching the plain grid pattern every other Treeview in
+this codebase already uses. Screenshots also incidentally surfaced a
+pre-existing, unrelated "Choose Model Hub Folder" dialog popping up
+during a fresh `App()` launch on this dev machine even though models
+are already downloaded — not investigated further, out of scope for
+this session, flagged here in case it recurs.
+
+Also fixed two pre-existing `AdvancedDialog` test fixtures
+(`test_advanced_model_change.py`, `test_fixpack_Ib.py`) whose
+`SimpleNamespace` stand-ins didn't carry the new
+`_llm_provider_display`/`_llm_remote_*` attributes `_save_and_close`
+now reads.
+
+`pyright app core` clean throughout. `pytest tests/ --ignore=tests/smoke`
+clean on 2 of 3 runs; the 1 failure each time was `tk.Tk()` itself
+throwing during a *different*, untouched test's fixture setup — the
+exact "intermittent Tcl-state corruption when run with many sibling
+Tk-using tests" flakiness `test_hub_setup_dialog.py`'s own `tk_root`
+fixture docstring already documents as pre-existing. Non-deterministic
+(a different test failed each time; a clean rerun always passed) and
+not something this session's changes caused, so not chased further.
+
+Working tree clean, everything committed and pushed to master in 3
+commits (LLM engine / UI wiring / the Treeview fix). Nothing pending —
+no version bump, no release cut (not asked for; per this file's own
+rule that stays a separate, explicit ask).
+
+---
+
+## 🟢 2026-08-15 — v1.7.0 released, then a second-pass review found + fixed a real concurrency bug in it
 
 The prior session's uncommitted work (config shrink-guard, GC
 hardening, hotwords fix, VAD checkbox, ELAN DOCTYPE guard, search
