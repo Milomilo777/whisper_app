@@ -260,6 +260,75 @@ def test_parse_json_list_rejects_non_array():
     assert llm._parse_json_list('{"key": "value"}') == []
 
 
+# ---------- wrapped-quote stripping (2026-08-16 real-hardware finding) ------
+# The local Qwen2.5-1.5B model sometimes wraps a short per-segment
+# translation in quote marks despite the prompt saying not to -- observed
+# live in a bilingual-subtitle pass, e.g. '"D\'accord, on va passer..."'.
+
+
+def test_strip_wrapped_quotes_removes_matching_double_quotes():
+    assert llm._strip_wrapped_quotes('"Bonjour tout le monde."') == "Bonjour tout le monde."
+
+
+def test_strip_wrapped_quotes_removes_matching_single_quotes():
+    assert llm._strip_wrapped_quotes("'Hola mundo.'") == "Hola mundo."
+
+
+def test_strip_wrapped_quotes_removes_matching_curly_quotes():
+    assert llm._strip_wrapped_quotes("“Guten Tag.”") == "Guten Tag."
+    assert llm._strip_wrapped_quotes("‘Guten Tag.’") == "Guten Tag."
+
+
+def test_strip_wrapped_quotes_leaves_unwrapped_text_alone():
+    assert llm._strip_wrapped_quotes("Bonjour tout le monde.") == "Bonjour tout le monde."
+
+
+def test_strip_wrapped_quotes_leaves_mismatched_quotes_alone():
+    # Only the LAST char is a quote -- not a wrapping pair, don't touch it.
+    assert llm._strip_wrapped_quotes('She said "hello.') == 'She said "hello.'
+
+
+def test_strip_wrapped_quotes_leaves_internal_quoted_phrase_alone():
+    # The quote marks aren't at the very start/end, so this is a real
+    # quoted phrase inside the sentence, not a wrapper -- must not strip.
+    text = 'He said "hello" to everyone.'
+    assert llm._strip_wrapped_quotes(text) == text
+
+
+def test_strip_wrapped_quotes_handles_short_and_empty_input():
+    assert llm._strip_wrapped_quotes("") == ""
+    assert llm._strip_wrapped_quotes('"') == '"'
+    assert llm._strip_wrapped_quotes('""') == ""
+
+
+def test_runner_translate_strips_wrapped_quotes(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "runtime_available", lambda: True)
+    fake_module = types.ModuleType("llama_cpp")
+
+    class _FakeLlama:
+        def __init__(self, **_kw):
+            pass
+
+        def create_chat_completion(self, **_kw):
+            return {"choices": [{"message": {"content": '"Bonjour."'}}]}
+
+    fake_module.Llama = _FakeLlama  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "llama_cpp", fake_module)
+    model_file = tmp_path / "m.gguf"
+    model_file.write_bytes(b"\0" * 100)
+    r = llm.LLMRunner(llm.LLMConfig(model_path=str(model_file)))
+    assert r.translate("Hello.", target_language="French") == "Bonjour."
+
+
+def test_remote_runner_translate_strips_wrapped_quotes(monkeypatch):
+    monkeypatch.setattr(
+        llm.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeHTTPResponse(_chat_completion_body("'Hola.'")),
+    )
+    runner = llm.RemoteLLMRunner(llm.RemoteLLMConfig(base_url="https://api.openai.com/v1", model="m"))
+    assert runner.translate("Hello.", target_language="Spanish") == "Hola."
+
+
 # ---------- RemoteLLMRunner ------------------------------------------------
 
 

@@ -251,6 +251,35 @@ def _translate_prompt(text: str, target_language: str) -> str:
     )
 
 
+#: Matching quote-mark pairs some models wrap a short translation in
+#: despite being told "respond with only the translation" — observed
+#: with the local Qwen2.5-1.5B model on single-sentence/segment inputs
+#: (2026-08-16 real-hardware test: 2 of 4 segments in a bilingual-subtitle
+#: pass came back as e.g. '"D\'accord, on va passer..."'). A full
+#: multi-sentence transcript translation was never observed doing this —
+#: only short, single-segment ones — which tracks with a small model
+#: pattern-matching "short quoted-looking input" to "wrap the output the
+#: same way".
+_WRAPPING_QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"))
+
+
+def _strip_wrapped_quotes(text: str) -> str:
+    """Strip ONE matching layer of leading+trailing quote marks.
+
+    Only strips when the first and last characters form one of
+    ``_WRAPPING_QUOTE_PAIRS`` — a translation that legitimately starts
+    with a quoted phrase (mismatched or single-sided punctuation) is
+    left untouched rather than mangled.
+    """
+    t = text.strip()
+    if len(t) < 2:
+        return t
+    for open_q, close_q in _WRAPPING_QUOTE_PAIRS:
+        if t[0] == open_q and t[-1] == close_q:
+            return t[1:-1].strip()
+    return t
+
+
 class LLMRunner:
     """Wraps a single llama_cpp.Llama instance.
 
@@ -345,10 +374,10 @@ class LLMRunner:
     def translate(
         self, text: str, *, target_language: str = "English"
     ) -> str:
-        return self._chat(
+        return _strip_wrapped_quotes(self._chat(
             [{"role": "user", "content": _translate_prompt(text, target_language)}],
             max_tokens=max(256, int(len(text.split()) * 1.5)),
-        )
+        ))
 
 
 def _parse_json_list(raw: str) -> list[str]:
@@ -498,10 +527,10 @@ class RemoteLLMRunner:
         )
 
     def translate(self, text: str, *, target_language: str = "English") -> str:
-        return self._chat(
+        return _strip_wrapped_quotes(self._chat(
             [{"role": "user", "content": _translate_prompt(text, target_language)}],
             max_tokens=max(256, int(len(text.split()) * 1.5)),
-        )
+        ))
 
 
 # ---------------------------------------------------------------- factory
