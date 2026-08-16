@@ -894,6 +894,7 @@ class App(tk.Tk):
 
         h = tk.Menu(m, tearoff=0)
         h.add_command(label="Open transcript viewer...", command=self._open_transcript_viewer_picker)
+        h.add_command(label="Search transcripts...", command=self._open_search_dialog)
         h.add_separator()
         # oTranscribe round-trip — used to be a button on the Transcribe
         # tab; moved here in the UI simplification pass because it's a
@@ -1044,6 +1045,11 @@ class App(tk.Tk):
     def _open_transcript_viewer_picker(self) -> None:
         """Open the transcript viewer with a file picker."""
         _open_transcript_viewer(self, None)
+
+    def _open_search_dialog(self) -> None:
+        """Open the full-text search dialog over every saved transcript."""
+        from app.dialogs.search_dialog import open_search_dialog
+        open_search_dialog(self)
 
     def open_transcript_viewer_for(
         self, file_path: str, json_path: str | None = None

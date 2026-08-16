@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import TYPE_CHECKING
 
-from core.config import save_config
+from core.config import NOISY_AUDIO_PRESET, save_config
 from core.model_manager import (
     DEFAULT_MODEL_SLUG,
     catalog_entry_info,
@@ -109,6 +109,14 @@ _BACKEND_CHOICES: list[tuple[str, str]] = [
 ]
 _BACKEND_LABEL_TO_VALUE = {label: value for label, value in _BACKEND_CHOICES}
 _BACKEND_VALUE_TO_LABEL = {value: label for label, value in _BACKEND_CHOICES}
+
+# LLM provider picker — which implementation "Enable local LLM" turns on.
+_LLM_PROVIDER_CHOICES: list[tuple[str, str]] = [
+    ("Local — offline, downloaded model", "local"),
+    ("Remote — your own OpenAI-compatible API", "remote"),
+]
+_LLM_PROVIDER_LABEL_TO_VALUE = {label: value for label, value in _LLM_PROVIDER_CHOICES}
+_LLM_PROVIDER_VALUE_TO_LABEL = {value: label for label, value in _LLM_PROVIDER_CHOICES}
 
 # Step-by-step help for getting a Google Cloud service-account JSON. Each
 # entry is (numbered text, optional clickable URL). The URLs open the exact
@@ -239,6 +247,24 @@ class AdvancedDialog(tk.Toplevel):
         )
         self._ai_enabled = tk.BooleanVar(
             value=bool(cfg.get("ai_enabled", False))
+        )
+        # Which LLM implementation "Enable local LLM" actually turns on —
+        # the bundled offline model, or a remote OpenAI-compatible endpoint
+        # the user configures themselves. See core/llm.py's
+        # build_runner_from_config.
+        self._llm_provider_display = tk.StringVar(
+            value=_LLM_PROVIDER_VALUE_TO_LABEL.get(
+                str(cfg.get("llm_provider") or "local"), _LLM_PROVIDER_CHOICES[0][0]
+            )
+        )
+        self._llm_remote_base_url = tk.StringVar(
+            value=str(cfg.get("llm_remote_base_url") or "https://api.openai.com/v1")
+        )
+        self._llm_remote_api_key = tk.StringVar(
+            value=str(cfg.get("llm_remote_api_key") or "")
+        )
+        self._llm_remote_model = tk.StringVar(
+            value=str(cfg.get("llm_remote_model") or "")
         )
         self._auto_chapters_enabled = tk.BooleanVar(
             value=bool(cfg.get("auto_chapters_enabled", True))
@@ -638,21 +664,74 @@ class AdvancedDialog(tk.Toplevel):
             ai, text="Currently powers auto-chapter titles only (see below).",
             foreground="#666",
         ).grid(row=1, column=1, columnspan=2, sticky="w", padx=8, pady=4)
+
+        ttk.Label(ai, text="LLM provider").grid(
+            row=2, column=0, sticky="w", padx=8, pady=(10, 4)
+        )
+        ttk.Combobox(
+            ai, textvariable=self._llm_provider_display, state="readonly",
+            values=[label for label, _value in _LLM_PROVIDER_CHOICES], width=40,
+        ).grid(row=2, column=1, columnspan=2, sticky="w", padx=8, pady=(10, 4))
+        help_icon(
+            ai,
+            "Local (default): the downloaded Qwen2.5-1.5B model above — "
+            "fully offline, nothing leaves this machine.\n\n"
+            "Remote: sends the same summarise/action-items/ask/translate "
+            "requests to an OpenAI-compatible '/chat/completions' "
+            "endpoint you configure below instead — the real OpenAI API "
+            "with your own key, or a self-hosted server (Ollama, LM "
+            "Studio, vLLM) or proxy (OpenRouter) if you point the Base "
+            "URL at one. Your transcript text is sent to whatever "
+            "endpoint you configure — only use this with a provider you "
+            "trust.",
+        ).grid(row=2, column=3, sticky="w", padx=(0, 8), pady=(10, 4))
+        ttk.Label(ai, text="Base URL").grid(
+            row=3, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(
+            ai, textvariable=self._llm_remote_base_url, width=42,
+        ).grid(row=3, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        ttk.Label(ai, text="API key").grid(
+            row=4, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(
+            ai, textvariable=self._llm_remote_api_key, show="*", width=42,
+        ).grid(row=4, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        ttk.Label(
+            ai, text="For the real OpenAI API, get a key at platform.openai.com. "
+                     "Leave blank for a local server that doesn't need one.",
+            foreground="#666", wraplength=420, justify="left",
+        ).grid(row=5, column=1, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ttk.Label(ai, text="Model").grid(
+            row=6, column=0, sticky="w", padx=8, pady=4
+        )
+        ttk.Entry(
+            ai, textvariable=self._llm_remote_model, width=42,
+        ).grid(row=6, column=1, columnspan=2, sticky="ew", padx=8, pady=4)
+        help_icon(
+            ai,
+            "The exact model id your endpoint expects, e.g. gpt-4o-mini "
+            "or gpt-4o for the real OpenAI API, or a locally-loaded "
+            "model's name for Ollama/LM Studio. This app does not pick "
+            "one for you — different accounts/servers have different "
+            "models available.",
+        ).grid(row=6, column=3, sticky="w", padx=(0, 8), pady=4)
+
         ttk.Checkbutton(
             ai, text="Pre-process noisy audio with Demucs vocals separation",
             variable=self._demucs_enabled,
-        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=7, column=0, columnspan=3, sticky="w", padx=8, pady=(14, 4))
         help_icon(
             ai,
             "Demucs isolates vocals from background music/noise before "
             "transcribing. Can improve accuracy on noisy recordings; "
             "adds processing time.",
-        ).grid(row=2, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=7, column=3, sticky="w", padx=(0, 8), pady=(14, 4))
         ttk.Checkbutton(
             ai, text="Reduce background noise before transcribing",
             variable=self._denoise_enabled,
             command=self._sync_denoise_level_state,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 2))
+        ).grid(row=8, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 2))
         help_icon(
             ai,
             "Cleans hiss, hum and rumble out of the audio before the "
@@ -666,17 +745,17 @@ class AdvancedDialog(tk.Toplevel):
             "Uses the bundled ffmpeg only: no download, no extra "
             "install, works offline. Costs roughly 20-40 seconds per "
             "hour of audio.",
-        ).grid(row=3, column=3, sticky="w", padx=(0, 8), pady=(10, 2))
+        ).grid(row=8, column=3, sticky="w", padx=(0, 8), pady=(10, 2))
         self._denoise_level_label = ttk.Label(ai, text="Strength:")
         self._denoise_level_label.grid(
-            row=4, column=0, sticky="e", padx=(24, 4), pady=(0, 6)
+            row=9, column=0, sticky="e", padx=(24, 4), pady=(0, 6)
         )
         self._denoise_level_combo = ttk.Combobox(
             ai, textvariable=self._denoise_level, state="readonly", width=12,
             values=("auto", "light", "medium", "strong"),
         )
         self._denoise_level_combo.grid(
-            row=4, column=1, sticky="w", padx=4, pady=(0, 6)
+            row=9, column=1, sticky="w", padx=4, pady=(0, 6)
         )
         help_icon(
             ai,
@@ -685,30 +764,46 @@ class AdvancedDialog(tk.Toplevel):
             "all. Pick a fixed strength only to override that "
             "measurement on material you know well; a fixed strength is "
             "applied even to clean audio.",
-        ).grid(row=4, column=3, sticky="w", padx=(0, 8), pady=(0, 6))
+        ).grid(row=9, column=3, sticky="w", padx=(0, 8), pady=(0, 6))
         self._sync_denoise_level_state()
+        ttk.Button(
+            ai, text="Apply noisy-audio preset",
+            command=self._apply_noisy_audio_preset,
+        ).grid(row=10, column=0, sticky="w", padx=8, pady=(4, 10))
+        help_icon(
+            ai,
+            "One click for a non-studio recording (street noise, a "
+            "crowded room, a phone call): turns on VAD + denoise "
+            "(fixed 'medium', not 'auto') + hallucination flagging, and "
+            "raises the VAD threshold so background noise is less "
+            "likely to be misread as speech. Does NOT turn on Demucs — "
+            "that's a much heavier download/step, opt into it above "
+            "separately if this preset alone isn't enough.",
+        ).grid(row=10, column=3, sticky="w", padx=(0, 8), pady=(4, 10))
         ttk.Checkbutton(
             ai, text="Generate auto-chapter markers (writes <name>.chapters.json)",
             variable=self._auto_chapters_enabled,
-        ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=11, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         help_icon(
             ai,
             "Splits the transcript into chapters at natural long pauses "
             "and writes them to a separate <name>.chapters.json file next "
             "to the transcript. Titles are a short generic label by "
             "default, or a real sentence-like title when 'Enable local "
-            "LLM' above is also on.",
-        ).grid(row=5, column=3, sticky="w", padx=(0, 8), pady=4)
+            "LLM' above is also on. Browse them from the transcript "
+            "viewer's Chapters tab.",
+        ).grid(row=11, column=3, sticky="w", padx=(0, 8), pady=4)
         ttk.Checkbutton(
             ai, text="Cross-file voice fingerprint (relabel SPEAKER_NN with enrolled names)",
             variable=self._voiceprint_enabled,
-        ).grid(row=6, column=0, columnspan=3, sticky="w", padx=8, pady=4)
+        ).grid(row=12, column=0, columnspan=3, sticky="w", padx=8, pady=4)
         help_icon(
             ai,
             "Matches speakers across different files against voice "
             "profiles you've enrolled, so e.g. 'SPEAKER_00' becomes the "
             "person's actual name instead of a generic label.",
-        ).grid(row=6, column=3, sticky="w", padx=(0, 8), pady=4)
+        ).grid(row=12, column=3, sticky="w", padx=(0, 8), pady=4)
+        ai.columnconfigure(1, weight=1)
 
         gc_frame = self._build_gcloud_frame(body)
         self._nav_targets.append(("Google Cloud STT", gc_frame))
@@ -1366,6 +1461,12 @@ class AdvancedDialog(tk.Toplevel):
         cfg["denoise_enabled"] = bool(self._denoise_enabled.get())
         cfg["denoise_level"] = (self._denoise_level.get() or "auto").strip().lower()
         cfg["ai_enabled"] = bool(self._ai_enabled.get())
+        cfg["llm_provider"] = _LLM_PROVIDER_LABEL_TO_VALUE.get(
+            self._llm_provider_display.get() or "", "local"
+        )
+        cfg["llm_remote_base_url"] = self._llm_remote_base_url.get().strip()
+        cfg["llm_remote_api_key"] = self._llm_remote_api_key.get().strip()
+        cfg["llm_remote_model"] = self._llm_remote_model.get().strip()
         cfg["auto_chapters_enabled"] = bool(self._auto_chapters_enabled.get())
         cfg["voiceprint_enabled"] = bool(self._voiceprint_enabled.get())
         # Model picker — convert the displayed label back to the
@@ -1525,6 +1626,23 @@ class AdvancedDialog(tk.Toplevel):
                 echo_label.configure(state=state)
         except Exception:  # noqa: BLE001
             logger.debug("Could not sync VAD controls state", exc_info=True)
+
+    def _apply_noisy_audio_preset(self) -> None:
+        """One click for non-studio audio — see core.config.NOISY_AUDIO_PRESET
+        for the reasoning behind each value. Deliberately leaves Demucs
+        alone (see the button's own help_icon)."""
+        preset = NOISY_AUDIO_PRESET
+        self._vad_enabled.set(bool(preset["vad_enabled"]))
+        self._vad_threshold.set(float(preset["vad_threshold"]))
+        self._denoise_enabled.set(bool(preset["denoise_enabled"]))
+        self._denoise_level.set(str(preset["denoise_level"]))
+        self._hallucination_detect.set(bool(preset["hallucination_detect_enabled"]))
+        self._sync_vad_controls_state()
+        self._sync_denoise_level_state()
+        self.app.log(
+            "Applied the noisy-audio preset: VAD threshold raised, denoise "
+            "set to 'medium', hallucination flagging on."
+        )
 
     def _sync_denoise_level_state(self) -> None:
         """Grey out the strength picker while denoise is off.

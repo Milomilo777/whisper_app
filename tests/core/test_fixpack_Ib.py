@@ -79,6 +79,10 @@ def _advanced_fake(app, *, batch_size_var) -> types.SimpleNamespace:
         _denoise_enabled=_V(False),
         _denoise_level=_V("auto"),
         _ai_enabled=_V(False),
+        _llm_provider_display=_V("Local — offline, downloaded model"),
+        _llm_remote_base_url=_V("https://api.openai.com/v1"),
+        _llm_remote_api_key=_V(""),
+        _llm_remote_model=_V(""),
         _auto_chapters_enabled=_V(False),
         _voiceprint_enabled=_V(False),
         # No model change: chosen label maps back to the current slug.

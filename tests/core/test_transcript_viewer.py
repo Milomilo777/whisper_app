@@ -702,3 +702,270 @@ def test_clamp_time_ms_skip_arithmetic():
     assert _clamp_time_ms(10_000, 5_000, -1) == 15_000
     assert _clamp_time_ms(10_000, 5_000, 0) == 15_000
     assert _clamp_time_ms(1_000, -5_000, 0) == 0
+
+
+# ---------- chapters tab ----------------------------------------------------
+
+
+SAMPLE_CHAPTERS = [
+    {"index": 0, "title": "Intro", "start": 0.0, "end": 1.5,
+     "segment_start": 0, "segment_end": 0},
+    {"index": 1, "title": "Main topic", "start": 1.5, "end": 5.0,
+     "segment_start": 1, "segment_end": 2},
+]
+
+
+def test_viewer_with_no_chapters_sidecar_shows_empty_hint(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            assert viewer.chapters == []
+            assert viewer._chapters_tree.winfo_manager() == ""
+            assert viewer._chapters_empty_label.winfo_manager() == "pack"
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_viewer_loads_chapters_sidecar_into_tree(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    base, _ = os.path.splitext(sample_json)
+    with open(base + ".chapters.json", "w", encoding="utf-8") as f:
+        json.dump(SAMPLE_CHAPTERS, f)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            assert len(viewer.chapters) == 2
+            rows = viewer._chapters_tree.get_children()
+            assert len(rows) == 2
+            assert viewer._chapters_tree.item(rows[0], "values") == ("00:00:00", "Intro")
+            assert viewer._chapters_tree.item(rows[1], "values") == ("00:00:01", "Main topic")
+            assert viewer._chapters_tree.winfo_manager() == "pack"
+            assert viewer._chapters_empty_label.winfo_manager() == ""
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_chapter_select_selects_nearest_segment(sample_json):
+    """Exercises _select_segment_near directly — the logic a real
+    <<TreeviewSelect>> on the Chapters tab drives via _on_chapter_select.
+    No VLC in CI, so _seek_to() is a separate guarded no-op not covered
+    here."""
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    base, _ = os.path.splitext(sample_json)
+    with open(base + ".chapters.json", "w", encoding="utf-8") as f:
+        json.dump(SAMPLE_CHAPTERS, f)
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            # Chapter 1 starts at 1.5s -> the segment starting at 1.5s (iid "1").
+            viewer._select_segment_near(1.5)
+            assert viewer.tree.selection() == ("1",)
+            # Chapter 0 starts at 0.0s -> the first segment (iid "0").
+            viewer._select_segment_near(0.0)
+            assert viewer.tree.selection() == ("0",)
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_corrupt_chapters_sidecar_degrades_to_empty_list(sample_json):
+    base, _ = os.path.splitext(sample_json)
+    with open(base + ".chapters.json", "w", encoding="utf-8") as f:
+        f.write("not valid json{{{")
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            assert viewer.chapters == []
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_initial_seek_seconds_selects_nearest_segment_on_open(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json, initial_seek_seconds=4.0)
+        viewer.withdraw()
+        try:
+            # 4.0s falls inside the third segment (3.0-5.0s, iid "2").
+            assert viewer.tree.selection() == ("2",)
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+# ---------- AI panel ---------------------------------------------------------
+
+
+def test_full_transcript_text_joins_non_empty_segments(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            text = viewer._full_transcript_text()
+            assert text == "Hello world\nSecond segment\nThird with no speaker"
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_ai_status_shows_off_when_ai_disabled(sample_json):
+    """The plain tk.Tk() root used in every test here has no app_config
+    attribute, so _app_config() falls back to {} -- ai_enabled defaults
+    False, same as a real App whose config has the AI Layer off."""
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            assert "off" in viewer._ai_status_var.get().lower()
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_ai_status_reflects_remote_provider_when_configured(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    root.app_config = {  # type: ignore[attr-defined]
+        "ai_enabled": True,
+        "llm_provider": "remote",
+        "llm_remote_model": "gpt-4o-mini",
+    }
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            status = viewer._ai_status_var.get()
+            assert "remote" in status.lower()
+            assert "gpt-4o-mini" in status
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_get_llm_runner_reports_ai_disabled(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            runner, err = viewer._get_llm_runner()
+            assert runner is None
+            assert "AI Layer is off" in err
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_get_llm_runner_reports_remote_not_configured(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    root.app_config = {  # type: ignore[attr-defined]
+        "ai_enabled": True, "llm_provider": "remote",
+        "llm_remote_base_url": "", "llm_remote_model": "",
+    }
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            runner, err = viewer._get_llm_runner()
+            assert runner is None
+            assert "Remote LLM isn't configured" in err
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_get_llm_runner_caches_across_calls(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    root.app_config = {  # type: ignore[attr-defined]
+        "ai_enabled": True, "llm_provider": "remote",
+        "llm_remote_base_url": "https://api.openai.com/v1",
+        "llm_remote_model": "gpt-4o-mini", "llm_remote_api_key": "sk-x",
+    }
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            runner1, _err1 = viewer._get_llm_runner()
+            runner2, _err2 = viewer._get_llm_runner()
+            assert runner1 is not None
+            assert runner1 is runner2  # same cached instance, not rebuilt
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()
+
+
+def test_bilingual_button_disabled_while_ai_busy(sample_json):
+    from app.dialogs.transcript_viewer import TranscriptViewer
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        viewer = TranscriptViewer(root, sample_json)
+        viewer.withdraw()
+        try:
+            assert "disabled" not in viewer._ai_summarise_btn.state()
+            viewer._set_ai_buttons_busy(True)
+            assert "disabled" in viewer._ai_summarise_btn.state()
+            assert "disabled" in viewer._ai_bilingual_btn.state()
+            viewer._set_ai_buttons_busy(False)
+            assert "disabled" not in viewer._ai_summarise_btn.state()
+        finally:
+            viewer._on_close()
+    finally:
+        root.destroy()

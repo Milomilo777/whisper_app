@@ -37,6 +37,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any, Optional
@@ -457,6 +458,7 @@ class TranscriptViewer(tk.Toplevel):
         master: "tk.Tk | tk.Toplevel",
         json_path: str,
         media_path: str | None = None,
+        initial_seek_seconds: float | None = None,
     ) -> None:
         super().__init__(master)
         self.title(f"Transcript — {os.path.basename(json_path)}")
@@ -498,11 +500,24 @@ class TranscriptViewer(tk.Toplevel):
         # _update_position / _on_seek_*).
         self._seeking = False
 
+        # AI panel state (see _build_ai_panel). The runner is built lazily
+        # on first use and cached for the rest of this viewer's lifetime —
+        # a local LLMRunner pays a multi-second model-load cost, so
+        # rebuilding it per click would make Summarise-then-Ask-then-
+        # Translate needlessly slow.
+        self._llm_runner: Any = None
+        self._ai_busy = False
+        self._bilingual_cancel: threading.Event | None = None
+
         self._build_widgets()
         self._load_segments()
         self._populate_listbox()
+        self._load_chapters()
         if self.vlc_mod is not None and self.media_path:
             self._init_vlc_player()
+        if initial_seek_seconds is not None:
+            self._seek_to(initial_seek_seconds)
+            self._select_segment_near(initial_seek_seconds)
 
         # Find-and-replace shortcut.
         self.bind("<Control-f>", lambda _e: self._open_find_replace())
@@ -623,7 +638,18 @@ class TranscriptViewer(tk.Toplevel):
 
         right = ttk.Frame(body, padding=(8, 0, 0, 0))
         body.add(right, weight=2)
-        self._build_media_panel(right)
+
+        self._right_notebook = ttk.Notebook(right)
+        self._right_notebook.pack(fill="both", expand=True)
+        media_tab = ttk.Frame(self._right_notebook, padding=(4, 6, 0, 0))
+        chapters_tab = ttk.Frame(self._right_notebook, padding=(4, 6, 0, 0))
+        ai_tab = ttk.Frame(self._right_notebook, padding=(4, 6, 0, 0))
+        self._right_notebook.add(media_tab, text="Media")
+        self._right_notebook.add(chapters_tab, text="Chapters")
+        self._right_notebook.add(ai_tab, text="AI Tools")
+        self._build_media_panel(media_tab)
+        self._build_chapters_panel(chapters_tab)
+        self._build_ai_panel(ai_tab)
 
     def _build_media_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="Media", font=("TkDefaultFont", 10, "bold")).pack(
@@ -738,6 +764,502 @@ class TranscriptViewer(tk.Toplevel):
                 b.state(state)
             except Exception:  # noqa: BLE001
                 pass
+
+    # -- chapters ----------------------------------------------------------
+
+    def _chapters_path(self) -> str:
+        base, _ = os.path.splitext(self.json_path)
+        return base + ".chapters.json"
+
+    def _load_chapters(self) -> None:
+        """Read the ``<name>.chapters.json`` sidecar core.chapters writes,
+        if present. Missing/corrupt/empty is a normal state — not every
+        job has 'Generate auto-chapter markers' on — the tab shows a
+        hint instead of a list in that case."""
+        self.chapters: list[dict[str, Any]] = []
+        path = self._chapters_path()
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.chapters = [c for c in data if isinstance(c, dict)]
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                self.chapters = []
+        self._populate_chapters_list()
+
+    def _build_chapters_panel(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="Chapters", font=("TkDefaultFont", 10, "bold")).pack(
+            anchor="w"
+        )
+        self._chapters_empty_label = ttk.Label(
+            parent,
+            text="No chapters detected for this transcript.\n\n"
+                 "Turn on 'Generate auto-chapter markers' in Advanced "
+                 "Settings' AI Layer section before transcribing to get "
+                 "chapters here.",
+            foreground="#666", wraplength=360, justify="left",
+        )
+        cols = ("time", "title")
+        self._chapters_tree = ttk.Treeview(
+            parent, columns=cols, show="headings", height=16,
+        )
+        self._chapters_tree.heading("time", text="Start")
+        self._chapters_tree.heading("title", text="Title")
+        self._chapters_tree.column("time", width=70, anchor="w")
+        self._chapters_tree.column("title", width=280)
+        self._chapters_tree.bind("<<TreeviewSelect>>", self._on_chapter_select)
+        self._chapters_tree.bind("<Double-Button-1>", self._on_chapter_double_click)
+        # Packed/unpacked by _populate_chapters_list depending on whether
+        # this transcript has any chapters to show.
+
+    def _populate_chapters_list(self) -> None:
+        self._chapters_tree.delete(*self._chapters_tree.get_children())
+        if not self.chapters:
+            self._chapters_tree.pack_forget()
+            self._chapters_empty_label.pack(anchor="w", pady=(8, 0))
+            return
+        self._chapters_empty_label.pack_forget()
+        self._chapters_tree.pack(fill="both", expand=True)
+        for i, ch in enumerate(self.chapters):
+            title = str(ch.get("title") or f"Chapter {i + 1}")
+            start = _seg_float(ch, "start")
+            self._chapters_tree.insert(
+                "", "end", iid=str(i), values=(_fmt_hms(start), title),
+            )
+
+    def _on_chapter_select(self, _event: tk.Event) -> None:
+        item = self._chapters_tree.focus()
+        if not item:
+            return
+        try:
+            idx = int(item)
+        except ValueError:
+            return
+        if 0 <= idx < len(self.chapters):
+            start = _seg_float(self.chapters[idx], "start")
+            self._seek_to(start)
+            self._select_segment_near(start)
+
+    def _on_chapter_double_click(self, event: tk.Event) -> None:
+        self._on_chapter_select(event)
+        if self.vlc_player is not None and not self.vlc_player.is_playing():
+            self.vlc_player.play()
+            self.play_btn.configure(text="⏸ Pause")
+
+    def _select_segment_near(self, seconds: float) -> None:
+        """Select + scroll the segment list to the segment whose start is
+        closest to (without going past) ``seconds``. Used by chapter
+        jumps, the initial-seek constructor arg, and (via open_viewer)
+        the search dialog's 'Open at result' action. A no-op if the
+        target segment is currently filtered out of the tree by an
+        active search query."""
+        if not self.segments:
+            return
+        from bisect import bisect_right
+        starts = [_seg_float(s, "start") for s in self.segments]
+        i = max(0, bisect_right(starts, seconds) - 1)
+        item = str(i)
+        try:
+            if self.tree.exists(item):
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+                self.tree.see(item)
+                self._set_active_segment(i)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # -- AI panel ------------------------------------------------------------
+
+    def _full_transcript_text(self) -> str:
+        return "\n".join(
+            (seg.get("text") or "").strip()
+            for seg in self.segments
+            if (seg.get("text") or "").strip()
+        )
+
+    def _app_config(self) -> dict[str, Any]:
+        cfg = getattr(self.master, "app_config", None)
+        return cfg if isinstance(cfg, dict) else {}
+
+    def _post_to_main(self, fn) -> None:
+        """Thread-safe UI update — mirrors App.post_to_main (the master
+        IS the App instance at every real call site: open_viewer is only
+        ever invoked with the App as master). Falls back to
+        self.after(0, fn) defensively if that's ever not true."""
+        poster = getattr(self.master, "post_to_main", None)
+        if callable(poster):
+            poster(fn)
+            return
+        try:
+            self.after(0, fn)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _get_llm_runner(self) -> "tuple[Any, str]":
+        """Return ``(runner, "")`` or ``(None, friendly_error)``.
+
+        Cached on ``self._llm_runner`` after the first successful build
+        (see the comment in __init__) — call this from a BACKGROUND
+        thread only, never the Tk main thread: the local provider's
+        first build can pay a multi-second model-load cost
+        (LLMRunner.load()) that would otherwise freeze the UI.
+        """
+        if self._llm_runner is not None:
+            return self._llm_runner, ""
+        from core import llm as _llm
+        cfg = self._app_config()
+        if not cfg.get("ai_enabled", False):
+            return None, (
+                "AI Layer is off — turn it on in Advanced Settings' AI "
+                "Layer section."
+            )
+        runner = _llm.build_runner_from_config(cfg)
+        if runner is None:
+            if str(cfg.get("llm_provider") or "local").strip().lower() == "remote":
+                return None, (
+                    "Remote LLM isn't configured — set Base URL + Model "
+                    "in Advanced Settings' AI Layer section."
+                )
+            return None, (
+                "Local AI model isn't installed yet — use 'Install AI "
+                "model…' in Advanced Settings' AI Layer section."
+            )
+        self._llm_runner = runner
+        return runner, ""
+
+    def _build_ai_panel(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="AI Tools", font=("TkDefaultFont", 10, "bold")).pack(
+            anchor="w"
+        )
+        self._ai_status_var = tk.StringVar(value="")
+        ttk.Label(
+            parent, textvariable=self._ai_status_var,
+            foreground="#666", wraplength=380, justify="left",
+        ).pack(anchor="w", pady=(2, 8))
+        self._refresh_ai_status()
+
+        row1 = ttk.Frame(parent)
+        row1.pack(fill="x", pady=(0, 4))
+        self._ai_summarise_btn = ttk.Button(
+            row1, text="Summarise", command=self._run_summarise,
+        )
+        self._ai_summarise_btn.pack(side="left")
+        self._ai_actionitems_btn = ttk.Button(
+            row1, text="Action items", command=self._run_action_items,
+        )
+        self._ai_actionitems_btn.pack(side="left", padx=(6, 0))
+
+        row2 = ttk.Frame(parent)
+        row2.pack(fill="x", pady=(0, 8))
+        ttk.Label(row2, text="Ask:").pack(side="left")
+        self._ai_question_var = tk.StringVar()
+        ttk.Entry(row2, textvariable=self._ai_question_var, width=24).pack(
+            side="left", padx=(4, 4)
+        )
+        self._ai_ask_btn = ttk.Button(row2, text="Ask", command=self._run_ask)
+        self._ai_ask_btn.pack(side="left")
+
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=6)
+
+        row3 = ttk.Frame(parent)
+        row3.pack(fill="x", pady=(0, 4))
+        ttk.Label(row3, text="Target language:").pack(side="left")
+        self._ai_target_lang_var = tk.StringVar(value="English")
+        ttk.Entry(row3, textvariable=self._ai_target_lang_var, width=14).pack(
+            side="left", padx=(4, 4)
+        )
+        self._ai_translate_btn = ttk.Button(
+            row3, text="Translate (preview)", command=self._run_translate_preview,
+        )
+        self._ai_translate_btn.pack(side="left")
+
+        row4 = ttk.Frame(parent)
+        row4.pack(fill="x", pady=(0, 4))
+        self._ai_bilingual_btn = ttk.Button(
+            row4, text="Save bilingual subtitle…",
+            command=self._run_bilingual_translate,
+        )
+        self._ai_bilingual_btn.pack(side="left")
+        help_icon(
+            row4,
+            "Translates every segment one at a time — needed to keep an "
+            "exact line-for-line pairing with the original — and writes "
+            "a new '.bilingual.<language>.srt' file with the original "
+            "text and the translation under each cue. Can take a while "
+            "on a long transcript with the local model.",
+        ).pack(side="left", padx=(4, 0))
+        self._ai_cancel_btn = ttk.Button(
+            row4, text="Cancel", command=self._cancel_bilingual_translate,
+        )
+        # Not packed here — only shown while a bilingual translate runs.
+
+        self._ai_progress_var = tk.StringVar(value="")
+        ttk.Label(parent, textvariable=self._ai_progress_var, foreground="#666").pack(
+            anchor="w"
+        )
+
+        ttk.Label(parent, text="Result:").pack(anchor="w", pady=(8, 2))
+        result_frame = ttk.Frame(parent)
+        result_frame.pack(fill="both", expand=True)
+        self._ai_result_text = tk.Text(
+            result_frame, wrap="word", height=12, state="disabled",
+        )
+        ai_vsb = ttk.Scrollbar(
+            result_frame, orient="vertical", command=self._ai_result_text.yview,
+        )
+        self._ai_result_text.configure(yscrollcommand=ai_vsb.set)
+        self._ai_result_text.pack(side="left", fill="both", expand=True)
+        ai_vsb.pack(side="left", fill="y")
+        ttk.Button(parent, text="Copy result", command=self._copy_ai_result).pack(
+            anchor="w", pady=(4, 0)
+        )
+
+    def _refresh_ai_status(self) -> None:
+        cfg = self._app_config()
+        if not cfg.get("ai_enabled", False):
+            self._ai_status_var.set(
+                "AI Layer is off. Turn it on in Advanced Settings to use "
+                "these tools."
+            )
+            return
+        provider = str(cfg.get("llm_provider") or "local").strip().lower()
+        if provider == "remote":
+            model = (cfg.get("llm_remote_model") or "").strip() or "(no model set)"
+            self._ai_status_var.set(f"Provider: remote — {model}")
+        else:
+            self._ai_status_var.set("Provider: local (Qwen2.5-1.5B)")
+
+    def _set_ai_buttons_busy(self, busy: bool) -> None:
+        self._ai_busy = busy
+        state = ["disabled"] if busy else ["!disabled"]
+        for b in (
+            self._ai_summarise_btn, self._ai_actionitems_btn, self._ai_ask_btn,
+            self._ai_translate_btn, self._ai_bilingual_btn,
+        ):
+            try:
+                b.state(state)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _set_ai_result(self, text: str) -> None:
+        try:
+            self._ai_result_text.configure(state="normal")
+            self._ai_result_text.delete("1.0", "end")
+            self._ai_result_text.insert("1.0", text)
+            self._ai_result_text.configure(state="disabled")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _copy_ai_result(self) -> None:
+        try:
+            text = self._ai_result_text.get("1.0", "end-1c")
+        except Exception:  # noqa: BLE001
+            return
+        self._copy_to_clipboard(text)
+
+    def _run_ai_task(self, label: str, work) -> None:
+        """Shared driver for the 3 simple (non-bilingual) AI actions.
+
+        ``work(runner) -> str`` runs on a background thread — including
+        the runner build/load itself, so a first-use local-model load
+        never blocks the Tk main thread. Its return value (or a
+        friendly error) lands in the result box back on the Tk thread.
+        Guarded by self._ai_busy against double-clicks.
+        """
+        if self._ai_busy:
+            return
+        cfg = self._app_config()
+        if not cfg.get("ai_enabled", False):
+            messagebox.showinfo(
+                "AI tools",
+                "AI Layer is off — turn it on in Advanced Settings' AI "
+                "Layer section.",
+                parent=self,
+            )
+            return
+        if not self.segments:
+            messagebox.showinfo(
+                "AI tools", "This transcript has no segments to work with.",
+                parent=self,
+            )
+            return
+        self._set_ai_buttons_busy(True)
+        self._set_ai_result(f"{label}…")
+
+        def _worker() -> None:
+            runner, err = self._get_llm_runner()
+            if runner is None:
+                self._post_to_main(lambda: self._finish_ai_task(err))
+                return
+            try:
+                result = work(runner)
+            except Exception as e:  # noqa: BLE001
+                result = f"{label} failed: {e}"
+            self._post_to_main(lambda: self._finish_ai_task(result))
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name=f"ai-{label.lower().replace(' ', '-')}")
+
+    def _finish_ai_task(self, result: str) -> None:
+        if self._closing:
+            return
+        self._set_ai_buttons_busy(False)
+        self._set_ai_result(result)
+
+    def _run_summarise(self) -> None:
+        text = self._full_transcript_text()
+        self._run_ai_task("Summarise", lambda runner: runner.summarise(text))
+
+    def _run_action_items(self) -> None:
+        text = self._full_transcript_text()
+
+        def work(runner: Any) -> str:
+            items = runner.action_items(text)
+            return "\n".join(f"- {i}" for i in items) if items else (
+                "(no action items detected)"
+            )
+
+        self._run_ai_task("Action items", work)
+
+    def _run_ask(self) -> None:
+        question = (self._ai_question_var.get() or "").strip()
+        if not question:
+            messagebox.showinfo("Ask a question", "Type a question first.", parent=self)
+            return
+        text = self._full_transcript_text()
+        self._run_ai_task("Ask", lambda runner: runner.ask(text, question))
+
+    def _run_translate_preview(self) -> None:
+        lang = (self._ai_target_lang_var.get() or "English").strip() or "English"
+        text = self._full_transcript_text()
+        self._run_ai_task(
+            "Translate", lambda runner: runner.translate(text, target_language=lang),
+        )
+
+    def _run_bilingual_translate(self) -> None:
+        if self._ai_busy:
+            return
+        if not self.segments:
+            messagebox.showinfo(
+                "Bilingual subtitle",
+                "This transcript has no segments to translate.",
+                parent=self,
+            )
+            return
+        cfg = self._app_config()
+        if not cfg.get("ai_enabled", False):
+            messagebox.showinfo(
+                "Bilingual subtitle",
+                "AI Layer is off — turn it on in Advanced Settings' AI "
+                "Layer section.",
+                parent=self,
+            )
+            return
+        lang = (self._ai_target_lang_var.get() or "English").strip() or "English"
+        if not messagebox.askyesno(
+            "Bilingual subtitle",
+            f"Translate all {len(self.segments)} segment(s) to {lang}, one "
+            "at a time? This can take a while, especially with the local "
+            "model.",
+            parent=self,
+        ):
+            return
+        self._bilingual_cancel = threading.Event()
+        self._set_ai_buttons_busy(True)
+        self._ai_cancel_btn.pack(side="left", padx=(6, 0))
+        self._ai_progress_var.set("Loading AI model…")
+
+        def _progress(done: int, total: int) -> None:
+            self._post_to_main(
+                lambda: self._ai_progress_var.set(f"Translating {done}/{total}…")
+            )
+
+        def _worker() -> None:
+            runner, err = self._get_llm_runner()
+            if runner is None:
+                self._post_to_main(
+                    lambda: self._finish_bilingual_translate(None, lang, err)
+                )
+                return
+            from core import llm as _llm
+            try:
+                translations = _llm.translate_segments(
+                    runner, self.segments, target_language=lang,
+                    progress_cb=_progress, cancel_event=self._bilingual_cancel,
+                )
+                error = None
+            except Exception as e:  # noqa: BLE001
+                translations = None
+                error = str(e)
+            self._post_to_main(
+                lambda: self._finish_bilingual_translate(translations, lang, error)
+            )
+
+        from core._threads import safe_thread
+        safe_thread(_worker, name="ai-bilingual-translate")
+
+    def _cancel_bilingual_translate(self) -> None:
+        if self._bilingual_cancel is not None:
+            self._bilingual_cancel.set()
+            self._ai_progress_var.set("Cancelling…")
+
+    def _finish_bilingual_translate(
+        self, translations: "list[str] | None", lang: str, error: str | None,
+    ) -> None:
+        if self._closing:
+            return
+        self._set_ai_buttons_busy(False)
+        try:
+            self._ai_cancel_btn.pack_forget()
+        except Exception:  # noqa: BLE001
+            pass
+        cancelled = self._bilingual_cancel is not None and self._bilingual_cancel.is_set()
+        self._bilingual_cancel = None
+        self._ai_progress_var.set("")
+        if translations is None:
+            if error:
+                messagebox.showinfo("Bilingual subtitle", error, parent=self)
+            return
+        if cancelled:
+            messagebox.showinfo(
+                "Bilingual subtitle", "Cancelled — no file was written.", parent=self,
+            )
+            return
+        from core.writers import bilingual_srt as _bsrt
+        try:
+            body = _bsrt.write(self.segments, translations, self.media_path or "")
+        except ValueError as e:
+            show_error(
+                self, "Save failed", "Could not build the bilingual subtitle.",
+                detail=str(e),
+            )
+            return
+        base, _ = os.path.splitext(self.json_path)
+        lang_slug = re.sub(r"[^A-Za-z0-9]+", "-", lang).strip("-").lower() or "translated"
+        out_path = f"{base}.bilingual.{lang_slug}.srt"
+        part = out_path + ".part"
+        try:
+            with open(part, "w", encoding="utf-8", newline="\n") as f:
+                f.write(body)
+            os.replace(part, out_path)
+        except Exception as e:  # noqa: BLE001
+            try:
+                os.unlink(part)
+            except OSError:
+                pass
+            show_error(
+                self, "Save failed", "Could not write the bilingual subtitle file.",
+                detail=str(e),
+            )
+            return
+        translated_count = sum(1 for t in translations if t)
+        messagebox.showinfo(
+            "Bilingual subtitle saved",
+            f"Wrote {translated_count}/{len(translations)} translated "
+            f"segment(s) → {os.path.basename(out_path)}",
+            parent=self,
+        )
 
     # -- loading ---------------------------------------------------------
 
@@ -1716,10 +2238,14 @@ class FindReplaceDialog(tk.Toplevel):
 def open_viewer(
     master: "tk.Tk | tk.Toplevel",
     json_path: Optional[str] = None,
+    initial_seek_seconds: float | None = None,
 ) -> None:
     """Open the viewer.
 
     If ``json_path`` is None, prompt the user to pick one.
+    ``initial_seek_seconds``, when given, seeks the media and selects
+    the nearest segment on open — used by the search dialog's "Open at
+    result" action.
     """
     if json_path is None:
         chosen = filedialog.askopenfilename(
@@ -1737,4 +2263,4 @@ def open_viewer(
             parent=master,
         )
         return
-    TranscriptViewer(master, json_path)
+    TranscriptViewer(master, json_path, initial_seek_seconds=initial_seek_seconds)
