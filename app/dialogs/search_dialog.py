@@ -45,10 +45,15 @@ class SearchDialog(tk.Toplevel):
         self._hits: list[Any] = []  # core.search.SearchHit, kept parallel to the tree rows
         self._closing = False
 
+        # Monotonic counter so an out-of-order background search
+        # completion (query B's worker finishes before query A's) can't
+        # overwrite a newer result with a stale one.
+        self._search_seq = 0
+
         self._build_widgets()
-        self.bind("<Escape>", lambda _e: self.destroy())
+        self.bind("<Escape>", lambda _e: self._on_close())
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._reindex(initial=True)
+        self._reindex()
 
     # -- widgets ---------------------------------------------------------
 
@@ -64,7 +69,7 @@ class SearchDialog(tk.Toplevel):
         entry.pack(side="left", padx=(4, 4))
         entry.bind("<Return>", lambda _e: self._run_search())
         ttk.Button(topbar, text="Search", command=self._run_search).pack(side="left")
-        ttk.Button(topbar, text="Reindex now", command=lambda: self._reindex(initial=False)).pack(
+        ttk.Button(topbar, text="Reindex now", command=self._reindex).pack(
             side="left", padx=(12, 0)
         )
         self.status_var = tk.StringVar(value="Indexing…")
@@ -116,7 +121,7 @@ class SearchDialog(tk.Toplevel):
 
     # -- indexing ----------------------------------------------------------
 
-    def _reindex(self, *, initial: bool) -> None:
+    def _reindex(self) -> None:
         self.status_var.set("Indexing…")
 
         def _worker() -> None:
@@ -127,21 +132,22 @@ class SearchDialog(tk.Toplevel):
             except Exception as e:  # noqa: BLE001
                 logger.warning("Transcript reindex failed: %s", e)
                 message = f"Indexing failed: {e}"
-            self._post_to_main(lambda: self._finish_reindex(message, initial))
+            self._post_to_main(lambda: self._finish_reindex(message))
 
         from core._threads import safe_thread
         safe_thread(_worker, name="search-reindex")
 
-    def _finish_reindex(self, message: str, initial: bool) -> None:
+    def _finish_reindex(self, message: str) -> None:
         if self._closing:
             return
         self.status_var.set(message)
-        # Re-run whatever query is already typed so a mid-session reindex
-        # (the "Reindex now" button, or a fresh transcription that just
-        # finished) is reflected without the user re-typing it. Skip this
-        # on the very first, dialog-opening reindex — there's nothing to
-        # re-run yet.
-        if not initial and (self.query_var.get() or "").strip():
+        # Re-run whatever query is already typed so a reindex (the
+        # "Reindex now" button, a fresh transcription that just finished,
+        # or — since this dialog's own reindex is asynchronous — a query
+        # the user typed and submitted WHILE the very first,
+        # dialog-opening reindex was still in flight) is reflected
+        # without the user re-typing it.
+        if (self.query_var.get() or "").strip():
             self._run_search()
 
     # -- search --------------------------------------------------------------
@@ -153,6 +159,8 @@ class SearchDialog(tk.Toplevel):
         if not query:
             return
         self.status_var.set("Searching…")
+        self._search_seq += 1
+        seq = self._search_seq
 
         def _worker() -> None:
             from core import search as _search
@@ -162,13 +170,19 @@ class SearchDialog(tk.Toplevel):
             except Exception as e:  # noqa: BLE001
                 hits = []
                 error = str(e)
-            self._post_to_main(lambda: self._finish_search(hits, error))
+            self._post_to_main(lambda: self._finish_search(hits, error, seq))
 
         from core._threads import safe_thread
         safe_thread(_worker, name="search-query")
 
-    def _finish_search(self, hits: list[Any], error: str | None) -> None:
+    def _finish_search(self, hits: list[Any], error: str | None, seq: int) -> None:
         if self._closing:
+            return
+        if seq != self._search_seq:
+            # A newer search has since been started (the user kept
+            # typing/hit Search again); this worker's result is stale —
+            # discard it rather than let a slow, older query overwrite
+            # the row list a faster, newer query already populated.
             return
         if error:
             self.status_var.set(f"Search failed: {error}")

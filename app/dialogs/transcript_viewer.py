@@ -506,6 +506,7 @@ class TranscriptViewer(tk.Toplevel):
         # rebuilding it per click would make Summarise-then-Ask-then-
         # Translate needlessly slow.
         self._llm_runner: Any = None
+        self._llm_runner_cache_key: tuple[Any, ...] | None = None
         self._ai_busy = False
         self._bilingual_cancel: threading.Event | None = None
 
@@ -904,11 +905,26 @@ class TranscriptViewer(tk.Toplevel):
         thread only, never the Tk main thread: the local provider's
         first build can pay a multi-second model-load cost
         (LLMRunner.load()) that would otherwise freeze the UI.
+
+        The cache is keyed on the provider-selecting config fields, not
+        just "was a runner ever built": if the user edits Advanced
+        Settings (switches local<->remote, or changes the remote URL/
+        key/model) while this viewer stays open, the NEXT AI action
+        rebuilds against the new settings instead of silently keeping
+        the old provider for the rest of the viewer's lifetime.
         """
-        if self._llm_runner is not None:
+        cfg = self._app_config()
+        cache_key = (
+            bool(cfg.get("ai_enabled", False)),
+            str(cfg.get("llm_provider") or "local").strip().lower(),
+            str(cfg.get("ai_model_path") or ""),
+            str(cfg.get("llm_remote_base_url") or ""),
+            str(cfg.get("llm_remote_api_key") or ""),
+            str(cfg.get("llm_remote_model") or ""),
+        )
+        if self._llm_runner is not None and self._llm_runner_cache_key == cache_key:
             return self._llm_runner, ""
         from core import llm as _llm
-        cfg = self._app_config()
         if not cfg.get("ai_enabled", False):
             return None, (
                 "AI Layer is off — turn it on in Advanced Settings' AI "
@@ -926,6 +942,7 @@ class TranscriptViewer(tk.Toplevel):
                 "model…' in Advanced Settings' AI Layer section."
             )
         self._llm_runner = runner
+        self._llm_runner_cache_key = cache_key
         return runner, ""
 
     def _build_ai_panel(self, parent: ttk.Frame) -> None:

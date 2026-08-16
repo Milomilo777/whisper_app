@@ -52,6 +52,7 @@ def test_finish_search_populates_tree_rows():
         tk.Toplevel.__init__(dialog, root)
         dialog._build_widgets()
         dialog._closing = False
+        dialog._search_seq = 0
         dialog.withdraw()
         try:
             hits = [
@@ -60,7 +61,7 @@ def test_finish_search_populates_tree_rows():
                 SearchHit(json_path="C:/x/other.json", segment_index=3,
                           text="second hit", score=0.5, start_seconds=75.0),
             ]
-            dialog._finish_search(hits, None)
+            dialog._finish_search(hits, None, 0)
             rows = dialog.tree.get_children()
             assert len(rows) == 2
             assert dialog.tree.item(rows[0], "values") == ("demo.json", "00:00:12", "hello world")
@@ -82,9 +83,10 @@ def test_finish_search_reports_error():
         tk.Toplevel.__init__(dialog, root)
         dialog._build_widgets()
         dialog._closing = False
+        dialog._search_seq = 0
         dialog.withdraw()
         try:
-            dialog._finish_search([], "search.db is locked")
+            dialog._finish_search([], "search.db is locked", 0)
             assert "search.db is locked" in dialog.status_var.get()
         finally:
             dialog._on_close()
@@ -118,13 +120,14 @@ def test_open_selected_opens_viewer_at_result_time(monkeypatch, tmp_path):
         dialog._master_window = root
         dialog._build_widgets()
         dialog._closing = False
+        dialog._search_seq = 0
         dialog.withdraw()
         try:
             hit = SearchHit(
                 json_path=str(json_path), segment_index=0,
                 text="hello", score=1.0, start_seconds=42.0,
             )
-            dialog._finish_search([hit], None)
+            dialog._finish_search([hit], None, 0)
             dialog.tree.selection_set("0")
             dialog.tree.focus("0")
             dialog._open_selected()
@@ -132,6 +135,99 @@ def test_open_selected_opens_viewer_at_result_time(monkeypatch, tmp_path):
             assert opened["seek"] == 42.0
         finally:
             dialog._on_close()
+    finally:
+        root.destroy()
+
+
+# ---------- 2026-08-16 Codex second-opinion findings, verified + fixed -----
+
+
+def test_finish_search_discards_stale_out_of_order_result():
+    """A slow older search's result landing AFTER a newer one must not
+    clobber the newer, already-displayed results (Codex finding #2)."""
+    import app.dialogs.search_dialog as sd
+    from core.search import SearchHit
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        dialog = sd.SearchDialog.__new__(sd.SearchDialog)
+        tk.Toplevel.__init__(dialog, root)
+        dialog._build_widgets()
+        dialog._closing = False
+        dialog._search_seq = 2  # a newer search (seq 2) already started
+        dialog.withdraw()
+        try:
+            newer_hit = SearchHit(json_path="C:/x/new.json", segment_index=0,
+                                   text="newer result", score=1.0, start_seconds=1.0)
+            dialog._finish_search([newer_hit], None, 2)  # newer search lands first
+            older_hit = SearchHit(json_path="C:/x/old.json", segment_index=0,
+                                   text="stale result", score=1.0, start_seconds=1.0)
+            dialog._finish_search([older_hit], None, 1)  # older (seq 1) lands late
+            rows = dialog.tree.get_children()
+            assert len(rows) == 1
+            assert dialog.tree.item(rows[0], "values")[0] == "new.json"
+        finally:
+            dialog._on_close()
+    finally:
+        root.destroy()
+
+
+def test_run_search_increments_sequence_per_call(monkeypatch):
+    import app.dialogs.search_dialog as sd
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        dialog = sd.SearchDialog.__new__(sd.SearchDialog)
+        tk.Toplevel.__init__(dialog, root)
+        dialog._build_widgets()
+        dialog._closing = False
+        dialog._search_seq = 0
+        dialog.withdraw()
+        try:
+            monkeypatch.setattr(
+                "core._threads.safe_thread", lambda target, name=None: None,
+            )
+            dialog.query_var.set("first query")
+            dialog._run_search()
+            assert dialog._search_seq == 1
+            dialog.query_var.set("second query")
+            dialog._run_search()
+            assert dialog._search_seq == 2
+        finally:
+            dialog._on_close()
+    finally:
+        root.destroy()
+
+
+def test_escape_routes_through_the_real_on_close(monkeypatch):
+    """Escape used to call self.destroy() directly, bypassing the
+    _closing flag _on_close sets -- a background reindex/search
+    callback landing after that could still touch dead widgets
+    (Codex finding #1). Goes through the REAL __init__ binding (not a
+    hand-rolled rebind) so this actually exercises the fix."""
+    import app.dialogs.search_dialog as sd
+
+    monkeypatch.setattr("core.search.reindex_all_history", lambda: 0)
+
+    root = tk.Tk()
+    root.deiconify()
+    try:
+        dialog = sd.SearchDialog(root)
+        # A withdrawn/never-mapped window does not reliably dispatch a
+        # synthetic keyboard event through its bindings (confirmed via a
+        # real-window driver script during this session — the same
+        # mapped-window requirement <<Button-1>> click dispatch needs).
+        dialog.deiconify()
+        dialog.lift()
+        dialog.focus_force()
+        dialog.update_idletasks()
+        dialog.update()
+        assert dialog._closing is False
+        dialog.event_generate("<Escape>")
+        dialog.update()
+        assert dialog._closing is True
     finally:
         root.destroy()
 
