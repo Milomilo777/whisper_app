@@ -78,10 +78,93 @@ fixture docstring already documents as pre-existing. Non-deterministic
 (a different test failed each time; a clean rerun always passed) and
 not something this session's changes caused, so not chased further.
 
-Working tree clean, everything committed and pushed to master in 3
-commits (LLM engine / UI wiring / the Treeview fix). Nothing pending —
-no version bump, no release cut (not asked for; per this file's own
-rule that stays a separate, explicit ask).
+**Second wave, same day — owner asked "did you actually test the new
+stuff for real," which the screenshot pass above hadn't fully covered
+(AI buttons were never clicked; `ai_enabled` was off on this machine).**
+Owner explicitly approved downloading the ~1.1 GB local model and
+temporarily flipping `ai_enabled` on to test for real — installed
+`llama-cpp-python` (pure pip install, no CUDA/BLAS build flags — CPU
+only), downloaded the Qwen model for real, and drove the actual running
+`App()` through real button clicks (not direct method calls) for both
+providers:
+
+- **Local provider**: Summarise (5.1s incl. model load) and Translate
+  preview (5.8s) both worked. The "Save bilingual subtitle" flow also
+  worked but took **670s (~11 min) for 4 segments** — expected (a small
+  CPU model pays real per-call overhead translating one segment at a
+  time; the confirmation dialog already warns "can take a while,
+  especially with the local model"), not a bug, but worth knowing
+  before recommending this path for a long transcript.
+- **Remote provider**: read a real `OPENAI_API_KEY` from the Windows
+  user environment variable at runtime (never typed in chat, never
+  written to config.json — mutated only on the live `App().app_config`
+  dict in-memory, per this machine's global secrets-handling rule) and
+  called the real OpenAI API (`gpt-4o-mini`) for Summarise/Ask/
+  Translate/bilingual-save — all correct. Also exercised a real mouse
+  click on a Chapters-tab row (not a direct function call) and a real
+  click on "Apply noisy-audio preset" — both correct once the click
+  target window was properly deiconified/settled (a withdrawn/
+  just-tab-switched window doesn't reliably report `bbox()`/dispatch
+  synthetic clicks; needs `update_idletasks()` + a short settle after
+  any notebook `.select()`, confirmed as a test-harness quirk, not a
+  product bug, by cross-checking a "real window, no withdraw" variant).
+
+**Real bug found by this pass**: the local Qwen2.5-1.5B model wrapped
+2 of 4 segments' translations in stray quote marks despite the prompt
+saying not to (e.g. `"D'accord, on va passer..."`), which would have
+shown up as literal quote characters in a shipped `.srt`. Fixed with
+`core.llm._strip_wrapped_quotes()`, applied in both `LLMRunner.
+translate()` and `RemoteLLMRunner.translate()` (only strips when the
+first+last char form a matching pair, so a translation that legitimately
+starts with a quoted phrase is untouched). 8 new tests.
+
+**Second opinion, per owner's request**: tried Antigravity CLI
+(`gemini-3.7-flash-high`) first — hit `Individual quota reached...
+Resets in 117h40m` (~4.9 days) on the very first call. This directly
+contradicts the "~5 hour reset" figure in the global `CLAUDE.md`
+(that figure was web-search-derived, never measured) — corrected there
+with this real observation. Owner chose to fall back to Codex
+(`gpt-5.4-mini`, now the recorded default model for "Codex" with no
+model named — see global `CLAUDE.md`) instead of waiting. Built an
+isolated review folder (today's diff + full current content of every
+changed module, ~500 KB) and asked for a bug hunt with the same
+"quote exact file+line, never invent code" discipline the Antigravity
+reliability warning in global `CLAUDE.md` demands of ANY external
+review tool, not just Antigravity.
+
+**Codex's 3 findings were ALL real and ALL verified line-by-line
+before fixing** (a much better hit rate than the Antigravity warning's
+first-test experience — worth remembering next time "which tool for a
+second opinion" comes up):
+1. `search_dialog.py`'s `<Escape>` called `self.destroy()` directly,
+   bypassing `_on_close()`'s `self._closing = True` — a background
+   reindex/search completion landing after an Escape-close could still
+   touch destroyed widgets. Fixed: Escape now routes through
+   `_on_close()`.
+2. `search_dialog.py`'s `_run_search()` had no sequencing — an older,
+   slower query's result landing after a newer one would silently
+   overwrite the newer, already-displayed results. Fixed: a monotonic
+   `_search_seq` counter, `_finish_search()` discards a stale `seq`.
+   Also dropped a now-pointless "skip re-search on the very first
+   reindex" special case that had its own narrow gap.
+3. `transcript_viewer.py`'s `_get_llm_runner()` cached the first
+   successful runner for the viewer's entire lifetime with NO
+   invalidation — a deliberate tradeoff I'd documented in a comment
+   (avoid reloading the local model on every click) but hadn't
+   considered the config-changes-while-open case. Fixed: the cache is
+   now keyed on the actual provider-selecting config fields, so a real
+   settings change is picked up on the next AI action without paying
+   the reload cost on every single call when nothing changed.
+
+Working tree clean, everything committed and pushed to master in 6
+commits total (LLM engine / UI wiring / the Treeview fix / the
+quote-stripping fix / the 3 Codex-verified fixes, plus one docs
+commit). Nothing pending — no version bump, no release cut (not asked
+for; per this file's own rule that stays a separate, explicit ask).
+The downloaded local model + installed `llama-cpp-python` were left in
+place (harmless, dormant unless `ai_enabled` is turned on for real);
+`ai_enabled` itself was never persisted to this machine's real
+`config.json` (confirmed by reading it directly after every test run).
 
 ---
 
