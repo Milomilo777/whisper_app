@@ -14,6 +14,26 @@ import argparse
 import sys
 
 
+def _ensure_safe_stdio_encoding() -> None:
+    """Make stdout/stderr survive a character the console codepage cannot
+    encode, instead of raising UnicodeEncodeError out of a print() call.
+
+    Windows' legacy console codepage (cp1252 or similar) cannot encode most
+    emoji; a downloaded media file with one in its title (e.g. a name yt-dlp
+    pulled from a social-media post) reaches ``print()`` via the transcribe
+    progress/log callbacks and crashed every single log line for the rest
+    of the run. Not called for ``--worker`` mode, whose stdout is a
+    structured JSON-lines protocol the parent process depends on verbatim.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def _cli_transcribe(args: argparse.Namespace) -> int:
     """Run a one-shot transcription from the command line."""
     import os
@@ -253,6 +273,8 @@ def main() -> int:
     if "--worker" in sys.argv:
         from core.worker import main as _worker_main
         return _worker_main()
+
+    _ensure_safe_stdio_encoding()
 
     # --safe-mode is also handled before argparse so the user can
     # combine it with the default GUI launch without juggling
