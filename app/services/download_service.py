@@ -243,6 +243,28 @@ def _cookies_from_browser_args(value: str | None) -> list[str]:
     return ["--cookies-from-browser", raw]
 
 
+# yt-dlp's own failure to read the local browser's cookie jar — e.g. "Could
+# not copy Chrome cookie database" when the browser is still open and holds
+# a lock on the file (see yt-dlp#7271) — is a LOCAL file-access problem, not
+# the target site rejecting an unauthenticated request. Most URLs (a public
+# post, a public video) do not actually need the cookies at all, so this
+# case is worth a same-process retry without them rather than failing the
+# whole download outright.
+_COOKIE_EXTRACTION_ERROR_RE = re.compile(
+    r"could not (?:copy|find|load|extract)\b.{0,40}\bcookie", re.IGNORECASE
+)
+
+
+def _is_cookie_extraction_error(text: str) -> bool:
+    """True when yt-dlp failed to read the browser's cookie jar itself.
+
+    Distinct from the target site genuinely requiring a logged-in session
+    (that shows up as a normal auth/permission error from the site, not a
+    local "could not copy/find the cookie database" failure).
+    """
+    return bool(_COOKIE_EXTRACTION_ERROR_RE.search(text or ""))
+
+
 def build_subtitle_command(
     task: "VideoDownloadTask",
     lang: str,
@@ -570,14 +592,18 @@ class DownloadService:
             cookies_from_browser=self.app.app_config.get("cookies_from_browser", ""),
         )
 
-    def build_download_command(self, task: "VideoDownloadTask") -> list[str]:
+    def build_download_command(
+        self, task: "VideoDownloadTask", *, force_no_cookies: bool = False
+    ) -> list[str]:
         return build_download_command(
             task,
             yt_dlp_path=self.app.yt_dlp_path(),
             bin_path=self.app.bin_path(),
             sponsorblock_categories=list(self.app.app_config.get("sponsorblock_categories") or []),
             progress_template="%(progress)j",
-            cookies_from_browser=self.app.app_config.get("cookies_from_browser", ""),
+            cookies_from_browser=(
+                None if force_no_cookies else self.app.app_config.get("cookies_from_browser", "")
+            ),
         )
 
     def maybe_update_yt_dlp(self, task: "VideoDownloadTask") -> None:
@@ -1307,10 +1333,20 @@ class DownloadService:
             app.download_events.put(("subtitle_status", task, "completed (no files written)"))
             app.download_events.put(("log", task, "--- Subtitle phase: completed without writing files ---"))
 
-    def _media_phase(self, task: "VideoDownloadTask") -> None:
+    def _run_media_process(
+        self, task: "VideoDownloadTask", command: list[str]
+    ) -> tuple[int, str, str, str | None, bool]:
+        """Run one yt-dlp media download to completion.
+
+        Returns ``(return_code, last_error_line, last_line, saved_path,
+        saved_is_final)``. Streams progress/log events exactly like before;
+        pulled out of ``_media_phase`` so a cookie-extraction failure can
+        retry the same download once, without cookies, using this same
+        parsing logic.
+        """
         app = self.app
         task.process = subprocess.Popen(
-            self.build_download_command(task),
+            command,
             cwd=os.path.dirname(os.path.abspath(app.entry_file)),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1352,6 +1388,45 @@ class DownloadService:
                 app.download_events.put(("log", task, line))
 
         return_code = task.process.wait()
+        return return_code, last_error_line, last_line, saved_path, saved_is_final
+
+    def _media_phase(self, task: "VideoDownloadTask") -> None:
+        app = self.app
+        cookies_configured = bool(
+            _cookies_from_browser_args(app.app_config.get("cookies_from_browser", ""))
+        )
+
+        return_code, last_error_line, last_line, saved_path, _ = (
+            self._run_media_process(task, self.build_download_command(task))
+        )
+
+        # A cookie-jar read failure (browser still open, locked profile,
+        # unsupported keyring, ...) is a LOCAL problem, not the site
+        # rejecting the request — most URLs don't need the cookies at all,
+        # so retry once without them before giving up. This keeps "Cookies
+        # from browser" usable for the sites that actually need it while no
+        # longer breaking every other download whenever the browser happens
+        # to be open.
+        retried_without_cookies = False
+        if (
+            return_code
+            and not task.cancelled
+            and not getattr(task, "paused", False)
+            and cookies_configured
+            and _is_cookie_extraction_error(last_error_line or last_line)
+        ):
+            retried_without_cookies = True
+            app.download_events.put((
+                "log", task,
+                "--- Could not read cookies from your browser (close it fully "
+                "if it's open) — retrying this download without cookies ---",
+            ))
+            return_code, last_error_line, last_line, saved_path, _ = (
+                self._run_media_process(
+                    task, self.build_download_command(task, force_no_cookies=True)
+                )
+            )
+
         if task.cancelled:
             app.download_events.put(("done", task, "cancelled"))
         elif getattr(task, "paused", False):
@@ -1370,9 +1445,18 @@ class DownloadService:
             if reason:
                 msg = f"{msg}: {reason}"
             low = reason.lower()
+            if retried_without_cookies:
+                msg += (
+                    "  — could not read cookies from your browser, and the "
+                    "download failed again without them too: this video "
+                    "most likely needs a logged-in session. Fully close the "
+                    "browser configured under 'Cookies from browser' and "
+                    "retry so yt-dlp can read its cookie jar, or the video "
+                    "may simply be private."
+                )
             # Specific phrases only — bare "age"/"account" matched unrelated
             # errors ("storage", "page", "message").
-            if any(k in low for k in (
+            elif any(k in low for k in (
                 "login", "log in", "sign in", "sign-in", "cookies",
                 "private video", "members-only", "age-restrict",
                 "age restrict", "this video is private", "confirm your age",
